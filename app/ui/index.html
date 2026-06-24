@@ -1680,6 +1680,22 @@ function legsFor(v) {
     speed: v.speed_bps, eta: v.eta_secs, progress: v.progress, hedge: false }];
 }
 
+/* The LEADING leg for an md5 = the live leg that has transferred the most bytes
+   (the one winning the race). The variation's headline progress should track this
+   leg, NOT flip to a slower hedge leg that's stuck behind. Returns null if no live
+   legs. (Also makes a from-scratch restart correct: the sole leg's own reduced
+   bytes still lead, so the variation follows it down.) */
+function leadingLeg(md5) {
+  var L = LEGS[md5]; if (!L || !L.order.length) return null;
+  var now = Date.now(), best = null;
+  L.order.forEach(function (h) {
+    var leg = L.byHost[h];
+    if ((now - (leg.ts || 0)) >= LEG_TTL) return;
+    if (!best || (leg.bytes || 0) > (best.bytes || 0)) best = leg;
+  });
+  return best;
+}
+
 function renderActivePanel() {
   var panel = document.getElementById("activePanel");
   panel.classList.toggle("collapsed", ACTIVE_COLLAPSED);
@@ -2848,11 +2864,17 @@ function wireProgress() {
         if (v.state !== "queued" && v.state !== "downloading" && v.state !== "paused") return;
         if (p.kind === "resolved") { v.state = "downloading"; v.host = p.host; }
         else if (p.kind === "bytes") {
-          v.state = "downloading"; v.host = p.host;
-          v.downloaded_bytes = p.bytes_done; v.total_bytes = p.total_bytes;
-          v.speed_bps = (p.speed_bps != null ? p.speed_bps : null);
-          v.eta_secs = (p.eta_secs != null ? p.eta_secs : null);
-          if (p.total_bytes) v.progress = Math.min(100, Math.round(100 * p.bytes_done / p.total_bytes));
+          v.state = "downloading";
+          // With hedging, one md5 races on multiple hosts; track the LEADING leg so a
+          // slower/losing hedge leg can't drag the variation backwards (winner at 100%
+          // flipping to a hedge leg stuck at 13%). Falls back to this event's values.
+          var lead = leadingLeg(p.md5) ||
+            { host: p.host, bytes: p.bytes_done, total: p.total_bytes, speed: p.speed_bps, eta: p.eta_secs };
+          v.host = lead.host;
+          v.downloaded_bytes = lead.bytes; v.total_bytes = lead.total;
+          v.speed_bps = (lead.speed != null ? lead.speed : null);
+          v.eta_secs = (lead.eta != null ? lead.eta : null);
+          if (lead.total) v.progress = Math.min(100, Math.round(100 * lead.bytes / lead.total));
         }
         else if (p.kind === "done") { v.state = "done"; v.progress = 100; v.output_path = p.path; }
         else if (p.kind === "failed") { v.state = "failed"; }
