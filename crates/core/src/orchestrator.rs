@@ -1474,7 +1474,7 @@ impl Orchestrator {
             .candidates
             .iter()
             .any(|c| matches!(c.job.as_ref().map(|j| &j.state), Some(JobState::Pending)));
-        req.status = if any_done {
+        let new_status = if any_done {
             RequestStatus::Done
         } else if any_active {
             RequestStatus::Downloading
@@ -1486,8 +1486,15 @@ impl Orchestrator {
         } else if !req.candidates.is_empty() {
             RequestStatus::NeedsSelection
         } else {
-            RequestStatus::Queued
+            // Every copy removed → the book is unavailable. Park it at NotFound
+            // (NOT Queued/re-discover) and idle its goal: a book in an imported list
+            // is never deleted and never silently re-queried — it stays in its
+            // (immutable) position under "Cannot download", recoverable only via an
+            // explicit Re-query.
+            req.goal = crate::model::Goal::Idle;
+            RequestStatus::NotFound
         };
+        req.status = new_status;
 
         self.store
             .update_request(self.list_id, group_path, book_index, &req)?;
