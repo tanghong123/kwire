@@ -1386,6 +1386,16 @@ impl Scheduler {
 
         // Hosts already racing — the hedge must pick a different one.
         let exclude_hosts = race.hosts.lock().await.clone();
+        // OBSERVABILITY: a hedge launch was previously invisible, so "did this md5
+        // race on two hosts?" could only be inferred. Log every launch (md5 + the
+        // host(s) the hedge will avoid, i.e. the stalled primary's) so a flicker /
+        // two-leg report is answerable from the log, not guessed.
+        tracing::info!(
+            md5 = %req.md5,
+            avoiding_hosts = ?exclude_hosts,
+            leg = n,
+            "hedge leg launching: primary stalled past the hedge window — racing this md5 on an alternate host"
+        );
 
         race.legs.lock().await.push(LegTemp {
             leg_dest: leg_dest.clone(),
