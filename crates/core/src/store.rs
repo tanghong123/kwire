@@ -205,6 +205,19 @@ impl Store {
         Ok(())
     }
 
+    /// Delete a list and its entire tree (groups → books → candidates → jobs) by
+    /// id. `foreign_keys` is ON so `DELETE FROM list` cascades; we also drop the
+    /// groups explicitly (belt-and-suspenders) so no rows are orphaned.
+    pub fn delete_list(&mut self, id: i64) -> Result<()> {
+        let tx = self.conn.transaction().context("begin delete_list")?;
+        tx.execute("DELETE FROM \"group\" WHERE list_id = ?1", params![id])
+            .context("deleting groups")?;
+        tx.execute("DELETE FROM list WHERE id = ?1", params![id])
+            .context("deleting list")?;
+        tx.commit().context("commit delete_list")?;
+        Ok(())
+    }
+
     /// Update just the list-level settings (e.g. the format-preference order),
     /// without rewriting the request tree.
     pub fn update_settings(&mut self, id: i64, settings: &ListSettings) -> Result<()> {

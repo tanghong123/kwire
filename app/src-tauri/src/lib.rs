@@ -118,6 +118,7 @@ pub fn run() {
             commands::library,
             commands::select_list,
             commands::load_list,
+            commands::delete_list,
             commands::start,
             commands::stop,
             commands::start_all,

@@ -103,6 +103,8 @@
   .ctxmenu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
     border: 0; background: none; padding: 7px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; }
   .ctxmenu button:hover { background: var(--row-hover); }
+  .ctxmenu button.ctx-danger { color: var(--red); }
+  .ctxmenu button.ctx-danger:hover { background: var(--red-bg); }
   .ctxmenu .ctx-head { padding: 5px 10px 6px; font-size: 11px; color: var(--text-faint);
     border-bottom: 1px solid var(--border); margin-bottom: 3px; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
@@ -2467,6 +2469,15 @@ function pauseListDownloads(listId) {
     .catch(function (err) { console.error("stop failed:", err && err.message); })
     .finally(renderActivePanel);
 }
+function removeList(listId) {
+  if (!listId || listId === "__all__") return;
+  var l = (LISTS || []).filter(function (x) { return x.id === listId; })[0];
+  var name = (l && l.title) || "this list";
+  if (!confirm('Remove "' + name + '" from Kwire?\n\nThe list and its tracking are deleted. Your downloaded files on disk are NOT removed.')) return;
+  if (!hasTauri()) return;
+  invoke("delete_list", { listId: listId }).then(applyLibrary)
+    .catch(function (err) { console.error("delete_list failed:", err && err.message); });
+}
 function onConfirmImport() {
   if (hasTauri()) {
     var payload = importPayload();
@@ -2933,7 +2944,8 @@ function showCtxMenu(x, y, listId, listName) {
     '<div class="ctx-head">' + esc(listName || "List") + '</div>' +
     '<button data-ctx="start">▶ Start downloads</button>' +
     '<button data-ctx="pause">❚❚ Pause downloads</button>' +
-    '<button data-ctx="requery">↻ Re-query this list</button>';
+    '<button data-ctx="requery">↻ Re-query this list</button>' +
+    '<button data-ctx="remove" class="ctx-danger">🗑 Remove list</button>';
   m.classList.remove("hide");
   // Keep the menu on-screen.
   var w = m.offsetWidth || 180, h = m.offsetHeight || 120;
@@ -2957,6 +2969,7 @@ document.addEventListener("click", function (e) {
     if (act === "start") startListDownloads(id);
     else if (act === "pause") pauseListDownloads(id);
     else if (act === "requery") onRequery(id);
+    else if (act === "remove") removeList(id);
     return;
   }
   if (!e.target.closest("#ctxMenu")) hideCtxMenu(); // click elsewhere closes

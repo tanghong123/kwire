@@ -247,6 +247,59 @@ pub async fn stop(
     refresh_library(&state).await
 }
 
+/// **Remove a list**: delete it (and its whole tree) from the store and drop its
+/// orchestrator. Pauses any in-flight downloads for it first so they don't keep
+/// running for a gone list. Downloaded FILES on disk are left untouched.
+#[tauri::command]
+pub async fn delete_list(
+    state: State<'_, AppState>,
+    list_id: Option<String>,
+) -> Result<ViewLibrary, String> {
+    let id = {
+        let lib = state.library.lock().await;
+        active_id(&lib, list_id)?
+    };
+    let store_id: i64 = id
+        .strip_prefix("list")
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| format!("bad list id {id}"))?;
+
+    // Pause any in-flight downloads for this list before deleting (no orphan transfers).
+    if let Some(orch) = {
+        let lib = state.library.lock().await;
+        lib.arc_for(&id)
+    } {
+        let inflight = {
+            let guard = orch.lock().await;
+            guard
+                .snapshot()
+                .map(|snap| inflight_md5s_in(&snap, &|_| true))
+                .unwrap_or_default()
+        };
+        if !inflight.is_empty() {
+            if let Ok(scheduler) = ensure_scheduler(&state, None).await {
+                for md5 in &inflight {
+                    scheduler.pause(md5).await;
+                }
+            }
+        }
+    }
+
+    let cfg = state.config.lock().expect("config mutex poisoned").clone();
+    let mut store = open_store(&cfg)?;
+    store.delete_list(store_id).map_err(err)?;
+    {
+        let mut lib = state.library.lock().await;
+        lib.lists.retain(|l| l.id != id);
+        if lib.current == id {
+            lib.current = "__all__".to_string();
+        }
+    }
+    tracing::info!(list = %id, "list removed (deleted from store; files kept)");
+    state.wake_engine();
+    refresh_library(&state).await
+}
+
 /// **Start downloading for all lists** (global): set goal = `Complete` for every
 /// book of EVERY loaded list — a fan-out of the per-list Start.
 #[tauri::command]
