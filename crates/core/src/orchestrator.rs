@@ -625,6 +625,47 @@ impl Orchestrator {
             return Ok(None);
         }
 
+        // Cross-list md5 dedup: if a verified copy of this md5 already exists
+        // ANYWHERE (another list/book), REUSE it — copy into this variation's dest
+        // and mark it `Done` — instead of re-downloading the identical bytes. This
+        // is the global "downloaded-md5 cache" matched against newly-requested
+        // variations. Falls back to a normal download if the copy fails.
+        let pending: Vec<PlannedDownload> = {
+            let mut kept = Vec::with_capacity(pending.len());
+            for p in pending {
+                let reuse = self
+                    .store
+                    .find_downloaded_md5(&p.md5)?
+                    .filter(|src| *src != p.destination && src.exists());
+                match reuse {
+                    Some(src) => {
+                        if let Some(parent) = p.destination.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if let Err(e) = std::fs::copy(&src, &p.destination) {
+                            tracing::warn!(md5 = %p.md5, error = %e, "dedup copy failed; downloading instead");
+                            kept.push(p);
+                            continue;
+                        }
+                        let dest = p.destination.to_string_lossy().into_owned();
+                        self.set_variation_state(&p.group_path, p.book_index, &p.md5, |job| {
+                            job.state = JobState::Done;
+                            job.output_path = Some(dest);
+                            job.md5_verified = true;
+                            job.resume_offset = 0;
+                            job.bytes_done = 0;
+                        })?;
+                        tracing::info!(md5 = %p.md5, reused_from = %src.display(), wrote = %p.destination.display(), "deduped: reused already-downloaded copy (skipped network download)");
+                    }
+                    None => kept.push(p),
+                }
+            }
+            kept
+        };
+        if pending.is_empty() {
+            return Ok(None);
+        }
+
         for p in &pending {
             // If a prior naming scheme left a partial at a different path, adopt it
             // so we resume rather than restart (numbered folders / source-order seq

@@ -2809,6 +2809,12 @@ function wireProgress() {
     everyBook().forEach(function (b) {
       (b.versions || []).forEach(function (v) {
         if (v.md5 !== p.md5) return;
+        // Only the variation actually REQUESTED for download in THIS list reacts to
+        // a progress event. A shared md5 being downloaded by ANOTHER list must not
+        // flip this list's `available` (never picked) or `done` copy — that was the
+        // cross-list display bleed (book shows "downloading" in a list that didn't
+        // request it; a done copy flips back to "in progress").
+        if (v.state !== "queued" && v.state !== "downloading" && v.state !== "paused") return;
         if (p.kind === "resolved") { v.state = "downloading"; v.host = p.host; }
         else if (p.kind === "bytes") {
           v.state = "downloading"; v.host = p.host;

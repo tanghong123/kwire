@@ -420,6 +420,42 @@ impl Store {
             .collect()
     }
 
+    /// Cross-list dedup cache: find an already-downloaded, md5-verified file for
+    /// `md5` ANYWHERE in the library (any list/book), returning the path of an
+    /// existing file so a fresh request can reuse it instead of re-downloading the
+    /// identical bytes. Scans candidate rows — cheap next to a network fetch.
+    pub fn find_downloaded_md5(&self, md5: &str) -> Result<Option<std::path::PathBuf>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT json FROM candidate")
+            .context("preparing dedup scan")?;
+        let jsons: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .context("dedup scan")?
+            .collect::<rusqlite::Result<_>>()
+            .context("collecting dedup scan")?;
+        for j in jsons {
+            let c: Candidate = match serde_json::from_str(&j) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if c.md5 != md5 {
+                continue;
+            }
+            if let Some(job) = &c.job {
+                if matches!(job.state, crate::model::JobState::Done) && job.md5_verified {
+                    if let Some(p) = &job.output_path {
+                        let path = std::path::PathBuf::from(p);
+                        if path.exists() {
+                            return Ok(Some(path));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Update a single book request (status, candidates, selected, job) in place.
     /// Identified by its position: `(list_id, group_path, book_index)` where
     /// `group_path` is the chain of declaration indices from the top-level group
