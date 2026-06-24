@@ -1,0 +1,21 @@
+[package]
+name = "libgen-cli"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "libgen"
+path = "src/main.rs"
+
+[dependencies]
+libgen-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+async-trait = "0.1"

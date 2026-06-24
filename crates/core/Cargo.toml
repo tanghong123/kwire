@@ -1,0 +1,40 @@
+[package]
+name = "libgen-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+scraper.workspace = true
+strsim.workspace = true
+toml.workspace = true
+futures.workspace = true
+tracing.workspace = true
+md-5.workspace = true
+hex.workspace = true
+async-trait = "0.1"
+fastrand = "2"
+rusqlite = { version = "0.31", features = ["bundled"] }
+# Safe-delete: move replaced files to the OS Trash rather than hard-deleting.
+trash = "5"
+# Local cover generation (cover_gen.rs). Pure-Rust, minimal codecs:
+# - `zip` (deflate only) reads the EPUB container/OPF + embedded cover image.
+# - `image` (jpeg/png decode + jpeg encode) normalizes/encodes covers.
+# - `imageproc` + `ab_glyph` synthesize a title/author placeholder cover.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+imageproc = { version = "0.25", default-features = false }
+ab_glyph = "0.2"
+
+[dev-dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+async-trait = "0.1"
+tempfile = "3"

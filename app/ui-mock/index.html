@@ -1,0 +1,1197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kwire</title>
+<!--
+  Self-contained UX prototype. Everything (data, styles, logic) is inline and
+  uses a CLASSIC <script> (no ES modules), so it runs when opened directly via
+  file:// with a double-click — no server or build step.
+
+  Design goals, balanced:
+    1) Simplicity   — one primary view (the list), progressive disclosure via a
+                      detail drawer + import sheet; occasional actions stay out of
+                      the way.
+    2) Informative  — a "Needs you" filter surfaces exactly the items requiring a
+                      decision; inline status + progress; a per-host activity bar
+                      makes the polite per-host download queues visible.
+    3) Aesthetics   — native-macOS leaning: SF system font, restrained palette with
+                      a single accent, generous whitespace, light/dark via the OS.
+-->
+<style>
+  :root {
+    --accent: #2f6bff;
+    --bg: #ececee;
+    --chrome: #e6e6e9;
+    --panel: #ffffff;
+    --panel-2: #f6f6f8;
+    --sidebar: #e9e9ec;
+    --text: #1d1d1f;
+    --text-dim: #6e6e76;
+    --text-faint: #9a9aa2;
+    --border: #d9d9de;
+    --border-strong: #c6c6cc;
+    --row-hover: #f0f2f7;
+    --row-sel: #e4ecff;
+    --green: #1a9c4e;
+    --green-bg: #e3f5ea;
+    --amber: #b5710b;
+    --amber-bg: #fbeed3;
+    --red: #d23b32;
+    --red-bg: #fbe4e2;
+    --blue-bg: #e4ecff;
+    --shadow: 0 8px 30px rgba(0,0,0,.16);
+    --radius: 9px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #4d83ff;
+      --bg: #1c1c1e;
+      --chrome: #2a2a2d;
+      --panel: #232326;
+      --panel-2: #29292d;
+      --sidebar: #202023;
+      --text: #f2f2f4;
+      --text-dim: #a0a0a8;
+      --text-faint: #6f6f78;
+      --border: #38383d;
+      --border-strong: #46464d;
+      --row-hover: #2c2c31;
+      --row-sel: #2d3d63;
+      --green: #43c970; --green-bg: #173626;
+      --amber: #e3a23a; --amber-bg: #3a2e15;
+      --red: #ff6b60; --red-bg: #3a1e1c;
+      --blue-bg: #26345c;
+      --shadow: 0 10px 36px rgba(0,0,0,.5);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+
+  /* ---- window shell ---- */
+  .app { display: flex; flex-direction: column; height: 100vh; }
+  .titlebar {
+    height: 38px; flex: 0 0 38px; display: flex; align-items: center;
+    background: var(--chrome); border-bottom: 1px solid var(--border);
+    padding: 0 12px; gap: 12px; -webkit-user-select: none; user-select: none;
+  }
+  .traffic { display: flex; gap: 8px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .traffic .r { background: #ff5f57; } .traffic .y { background: #febc2e; } .traffic .g { background: #28c840; }
+  .titlebar .name { font-weight: 600; font-size: 13px; letter-spacing: .2px; }
+  .titlebar .spacer { flex: 1; }
+  .tbtn {
+    border: 1px solid var(--border-strong); background: var(--panel);
+    padding: 5px 12px; border-radius: 7px; font-weight: 500; font-size: 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .tbtn:hover { background: var(--row-hover); }
+  .tbtn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .tbtn.primary:hover { filter: brightness(1.07); }
+
+  .body { flex: 1; display: flex; min-height: 0; }
+
+  /* ---- sidebar ---- */
+  .sidebar {
+    width: 216px; flex: 0 0 216px; background: var(--sidebar);
+    border-right: 1px solid var(--border); padding: 12px 10px; overflow-y: auto;
+  }
+  .side-h { font-size: 11px; font-weight: 600; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: .6px; margin: 14px 8px 6px; }
+  .side-h:first-child { margin-top: 2px; }
+  .side-item {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border-radius: 7px; color: var(--text); width: 100%; border: 0; background: none;
+    text-align: left;
+  }
+  .side-item:hover { background: var(--row-hover); }
+  .side-item.active { background: var(--accent); color: #fff; }
+  .side-item .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+  .side-item .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side-item .ct { font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 12px; }
+  .side-item.active .ct { color: #fff; opacity: .85; }
+  .side-item .ic { width: 16px; text-align: center; opacity: .8; }
+
+  /* ---- main ---- */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--panel); }
+  .toolbar { padding: 14px 18px 10px; border-bottom: 1px solid var(--border); }
+  .toolbar .row1 { display: flex; align-items: baseline; gap: 10px; }
+  .toolbar h1 { font-size: 17px; font-weight: 700; margin: 0; }
+  .toolbar .sub { color: var(--text-dim); font-size: 12px; }
+  .toolbar .row2 { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
+  .prog-wrap { flex: 1; height: 7px; background: var(--panel-2); border-radius: 4px;
+    overflow: hidden; border: 1px solid var(--border); display: flex; }
+  .prog-wrap .seg { height: 100%; }
+  .seg.done { background: var(--green); } .seg.active { background: var(--accent); }
+  .seg.attn { background: var(--amber); } .seg.fail { background: var(--red); }
+  .prog-num { font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+  .row3 { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+  .fmt-lbl { font-size: 11px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: .5px; }
+  .fmt-rank { display: inline-flex; align-items: center; gap: 4px; }
+  .fmt-rank .sep { color: var(--text-faint); }
+  .frank { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-strong);
+    background: var(--panel-2); border-radius: 20px; padding: 3px 4px 3px 10px; font-size: 12px; font-weight: 600; }
+  .frank .rk { color: var(--text-faint); font-variant-numeric: tabular-nums; font-weight: 500; }
+  .frank .mv { border: 0; background: var(--panel); border-radius: 50%; width: 18px; height: 18px; line-height: 1;
+    color: var(--text-dim); padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .frank .mv:hover { background: var(--accent); color: #fff; }
+  .frank .mv[disabled] { opacity: .3; cursor: default; }
+
+  .filters { display: flex; gap: 7px; padding: 10px 18px; border-bottom: 1px solid var(--border);
+    overflow-x: auto; }
+  .chip {
+    border: 1px solid var(--border-strong); background: var(--panel);
+    padding: 4px 11px; border-radius: 20px; font-size: 12px; font-weight: 500;
+    display: inline-flex; gap: 6px; align-items: center; white-space: nowrap;
+  }
+  .chip:hover { background: var(--row-hover); }
+  .chip.active { background: var(--text); color: var(--panel); border-color: transparent; }
+  .chip .n { font-variant-numeric: tabular-nums; opacity: .7; }
+  .chip.attn.active { background: var(--amber); }
+
+  .listwrap { flex: 1; overflow-y: auto; }
+  .group-h {
+    position: sticky; top: 0; z-index: 1; background: var(--panel-2);
+    border-bottom: 1px solid var(--border); padding: 7px 18px;
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    font-weight: 600; font-size: 12px; color: var(--text-dim);
+  }
+  .group-h .tw { width: 12px; transition: transform .12s; color: var(--text-faint); display: inline-block; }
+  .group-h.collapsed .tw { transform: rotate(-90deg); }
+  .group-h .gname { color: var(--text); }
+  .group-h .gcount { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+  .book {
+    display: grid; grid-template-columns: 30px 1fr auto auto; align-items: center;
+    gap: 12px; padding: 8px 18px; border-bottom: 1px solid var(--border); cursor: pointer;
+  }
+  .book:hover { background: var(--row-hover); }
+  .book.sel { background: var(--row-sel); }
+  .book .seq { color: var(--text-faint); font-variant-numeric: tabular-nums; font-size: 12px; text-align: right; }
+  .book .meta { min-width: 0; }
+  .book .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .book .a { color: var(--text-dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fmt { font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
+    color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--border);
+    padding: 2px 6px; border-radius: 5px; }
+
+  .vglyphs { display: inline-flex; gap: 5px; align-items: center; }
+  .vg { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+    padding: 2px 6px; border-radius: 5px; border: 1px solid transparent; }
+  .vg-done { color: var(--green); background: var(--green-bg); }
+  .vg-active { color: var(--accent); background: var(--blue-bg); }
+  .vg-fail { color: var(--red); background: var(--red-bg); }
+  .status { display: inline-flex; align-items: center; gap: 7px; min-width: 150px; justify-content: flex-end; }
+  .chip-s { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .s-queued { color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--border); }
+  .s-done { color: var(--green); background: var(--green-bg); }
+  .s-attn { color: var(--amber); background: var(--amber-bg); }
+  .s-fail { color: var(--red); background: var(--red-bg); }
+  .s-active { color: var(--accent); background: var(--blue-bg); }
+  .mini { width: 74px; height: 6px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 4px; overflow: hidden; }
+  .mini > i { display: block; height: 100%; background: var(--accent); }
+  .rowbtn { border: 1px solid var(--border-strong); background: var(--panel); padding: 3px 10px;
+    border-radius: 6px; font-size: 12px; font-weight: 500; }
+  .rowbtn:hover { background: var(--row-hover); }
+  .rowbtn.amber { color: var(--amber); border-color: var(--amber); }
+
+  /* ---- activity bar ---- */
+  .activity { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--chrome);
+    padding: 8px 18px; display: flex; align-items: center; gap: 18px; font-size: 12px; }
+  .activity .lab { color: var(--text-faint); font-weight: 600; text-transform: uppercase;
+    font-size: 10px; letter-spacing: .5px; }
+  .host { display: inline-flex; align-items: center; gap: 7px; color: var(--text-dim); }
+  .host .slots { display: inline-flex; gap: 3px; }
+  .host .slots i { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); display: block; }
+  .host .slots i.on { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .activity .spacer { flex: 1; }
+  .activity .thru { font-variant-numeric: tabular-nums; color: var(--text-dim); }
+
+  /* ---- detail drawer ---- */
+  .drawer {
+    position: fixed; top: 38px; right: 0; bottom: 0; width: 380px; background: var(--panel);
+    border-left: 1px solid var(--border); box-shadow: var(--shadow); transform: translateX(100%);
+    transition: transform .18s ease; z-index: 30; display: flex; flex-direction: column;
+  }
+  .drawer.open { transform: none; }
+  .drawer .dh { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: flex-start; }
+  .drawer .dh .x { margin-left: auto; border: 0; background: none; font-size: 18px; color: var(--text-dim); line-height: 1; }
+  .drawer .dh h2 { font-size: 15px; margin: 0 0 2px; }
+  .drawer .dh .da { color: var(--text-dim); font-size: 12px; }
+  .drawer .dbody { padding: 14px 16px; overflow-y: auto; }
+  .kv { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .kv .k { color: var(--text-dim); width: 96px; flex: 0 0 96px; }
+  .kv .v { font-variant-numeric: tabular-nums; word-break: break-word; }
+  .sec-t { font-size: 11px; font-weight: 700; color: var(--text-faint); text-transform: uppercase;
+    letter-spacing: .5px; margin: 16px 0 8px; }
+  .cand { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  .cand.best { border-color: var(--accent); }
+  .cand .ct { font-weight: 600; }
+  .cand .cand-id { font-size: 12px; color: var(--text); margin: 2px 0; }
+  .cand .cmeta { color: var(--text-dim); font-size: 12px; margin: 3px 0 7px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .conf { height: 5px; background: var(--panel-2); border-radius: 3px; overflow: hidden; margin: 7px 0; }
+  .conf > i { display: block; height: 100%; background: var(--accent); }
+  .cand .cact { display: flex; align-items: center; gap: 8px; }
+  .cand .score { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 12px; }
+
+  /* ---- modal / import sheet ---- */
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.32); opacity: 0; pointer-events: none;
+    transition: opacity .15s; z-index: 40; }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: fixed; left: 50%; top: 64px; transform: translateX(-50%) translateY(-8px) scale(.98);
+    width: min(640px, 92vw); max-height: 80vh; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: var(--shadow); z-index: 41; opacity: 0; pointer-events: none;
+    transition: opacity .15s, transform .15s; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .sheet.open { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0) scale(1); }
+  .sheet .sh { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; }
+  .sheet .sh h2 { margin: 0; font-size: 15px; }
+  .sheet .sh .x { margin-left: auto; border: 0; background: none; font-size: 18px; color: var(--text-dim); }
+  .tabs { display: flex; gap: 4px; padding: 10px 16px 0; }
+  .tab { border: 0; background: none; padding: 7px 12px; border-radius: 7px 7px 0 0; font-weight: 500; color: var(--text-dim); }
+  .tab.active { color: var(--text); background: var(--panel-2); }
+  .sheet .sbody { padding: 14px 16px; overflow-y: auto; }
+  textarea, input[type=text] {
+    width: 100%; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--text);
+    background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px; resize: vertical;
+  }
+  input[type=text] { font-family: inherit; }
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+  .dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    text-align: center; border: 1.5px dashed var(--border-strong); border-radius: 10px; padding: 28px 16px;
+    cursor: pointer; background: var(--panel-2); }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: var(--row-hover); }
+  .dz-icon { font-size: 24px; color: var(--text-dim); }
+  .dz-title { font-weight: 600; }
+  .dz-sub { color: var(--text-dim); font-size: 12px; }
+  .file-chosen { margin-top: 10px; font-size: 12px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 8px 10px; }
+  .preview { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); padding: 10px; font-size: 12px; }
+  .preview .pg { font-weight: 600; margin: 6px 0 2px; }
+  .preview .pb { color: var(--text-dim); padding-left: 10px; }
+  .sheet .sf { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+
+  .empty { padding: 40px; text-align: center; color: var(--text-faint); }
+  .hide { display: none !important; }
+
+  /* ---- settings sheet ---- */
+  .set-sec { margin: 0 0 18px; }
+  .set-sec > h3 { font-size: 11px; font-weight: 700; color: var(--text-faint); text-transform: uppercase;
+    letter-spacing: .5px; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .set-row { display: grid; grid-template-columns: 168px 1fr; gap: 12px; align-items: center; margin-bottom: 12px; }
+  .set-row > .lab { color: var(--text-dim); font-size: 12px; }
+  .set-row > .lab .hint { display: block; color: var(--text-faint); font-size: 11px; margin-top: 2px; }
+  .set-ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .set-ctl input[type=number] { width: 90px; font-family: inherit; }
+  .set-ctl input[type=range] { flex: 1; min-width: 120px; }
+  .set-ctl .rangeval { font-variant-numeric: tabular-nums; color: var(--text-dim); width: 36px; text-align: right; }
+  .toggle { position: relative; width: 40px; height: 22px; border-radius: 11px; background: var(--border-strong);
+    border: 0; padding: 0; transition: background .15s; flex: 0 0 40px; }
+  .toggle.on { background: var(--accent); }
+  .toggle i { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; transition: transform .15s; display: block; }
+  .toggle.on i { transform: translateX(18px); }
+  .site-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+  .site-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 7px;
+    padding: 5px 8px; background: var(--panel-2); }
+  .site-row.off { opacity: .55; }
+  .site-row .sname { flex: 1; font-weight: 500; }
+  .site-row .rk { color: var(--text-faint); font-variant-numeric: tabular-nums; width: 16px; }
+  .site-row .mv { border: 0; background: var(--panel); border-radius: 5px; width: 22px; height: 22px;
+    color: var(--text-dim); }
+  .site-row .mv:hover { background: var(--accent); color: #fff; }
+  .site-row .mv[disabled] { opacity: .3; cursor: default; }
+  .mirror-note { color: var(--text-faint); font-size: 12px; margin-top: 4px; }
+  .mirror-host { display: inline-block; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 7px; margin: 0 4px 4px 0; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="titlebar">
+    <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+    <span class="name">Kwire</span>
+    <span class="spacer"></span>
+    <button class="tbtn" data-action="open-import">＋ Import list</button>
+    <button class="tbtn" data-action="open-settings" id="settingsBtn" title="Settings" aria-label="Settings">⚙︎ Settings</button>
+    <button class="tbtn primary" data-action="toggle-run" id="runBtn">▶ Start queue</button>
+  </div>
+
+  <div class="body">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="main">
+      <div class="toolbar">
+        <div class="row1">
+          <h1 id="listTitle">—</h1>
+          <span class="sub" id="listSub"></span>
+        </div>
+        <div class="row2">
+          <div class="prog-wrap" id="progBar"></div>
+          <span class="prog-num" id="progNum"></span>
+        </div>
+      </div>
+      <div class="filters" id="filters"></div>
+      <div class="listwrap" id="listwrap"></div>
+      <div class="activity" id="activity"></div>
+    </main>
+  </div>
+</div>
+
+<!-- detail drawer -->
+<div class="drawer" id="drawer">
+  <div class="dh">
+    <div>
+      <h2 id="dTitle">—</h2>
+      <div class="da" id="dAuthor"></div>
+    </div>
+    <button class="x" data-action="close-drawer" aria-label="Close">×</button>
+  </div>
+  <div class="dbody" id="dBody"></div>
+</div>
+
+<!-- import sheet -->
+<div class="scrim" id="scrim" data-action="close-import"></div>
+<div class="sheet" id="sheet">
+  <div class="sh"><h2>Import a reading list</h2><button class="x" data-action="close-import">×</button></div>
+  <div class="tabs" id="importTabs">
+    <button class="tab active" data-imptab="file">Upload file</button>
+    <button class="tab" data-imptab="manual">Manual entry</button>
+  </div>
+  <div class="sbody">
+    <div data-imppane="file">
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept=".md,.markdown,.json,.txt" hidden />
+        <div class="dz-icon">⬆︎</div>
+        <div class="dz-title">Choose a Markdown or JSON file</div>
+        <div class="dz-sub">or drag &amp; drop it here · .md / .json</div>
+      </label>
+      <div id="fileChosen" class="file-chosen hide"></div>
+    </div>
+    <div data-imppane="manual" class="hide">
+      <div class="field"><label>Title</label><input type="text" id="mTitle" placeholder="Treasure Island" /></div>
+      <div class="field"><label>Author(s)</label><input type="text" id="mAuthor" placeholder="Robert Louis Stevenson" /></div>
+      <div class="field"><label>Preferred format</label><input type="text" id="mFmt" placeholder="epub" /></div>
+    </div>
+    <div class="preview" id="importPreview"></div>
+  </div>
+  <div class="sf">
+    <button class="tbtn" data-action="close-import">Cancel</button>
+    <button class="tbtn primary" data-action="confirm-import">Add to list</button>
+  </div>
+</div>
+
+<!-- settings sheet -->
+<div class="scrim" id="settingsScrim" data-action="close-settings"></div>
+<div class="sheet" id="settingsSheet">
+  <div class="sh"><h2>Settings</h2><button class="x" data-action="close-settings">×</button></div>
+  <div class="sbody" id="settingsBody"></div>
+  <div class="sf">
+    <button class="tbtn" data-action="close-settings">Done</button>
+    <button class="tbtn primary" data-action="save-settings">Save</button>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   Demo data — public-domain sample lists.
+   Authored inline so the page is fully self-contained over file://.
+   ===================================================================== */
+var BATCHES = [
+  ["Lift-Off", [
+    ["The Tale of Peter Rabbit","Beatrix Potter"],["Winnie-the-Pooh","A.A. Milne"],
+    ["The Velveteen Rabbit","Margery Williams"],["Millions of Cats","Wanda Gag"],
+    ["Old Mother West Wind","Thornton W. Burgess"],["The Adventures of Reddy Fox","Thornton W. Burgess"],
+    ["Just So Stories","Rudyard Kipling"],["The Story of Doctor Dolittle","Hugh Lofting"],
+    ["Raggedy Ann Stories","Johnny Gruelle"],["Uncle Wiggily's Adventures","Howard R. Garis"],
+    ["The Reluctant Dragon","Kenneth Grahame"],["The Aesop for Children","Aesop"]
+  ]],
+  ["Fairy Tales & Folklore", [
+    ["Grimms' Fairy Tales","Brothers Grimm"],["Andersen's Fairy Tales","Hans Christian Andersen"],
+    ["The Blue Fairy Book","Andrew Lang"],["English Fairy Tales","Joseph Jacobs"],
+    ["The Happy Prince and Other Tales","Oscar Wilde"],["American Fairy Tales","L. Frank Baum"],
+    ["Rootabaga Stories","Carl Sandburg"],["The Light Princess","George MacDonald"],
+    ["Tanglewood Tales","Nathaniel Hawthorne"],["Tales from Shakespeare","Charles and Mary Lamb"],
+    ["A Wonder-Book for Girls and Boys","Nathaniel Hawthorne"],["The Heroes: Greek Fairy Tales","Charles Kingsley"]
+  ]],
+  ["Wonder & Quests", [
+    ["The Wonderful Wizard of Oz","L. Frank Baum"],["The Marvelous Land of Oz","L. Frank Baum"],
+    ["Ozma of Oz","L. Frank Baum"],["The Adventures of Pinocchio","Carlo Collodi"],
+    ["Peter Pan","J.M. Barrie"],["The Princess and the Goblin","George MacDonald"],
+    ["Five Children and It","E. Nesbit"],["The Railway Children","E. Nesbit"],
+    ["The Enchanted Castle","E. Nesbit"],["The Voyages of Doctor Dolittle","Hugh Lofting"],
+    ["The Wind in the Willows","Kenneth Grahame"],["Alice's Adventures in Wonderland","Lewis Carroll"]
+  ]],
+  ["High Seas & Wilderness", [
+    ["Treasure Island","Robert Louis Stevenson"],["Kidnapped","Robert Louis Stevenson"],
+    ["The Call of the Wild","Jack London"],["White Fang","Jack London"],
+    ["Robinson Crusoe","Daniel Defoe"],["The Swiss Family Robinson","Johann David Wyss"],
+    ["The Merry Adventures of Robin Hood","Howard Pyle"],["Around the World in Eighty Days","Jules Verne"],
+    ["The Jungle Book","Rudyard Kipling"],["Captains Courageous","Rudyard Kipling"],
+    ["The Hound of the Baskervilles","Arthur Conan Doyle"],["The Story of King Arthur and His Knights","Howard Pyle"]
+  ]],
+  ["Heartfelt Classics", [
+    ["Heidi","Johanna Spyri"],["The Secret Garden","Frances Hodgson Burnett"],
+    ["A Little Princess","Frances Hodgson Burnett"],["Anne of Green Gables","L.M. Montgomery"],
+    ["Little Women","Louisa May Alcott"],["Little Men","Louisa May Alcott"],
+    ["The Adventures of Tom Sawyer","Mark Twain"],["The Prince and the Pauper","Mark Twain"],
+    ["Black Beauty","Anna Sewell"],["A Christmas Carol","Charles Dickens"],
+    ["Pollyanna","Eleanor H. Porter"],["Rebecca of Sunnybrook Farm","Kate Douglas Wiggin"]
+  ]]
+];
+
+var HOSTS = ["libgen.li", "cdn.booksdl.lc", "ipfs.io"];
+
+/* Two more (smaller) lists so multi-list behavior is visible. Each list is its
+   own destination folder with its own settings + progress; they all share the
+   one global download engine. */
+var LIST2 = ["Mom's Book Club", "classics · 6 books", [
+  ["Nonfiction", [
+    ["Walden","Henry David Thoreau"],["The Story of My Life","Helen Keller"],
+    ["Narrative of the Life of Frederick Douglass","Frederick Douglass"],["The Souls of Black Folk","W. E. B. Du Bois"],
+    ["On the Origin of Species","Charles Darwin"],["The Education of Henry Adams","Henry Adams"]
+  ]]
+]];
+var LIST3 = ["Sci-Fi Classics", "all-time · 8 books", [
+  ["Foundations", [
+    ["The Time Machine","H. G. Wells"],["Twenty Thousand Leagues Under the Sea","Jules Verne"],
+    ["Frankenstein","Mary Shelley"],["The War of the Worlds","H. G. Wells"]
+  ]],
+  ["New Wave", [
+    ["A Princess of Mars","Edgar Rice Burroughs"],["The First Men in the Moon","H. G. Wells"],
+    ["Flatland","Edwin A. Abbott"],["Journey to the Center of the Earth","Jules Verne"]
+  ]]
+]];
+
+/* Build one list. Each book has a `discovery` state (queued / matched /
+   needs_selection / not_found) and a `versions` array; EACH version has its own
+   download `state`, so one book can have the epub done while the pdf downloads.
+   `seed` shifts the deterministic scenario so lists look different. */
+function buildList(id, title, subtitle, batches, seed) {
+  var groups = [], gi = 0;
+  for (var b = 0; b < batches.length; b++) {
+    var name = batches[b][0], rows = batches[b][1], books = [];
+    for (var i = 0; i < rows.length; i++) {
+      var n = gi; gi++;
+      var sc = pickScenario(seed, b, i);
+      var versions = makeVersions(rows[i][0], rows[i][1], n);
+      var discovery = "matched";
+      if (sc === "notfound") { discovery = "not_found"; versions = []; }
+      else if (sc === "needs") { discovery = "needs_selection"; }
+      else if (sc === "done") { versions[0].state = "done"; }
+      else if (sc === "downloading") { versions[0].state = "downloading"; versions[0].progress = 30 + (n * 13) % 55; }
+      else if (sc === "multi") { versions[0].state = "done"; versions[1].state = "downloading"; versions[1].progress = 25 + (n * 17) % 50; }
+      else if (sc === "failed") { versions[0].state = "failed"; }
+      // "queued" leaves all versions available with discovery matched.
+      books.push({
+        id: id + "-bk" + n, list: id, title: rows[i][0], author: rows[i][1],
+        seq: i + 1, priority: false, discovery: discovery, versions: versions
+      });
+    }
+    groups.push({ name: name, books: books, collapsed: false });
+  }
+  return { id: id, title: title, subtitle: subtitle, groups: groups, collapsedAll: false };
+}
+
+/* Deterministic per-book scenario, distributed for a believable mix. */
+function pickScenario(seed, b, i) {
+  if (seed === 0) { // Jeremy (large)
+    if (b === 0) { if (i === 0) return "multi"; if (i === 2 || i === 9) return "needs"; if (i === 6) return "failed"; if (i < 6) return "done"; if (i < 11) return "downloading"; return "queued"; }
+    if (b === 1) { if (i === 3) return "needs"; if (i < 3) return "done"; if (i < 5) return "downloading"; return "queued"; }
+    if (b === 2) { if (i < 2) return "done"; return "queued"; }
+    if (b === 3) { if (i === 0) return "multi"; if (i === 17) return "needs"; return "queued"; }
+    return "queued";
+  }
+  if (seed === 1) { if (i === 0) return "multi"; if (i === 1) return "needs"; if (i < 4) return "done"; if (i === 4) return "downloading"; return "queued"; }
+  if (b === 0) { if (i === 0) return "multi"; if (i < 2) return "done"; if (i === 2) return "downloading"; return "queued"; }
+  if (b === 1 && i === 1) return "failed";
+  return "queued";
+}
+
+/* Kept variations (distinct md5s): Kindle/iPad-friendly formats, size-diverse.
+   Each starts `available`; scenarios above flip some to done/downloading/etc. */
+function makeVersions(title, author, n) {
+  var defs = [
+    { fmt: "epub", size: 2.1, year: 2011, publisher: "Yearling", t: title, a: author },
+    { fmt: "epub", size: 6.4, year: 2007, publisher: "Scholastic", t: title + " (Reissue)", a: author },
+    { fmt: "pdf", size: 9.1, year: 2015, publisher: "Puffin", t: title, a: author + " (ed.)" }
+  ];
+  return defs.map(function (d, k) {
+    return {
+      fmt: d.fmt, size: d.size, year: d.year, publisher: d.publisher,
+      title: d.t, author: d.a, // the candidate's own (possibly differing) metadata
+      md5: (((title.length * 7 + k + n) >>> 0).toString(16) + "0000000").slice(0, 8) + "…",
+      state: "available", // available | queued | downloading | done | failed
+      progress: 0, host: HOSTS[(n + k) % 3]
+    };
+  });
+}
+
+/* A book's effective status (for filters/counts/row), derived from its
+   variations' states (the roll-up). */
+function effectiveStatus(bk) {
+  if (bk.discovery === "not_found") return "notfound";
+  var req = (bk.versions || []).filter(function (v) { return v.state !== "available"; });
+  if (bk.discovery === "needs_selection" && req.length === 0) return "attn";
+  if (req.length === 0) return "queued";
+  if (req.every(function (v) { return v.state === "done"; })) return "done";
+  if (req.some(function (v) { return v.state === "downloading" || v.state === "queued"; })) return "active";
+  if (req.some(function (v) { return v.state === "failed"; })) return "attn";
+  return "queued";
+}
+
+var FMT_GLYPH = { done: "✓", downloading: "⏳", queued: "⏳", failed: "⚠" };
+
+function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+/* =====================================================================
+   State + rendering
+   ===================================================================== */
+var LISTS = [
+  buildList("jeremy", "Jeremy's Reading List", "public-domain classics", BATCHES, 0),
+  buildList("bookclub", LIST2[0], LIST2[1], LIST2[2], 1),
+  buildList("scifi", LIST3[0], LIST3[1], LIST3[2], 2)
+];
+var CURRENT = "jeremy";   // selected list id, or "__all__" for the aggregate view
+var FORMATS = ["epub", "pdf", "mobi"]; // ranked, most-preferred first (maps to ListSettings.format_pref)
+var ALL_FORMATS = ["epub", "pdf", "mobi", "azw3", "djvu"]; // formats offerable in the rank widget
+/* Per-list settings (maps to the engine's ListSettings). FORMATS above mirrors
+   SETTINGS.format_pref; both are kept in sync by the Settings sheet. */
+var SETTINGS = {
+  language: "", naming_template: "{seq:02} - {authors} - {title}.{ext}",
+  auto_threshold: 0.85, near_threshold: 0.45, seq_per_group: true, keep_top: 5
+};
+/* Global app settings (maps to the backend AppSettings JSON config). */
+var APPCFG = {
+  out_dir: "~/Downloads",
+  sites: ["libgen.li"],
+  all_sites: ["libgen.li", "libgen.vg", "libgen.la", "libgen.pw", "randombook.org", "ipfs"],
+  max_concurrency: 2, query_concurrency: 8, rate_per_sec: 2, max_attempts: 4
+};
+var SEARCH_MIRRORS = ["libgen.li", "libgen.is"]; // read-only (mirrors.toml)
+var FILTER = "all";       // all | attn | active | done | queued
+var SELECTED = null;      // book id
+var RUNNING = false;
+var IMPORT_TAB = "file";
+var IMPORT_FILE = null; // { text, isJson, name } once a file is chosen/dropped
+
+var STATUS_META = {
+  queued:   { cls: "s-queued", label: "Queued" },
+  active:   { cls: "s-active", label: "Downloading" },
+  done:     { cls: "s-done",   label: "Done" },
+  attn:     { cls: "s-attn",   label: "Needs you" },
+  notfound: { cls: "s-fail",   label: "Not found" }
+};
+
+function currentList() { return LISTS.filter(function (l) { return l.id === CURRENT; })[0]; }
+function listBooks(l) { var out = []; l.groups.forEach(function (g) { g.books.forEach(function (bk) { out.push(bk); }); }); return out; }
+function everyBook() { var out = []; LISTS.forEach(function (l) { out = out.concat(listBooks(l)); }); return out; } // GLOBAL engine
+function allBooks() { // books in the CURRENT scope (a list, or everything)
+  return CURRENT === "__all__" ? everyBook() : listBooks(currentList());
+}
+function countsOf(books) {
+  var c = { all: 0, attn: 0, active: 0, done: 0, queued: 0 };
+  books.forEach(function (bk) {
+    c.all++;
+    var es = effectiveStatus(bk);
+    c[es === "notfound" ? "attn" : es]++; // not-found rolls into "needs you"
+  });
+  return c;
+}
+function counts() { return countsOf(allBooks()); }       // scope-aware (current view)
+function globalCounts() { return countsOf(everyBook()); } // whole library
+function bookById(id) { return everyBook().filter(function (bk) { return bk.id === id; })[0]; }
+function matchesFilter(bk) {
+  var es = effectiveStatus(bk);
+  if (FILTER === "all") return true;
+  if (FILTER === "attn") return es === "attn" || es === "notfound";
+  return es === FILTER;
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) {
+  return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+
+function render() {
+  renderSidebar();
+  renderToolbar();
+  renderFilters();
+  renderList();
+  renderActivity();
+  renderDrawer();
+}
+
+/* The ranked preferred-format control: epub › pdf › mobi, reorderable with the
+   ▲/▼ buttons. Order = priority (the matcher prefers earlier formats). Lives in
+   the Settings sheet (per-list "Preferred formats"). */
+function renderFormatRank() {
+  var el = document.getElementById("fmtRank");
+  if (!el) return;
+  var html = "";
+  FORMATS.forEach(function (f, i) {
+    if (i > 0) html += '<span class="sep">›</span>';
+    html += '<span class="frank"><span class="rk">' + (i + 1) + '</span>' + f.toUpperCase() +
+      '<button class="mv" data-fmtmv="' + i + ':up" title="Rank higher"' + (i === 0 ? " disabled" : "") + '>▲</button>' +
+      '<button class="mv" data-fmtmv="' + i + ':down" title="Rank lower"' + (i === FORMATS.length - 1 ? " disabled" : "") + '>▼</button>' +
+      '</span>';
+  });
+  el.innerHTML = html;
+}
+
+/* Render the Settings sheet body from the live per-list + app state. */
+function renderSettings() {
+  var b = document.getElementById("settingsBody");
+  if (!b) return;
+  var html = "";
+
+  // --- Per-list settings ---
+  html += '<div class="set-sec"><h3>Per-list settings</h3>';
+  html += '<div class="set-row"><div class="lab">Preferred formats<span class="hint">most-preferred first</span></div>' +
+    '<div class="set-ctl"><span class="fmt-rank" id="fmtRank"></span></div></div>';
+  html += '<div class="set-row"><div class="lab">Auto-download threshold<span class="hint">auto-download at/above this confidence</span></div>' +
+    '<div class="set-ctl"><input type="range" id="setAuto" min="0" max="1" step="0.01" value="' + SETTINGS.auto_threshold + '">' +
+    '<span class="rangeval" id="setAutoVal">' + SETTINGS.auto_threshold.toFixed(2) + '</span></div></div>';
+  html += '<div class="set-row"><div class="lab">Near-match threshold<span class="hint">below this is treated as not-found</span></div>' +
+    '<div class="set-ctl"><input type="range" id="setNear" min="0" max="1" step="0.01" value="' + SETTINGS.near_threshold + '">' +
+    '<span class="rangeval" id="setNearVal">' + SETTINGS.near_threshold.toFixed(2) + '</span></div></div>';
+  html += '<div class="set-row"><div class="lab">Filename template<span class="hint">tokens: {seq:02} {authors} {title} {ext}</span></div>' +
+    '<div class="set-ctl"><input type="text" id="setTpl" value="' + esc(SETTINGS.naming_template) + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Variations kept per book</div>' +
+    '<div class="set-ctl"><input type="number" id="setKeep" min="1" max="20" value="' + SETTINGS.keep_top + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Sequence numbering<span class="hint">' +
+    (SETTINGS.seq_per_group ? "per-batch" : "per-list") + '</span></div>' +
+    '<div class="set-ctl"><button class="toggle' + (SETTINGS.seq_per_group ? " on" : "") + '" id="setSeq" data-toggle-set="seq" aria-label="per-batch numbering"><i></i></button></div></div>';
+  html += '<div class="set-row"><div class="lab">Preferred language<span class="hint">empty = any</span></div>' +
+    '<div class="set-ctl"><input type="text" id="setLang" placeholder="any" value="' + esc(SETTINGS.language) + '"></div></div>';
+  html += '</div>';
+
+  // --- App settings ---
+  html += '<div class="set-sec"><h3>App settings</h3>';
+  html += '<div class="set-row"><div class="lab">Default download folder</div>' +
+    '<div class="set-ctl"><input type="text" id="setOut" value="' + esc(APPCFG.out_dir) + '">' +
+    '<button class="tbtn" data-action="choose-folder">Choose…</button></div></div>';
+  html += '<div class="set-row"><div class="lab">Download sites<span class="hint">enable + order failover</span></div>' +
+    '<div class="set-ctl"><div class="site-list" id="siteList"></div></div></div>';
+  html += '<div class="set-row"><div class="lab">Per-host downloads</div>' +
+    '<div class="set-ctl"><input type="number" id="setConc" min="1" max="16" value="' + APPCFG.max_concurrency + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Concurrent queries</div>' +
+    '<div class="set-ctl"><input type="number" id="setQConc" min="1" max="32" value="' + APPCFG.query_concurrency + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Per-host rate<span class="hint">requests / second</span></div>' +
+    '<div class="set-ctl"><input type="number" id="setRate" min="0.1" max="20" step="0.1" value="' + APPCFG.rate_per_sec + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Max retry attempts</div>' +
+    '<div class="set-ctl"><input type="number" id="setAttempts" min="1" max="10" value="' + APPCFG.max_attempts + '"></div></div>';
+  html += '</div>';
+
+  // --- Search mirrors (read-only) ---
+  html += '<div class="set-sec"><h3>Search mirrors</h3>';
+  html += '<div class="set-ctl" style="display:block">' +
+    SEARCH_MIRRORS.map(function (h) { return '<span class="mirror-host">' + esc(h) + '</span>'; }).join("") +
+    '<div class="mirror-note">Read-only — edit <code>mirrors.toml</code> to change search mirrors.</div></div>';
+  html += '</div>';
+
+  b.innerHTML = html;
+  renderFormatRank();
+  renderSiteList();
+}
+
+/* The download-site picker: each known site as an enable toggle + reorder
+   buttons. Enabled order = the failover chain (maps to AppSettings.sites). */
+function renderSiteList() {
+  var el = document.getElementById("siteList");
+  if (!el) return;
+  // Enabled sites (in chosen order) first, then the remaining (disabled) sites.
+  var enabled = APPCFG.sites.slice();
+  var disabled = APPCFG.all_sites.filter(function (s) { return enabled.indexOf(s) < 0; });
+  var ordered = enabled.concat(disabled);
+  var html = "";
+  ordered.forEach(function (s, i) {
+    var on = enabled.indexOf(s) >= 0;
+    var rk = on ? (enabled.indexOf(s) + 1) : "·";
+    html += '<div class="site-row' + (on ? "" : " off") + '" data-site="' + s + '">' +
+      '<span class="rk">' + rk + '</span>' +
+      '<button class="toggle' + (on ? " on" : "") + '" data-site-toggle="' + s + '" aria-label="enable ' + s + '"><i></i></button>' +
+      '<span class="sname">' + esc(s) + '</span>' +
+      '<button class="mv" data-site-mv="' + s + ':up" title="Move up"' + ((!on || enabled.indexOf(s) === 0) ? " disabled" : "") + '>▲</button>' +
+      '<button class="mv" data-site-mv="' + s + ':down" title="Move down"' + ((!on || enabled.indexOf(s) === enabled.length - 1) ? " disabled" : "") + '>▼</button>' +
+      '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function renderSidebar() {
+  var el = document.getElementById("sidebar");
+  var g = globalCounts();
+  var html = '<div class="side-h">Library</div>';
+  // Aggregate view across all lists.
+  html += '<button class="side-item' + (CURRENT === "__all__" ? " active" : "") + '" data-list="__all__">' +
+    '<span class="ic">🗂</span><span class="lbl">All downloads</span>' +
+    (g.attn + g.fail ? '<span class="dot" style="background:var(--amber)"></span>' : '') +
+    '<span class="ct">' + g.done + "/" + g.all + '</span></button>';
+  // One entry per list, with a needs-you dot + done/total.
+  LISTS.forEach(function (l) {
+    var c = countsOf(listBooks(l));
+    var needs = c.attn;
+    html += '<button class="side-item' + (CURRENT === l.id ? " active" : "") + '" data-list="' + l.id + '">' +
+      '<span class="ic">📕</span><span class="lbl">' + esc(l.title) + '</span>' +
+      (needs ? '<span class="dot" style="background:var(--amber)" title="' + needs + ' need you"></span>' : '') +
+      '<span class="ct">' + c.done + "/" + c.all + '</span></button>';
+  });
+  el.innerHTML = html;
+}
+
+function renderToolbar() {
+  var title, subtitle, c;
+  if (CURRENT === "__all__") {
+    title = "All downloads"; subtitle = LISTS.length + " lists · " + globalCounts().all + " books"; c = globalCounts();
+  } else {
+    var l = currentList(); title = l.title; subtitle = l.subtitle; c = countsOf(listBooks(l));
+  }
+  document.getElementById("listTitle").textContent = title;
+  document.getElementById("listSub").textContent = subtitle;
+  var total = c.all || 1;
+  function pct(n) { return (100 * n / total) + "%"; }
+  document.getElementById("progBar").innerHTML =
+    '<div class="seg done" style="width:' + pct(c.done) + '"></div>' +
+    '<div class="seg active" style="width:' + pct(c.active) + '"></div>' +
+    '<div class="seg attn" style="width:' + pct(c.attn) + '"></div>';
+  document.getElementById("progNum").textContent = c.done + " / " + total + " done";
+}
+
+function renderFilters() {
+  var c = counts();
+  var el = document.getElementById("filters");
+  function chip(key, label, n) {
+    var attn = key === "attn" ? " attn" : "";
+    return '<button class="chip' + attn + (FILTER === key ? " active" : "") + '" data-filter="' + key + '">' +
+      esc(label) + (n != null ? ' <span class="n">' + n + '</span>' : '') + '</button>';
+  }
+  el.innerHTML =
+    chip("all", "All", c.all) +
+    chip("attn", "Needs you", c.attn) +
+    chip("active", "Downloading", c.active) +
+    chip("done", "Done", c.done) +
+    chip("queued", "Queued", c.queued);
+}
+
+function groupHeader(key, name, doneN, total, collapsed) {
+  return '<div class="group-h' + (collapsed ? " collapsed" : "") + '" data-toggle="' + key + '">' +
+    '<span class="tw">▾</span><span class="gname">' + esc(name) + '</span>' +
+    '<span class="gcount">' + doneN + " / " + total + '</span></div>';
+}
+function renderList() {
+  var wrap = document.getElementById("listwrap");
+  var html = "", shown = 0;
+  if (CURRENT === "__all__") {
+    // Aggregate: one collapsible section per list.
+    LISTS.forEach(function (l, li) {
+      var books = listBooks(l), visible = books.filter(matchesFilter);
+      if (visible.length === 0) return;
+      var doneN = books.filter(function (b) { return effectiveStatus(b) === "done"; }).length;
+      html += groupHeader("L" + li, l.title, doneN, books.length, l.collapsedAll);
+      if (!l.collapsedAll) visible.forEach(function (bk) { shown++; html += bookRow(bk); });
+    });
+  } else {
+    // Single list: one collapsible section per batch.
+    currentList().groups.forEach(function (g, gi) {
+      var visible = g.books.filter(matchesFilter);
+      if (visible.length === 0) return;
+      var doneN = g.books.filter(function (b) { return effectiveStatus(b) === "done"; }).length;
+      html += groupHeader("G" + gi, g.name, doneN, g.books.length, g.collapsed);
+      if (!g.collapsed) visible.forEach(function (bk) { shown++; html += bookRow(bk); });
+    });
+  }
+  if (shown === 0) html = '<div class="empty">Nothing here for this filter.</div>';
+  wrap.innerHTML = html;
+}
+
+function requestedVersions(bk) { return (bk.versions || []).filter(function (v) { return v.state !== "available"; }); }
+function rollup(bk) {
+  var req = requestedVersions(bk);
+  return { requested: req.length, done: req.filter(function (v) { return v.state === "done"; }).length };
+}
+function uniqueFormats(versions) {
+  var seen = {}, out = [];
+  (versions || []).forEach(function (v) { if (!seen[v.fmt]) { seen[v.fmt] = 1; out.push(v.fmt); } });
+  return out;
+}
+/* The per-format glyph strip: each REQUESTED variation as `fmt<glyph>` colored
+   by its own state. Before any download, show the available formats faintly. */
+function variationGlyphs(bk) {
+  var req = requestedVersions(bk);
+  if (req.length === 0) {
+    return uniqueFormats(bk.versions).map(function (f) { return '<span class="fmt">' + f + '</span>'; }).join(" ");
+  }
+  return req.map(function (v) {
+    var cls = v.state === "done" ? "vg-done" : (v.state === "failed" ? "vg-fail" : "vg-active");
+    return '<span class="vg ' + cls + '">' + v.fmt + " " + (FMT_GLYPH[v.state] || "") + '</span>';
+  }).join(" ");
+}
+
+function bookRow(bk) {
+  var es = effectiveStatus(bk);
+  var mid = variationGlyphs(bk);
+  var right;
+  if (es === "notfound") {
+    right = '<span class="status"><span class="chip-s s-fail">Not found</span></span>';
+  } else if (es === "attn" && bk.discovery === "needs_selection" && requestedVersions(bk).length === 0) {
+    right = '<span class="status"><button class="rowbtn amber" data-open="' + bk.id + '">Choose…</button></span>';
+  } else if (es === "attn") { // a variation failed
+    right = '<span class="status"><span class="chip-s s-fail">Needs retry</span></span>';
+  } else if (es === "done") {
+    right = '<span class="status"><span class="chip-s s-done">Done</span></span>';
+  } else if (es === "active") {
+    var a = rollup(bk);
+    right = '<span class="status"><span class="chip-s s-active">Downloading ' + a.done + "/" + a.requested + '</span></span>';
+  } else { // queued — offer "move to top of queue"
+    var pill = bk.priority
+      ? '<span class="chip-s s-active" title="will download next">⤴ Next up</span>'
+      : '<span class="chip-s s-queued">Queued</span>';
+    var btn = '<button class="rowbtn' + (bk.priority ? " amber" : "") + '" data-top="' + bk.id +
+      '" title="Move to top of queue">' + (bk.priority ? "✓ Top" : "⤒ Top") + '</button>';
+    right = '<span class="status">' + pill + btn + '</span>';
+  }
+  return '<div class="book' + (SELECTED === bk.id ? " sel" : "") + '" data-open="' + bk.id + '">' +
+    '<span class="seq">' + bk.seq + '</span>' +
+    '<span class="meta"><div class="t">' + esc(bk.title) + '</div><div class="a">' + esc(bk.author) + '</div></span>' +
+    '<span class="vglyphs">' + mid + '</span>' + right + '</div>';
+}
+
+function renderActivity() {
+  // The activity bar reflects the GLOBAL engine: downloading VARIATIONS per host.
+  var active = [];
+  everyBook().forEach(function (b) {
+    (b.versions || []).forEach(function (v) { if (v.state === "downloading") active.push(v); });
+  });
+  var byHost = {};
+  active.forEach(function (v) { byHost[v.host] = (byHost[v.host] || 0) + 1; });
+  var caps = { "libgen.li": 2, "cdn.booksdl.lc": 2, "ipfs.io": 1 };
+  var html = '<span class="lab">Activity</span>';
+  HOSTS.forEach(function (h) {
+    var on = byHost[h] || 0, cap = caps[h] || 2, slots = "";
+    for (var i = 0; i < cap; i++) slots += '<i class="' + (i < on ? "on" : "") + '"></i>';
+    html += '<span class="host"><span class="slots">' + slots + '</span>' + h +
+      ' <span style="opacity:.7">' + on + "/" + cap + '</span></span>';
+  });
+  html += '<span class="spacer"></span><span class="thru">' +
+    (RUNNING ? "▾ " + (1.2 + active.length * 0.4).toFixed(1) + " MB/s · " + active.length + " active"
+             : "paused") + '</span>';
+  document.getElementById("activity").innerHTML = html;
+}
+
+/* The per-variation manager: each kept variation (distinct md5) with its OWN
+   state + action, so the user can download the epub and pdf independently, or
+   re-download a different copy if one isn't ideal. */
+function renderVariationManager(bk) {
+  if (!bk.versions || !bk.versions.length) return "";
+  var html = '<div class="sec-t">Variations (' + bk.versions.length + ')</div>';
+  bk.versions.forEach(function (v, idx) {
+    var label = "", action;
+    if (v.state === "done") {
+      label = '<span class="chip-s s-done">✓ Downloaded</span>';
+      action = '<button class="tbtn" data-action="noop">Reveal</button>' +
+        '<button class="tbtn" data-dl="' + bk.id + ':' + idx + '">Re-download</button>';
+    } else if (v.state === "downloading" || v.state === "queued") {
+      label = '<span class="chip-s s-active">' + (v.state === "queued" ? "Queued" : v.progress + "%") + '</span>';
+      action = '<button class="tbtn" data-cancelv="' + bk.id + ':' + idx + '">Cancel</button>';
+    } else if (v.state === "failed") {
+      label = '<span class="chip-s s-fail">Failed</span>';
+      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">Retry</button>';
+    } else {
+      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">Download</button>';
+    }
+    var idline = (v.title || v.author)
+      ? '<div class="cand-id">' + esc(v.title || "—") + (v.author ? ' · ' + esc(v.author) : '') + '</div>'
+      : '';
+    html += '<div class="cand' + (v.state === "done" ? " best" : "") + '">' +
+      '<div class="ct">' + v.fmt.toUpperCase() + ' · ' + v.size + ' MB ' + label + '</div>' +
+      idline +
+      '<div class="cmeta"><span>' + v.year + '</span><span>' + esc(v.publisher) + '</span>' +
+      '<span style="opacity:.6">md5 ' + v.md5 + '</span></div>' +
+      (v.state === "downloading" ? '<div class="conf"><i style="width:' + v.progress + '%"></i></div>' : '') +
+      '<div class="cact">' + action + '</div></div>';
+  });
+  return html;
+}
+
+function renderDrawer() {
+  var d = document.getElementById("drawer");
+  if (!SELECTED) { d.classList.remove("open"); return; }
+  var bk = bookById(SELECTED);
+  if (!bk) { d.classList.remove("open"); return; }
+  d.classList.add("open");
+  document.getElementById("dTitle").textContent = bk.title;
+  document.getElementById("dAuthor").textContent = bk.author;
+  var b = document.getElementById("dBody");
+  var es = effectiveStatus(bk);
+  var html = "";
+
+  if (bk.discovery === "not_found") {
+    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-fail">Not found</span></span></div>' +
+      '<div class="kv"><span class="k">Why</span><span class="v">No mirror returned a match.</span></div>' +
+      '<div style="margin-top:12px;display:flex;gap:8px"><button class="tbtn" data-action="noop">Search again</button><button class="tbtn" data-action="noop">Enter manually</button></div>';
+  } else if (bk.discovery === "needs_selection" && requestedVersions(bk).length === 0) {
+    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-attn">Needs you</span></span></div>' +
+      '<div class="kv"><span class="k">Why</span><span class="v">No single match cleared the auto-download threshold — choose which variation(s) to download.</span></div>' +
+      renderVariationManager(bk);
+  } else {
+    var a = rollup(bk);
+    var summary = es === "done" ? '<span class="chip-s s-done">Done</span>'
+      : es === "active" ? '<span class="chip-s s-active">Downloading ' + a.done + "/" + a.requested + '</span>'
+      : es === "attn" ? '<span class="chip-s s-fail">Needs retry</span>'
+      : '<span class="chip-s s-queued">' + (bk.priority ? "Next up" : "Queued") + '</span>';
+    html += '<div class="kv"><span class="k">Status</span><span class="v">' + summary + '</span></div>';
+    if (es === "queued") {
+      html += '<div style="margin:10px 0"><button class="tbtn' + (bk.priority ? "" : " primary") +
+        '" data-top="' + bk.id + '">' + (bk.priority ? "Remove from top" : "⤒ Move to top of queue") + '</button></div>';
+    }
+    html += renderVariationManager(bk);
+  }
+  b.innerHTML = html;
+}
+
+/* =====================================================================
+   Interaction (event delegation - robust + testable)
+   ===================================================================== */
+document.addEventListener("click", function (e) {
+  var t = e.target.closest("[data-action],[data-filter],[data-list],[data-toggle],[data-open],[data-dl],[data-cancelv],[data-top],[data-fmtmv],[data-imptab],[data-site-toggle],[data-site-mv],[data-toggle-set]");
+  if (!t) return;
+
+  if (t.dataset.fmtmv) { // reorder preferred formats
+    var fp = t.dataset.fmtmv.split(":"), idx = +fp[0], j = fp[1] === "up" ? idx - 1 : idx + 1;
+    if (j >= 0 && j < FORMATS.length) { var tmp = FORMATS[idx]; FORMATS[idx] = FORMATS[j]; FORMATS[j] = tmp; }
+    renderFormatRank(); return;
+  }
+  if (t.dataset.siteToggle) { // enable/disable a download site
+    var s = t.dataset.siteToggle, at = APPCFG.sites.indexOf(s);
+    if (at >= 0) { if (APPCFG.sites.length > 1) APPCFG.sites.splice(at, 1); } // keep at least one
+    else APPCFG.sites.push(s);
+    renderSiteList(); return;
+  }
+  if (t.dataset.siteMv) { // reorder failover chain
+    var sp = t.dataset.siteMv.split(":"), si = APPCFG.sites.indexOf(sp[0]), sj = sp[1] === "up" ? si - 1 : si + 1;
+    if (si >= 0 && sj >= 0 && sj < APPCFG.sites.length) { var tt = APPCFG.sites[si]; APPCFG.sites[si] = APPCFG.sites[sj]; APPCFG.sites[sj] = tt; }
+    renderSiteList(); return;
+  }
+  if (t.dataset.toggleSet === "seq") { SETTINGS.seq_per_group = !SETTINGS.seq_per_group; renderSettings(); return; }
+
+  if (t.dataset.dl) { // download (or re-download/retry) a specific variation
+    var p = t.dataset.dl.split(":"), bk = bookById(p[0]);
+    if (bk) { var v = bk.versions[+p[1]]; v.state = "downloading"; v.progress = 3; }
+    render(); return;
+  }
+  if (t.dataset.cancelv) { // cancel a variation download -> back to available
+    var p2 = t.dataset.cancelv.split(":"), bk2 = bookById(p2[0]);
+    if (bk2) { var v2 = bk2.versions[+p2[1]]; v2.state = "available"; v2.progress = 0; }
+    render(); return;
+  }
+  if (t.dataset.top) { var bt = bookById(t.dataset.top); if (bt) bt.priority = !bt.priority; render(); return; }
+  if (t.dataset.list) { CURRENT = t.dataset.list; FILTER = "all"; SELECTED = null; render(); return; }
+  if (t.dataset.filter) { FILTER = t.dataset.filter; SELECTED = null; render(); return; }
+  if (t.dataset.toggle != null) {
+    var key = t.dataset.toggle;
+    if (key.charAt(0) === "L") { var l = LISTS[+key.slice(1)]; l.collapsedAll = !l.collapsedAll; }
+    else { var g = currentList().groups[+key.slice(1)]; g.collapsed = !g.collapsed; }
+    render(); return;
+  }
+  if (t.dataset.open) { SELECTED = (SELECTED === t.dataset.open ? null : t.dataset.open); render(); return; }
+  if (t.dataset.imptab) { IMPORT_TAB = t.dataset.imptab; syncImportTabs(); return; }
+
+  var a = t.dataset.action;
+  if (a === "toggle-run") { RUNNING = !RUNNING; document.getElementById("runBtn").textContent = RUNNING ? "❚❚ Pause queue" : "▶ Start queue"; if (RUNNING) startSim(); else stopSim(); renderActivity(); return; }
+  if (a === "open-import") { openImport(); return; }
+  if (a === "close-import") { closeImport(); return; }
+  if (a === "confirm-import") { closeImport(); return; }
+  if (a === "open-settings") { openSettings(); return; }
+  if (a === "close-settings") { closeSettings(); return; }
+  if (a === "save-settings") { saveSettings(); return; }
+  if (a === "choose-folder") { return; } // no native dialog in the file:// prototype
+  if (a === "close-drawer") { SELECTED = null; render(); return; }
+  if (a === "noop") { return; }
+});
+
+/* ---- settings sheet ---- */
+function openSettings() {
+  renderSettings();
+  document.getElementById("settingsScrim").classList.add("open");
+  document.getElementById("settingsSheet").classList.add("open");
+}
+function closeSettings() {
+  document.getElementById("settingsScrim").classList.remove("open");
+  document.getElementById("settingsSheet").classList.remove("open");
+}
+/* Read the inputs back into state, then re-render. (Under Tauri this also calls
+   set_settings + set_config; here it just round-trips the JS state.) */
+function collectSettings() {
+  function num(id, def) { var v = parseFloat((document.getElementById(id) || {}).value); return isNaN(v) ? def : v; }
+  function str(id, def) { var el = document.getElementById(id); return el ? el.value : def; }
+  SETTINGS.auto_threshold = num("setAuto", SETTINGS.auto_threshold);
+  SETTINGS.near_threshold = num("setNear", SETTINGS.near_threshold);
+  SETTINGS.naming_template = str("setTpl", SETTINGS.naming_template);
+  SETTINGS.keep_top = Math.max(1, Math.round(num("setKeep", SETTINGS.keep_top)));
+  SETTINGS.language = str("setLang", SETTINGS.language).trim();
+  APPCFG.out_dir = str("setOut", APPCFG.out_dir);
+  APPCFG.max_concurrency = Math.max(1, Math.round(num("setConc", APPCFG.max_concurrency)));
+  APPCFG.query_concurrency = Math.max(1, Math.round(num("setQConc", APPCFG.query_concurrency)));
+  APPCFG.rate_per_sec = Math.max(0.1, num("setRate", APPCFG.rate_per_sec));
+  APPCFG.max_attempts = Math.max(1, Math.round(num("setAttempts", APPCFG.max_attempts)));
+}
+function saveSettings() {
+  collectSettings();
+  closeSettings();
+  render();
+}
+
+/* ---- import sheet ---- */
+function openImport() {
+  IMPORT_FILE = null;
+  document.getElementById("fileInput").value = "";
+  document.getElementById("fileChosen").classList.add("hide");
+  IMPORT_TAB = "file"; syncImportTabs();
+  document.getElementById("scrim").classList.add("open");
+  document.getElementById("sheet").classList.add("open");
+}
+/* Read a chosen/dropped .md or .json file into the import flow. Format is
+   detected from the extension, falling back to a content sniff ('{' = JSON). */
+function readImportFile(file) {
+  if (!file) return;
+  var r = new FileReader();
+  r.onload = function () {
+    var text = String(r.result || "");
+    var isJson = /\.json$/i.test(file.name) || text.trim().charAt(0) === "{";
+    IMPORT_FILE = { text: text, isJson: isJson, name: file.name };
+    var fc = document.getElementById("fileChosen");
+    fc.classList.remove("hide");
+    fc.innerHTML = "📄 " + esc(file.name) + " · " + (isJson ? "JSON" : "Markdown") +
+      " · " + Math.max(1, Math.round(text.length / 1024)) + " KB";
+    updateImportPreview();
+  };
+  r.readAsText(file);
+}
+function closeImport() {
+  document.getElementById("scrim").classList.remove("open");
+  document.getElementById("sheet").classList.remove("open");
+}
+function syncImportTabs() {
+  var tabs = document.querySelectorAll("#importTabs .tab");
+  tabs.forEach(function (b) { b.classList.toggle("active", b.dataset.imptab === IMPORT_TAB); });
+  document.querySelectorAll("[data-imppane]").forEach(function (p) { p.classList.toggle("hide", p.dataset.imppane !== IMPORT_TAB); });
+  updateImportPreview();
+}
+document.addEventListener("input", function (e) {
+  if (/^m(Title|Author|Fmt)$/.test(e.target.id)) updateImportPreview();
+  // Live-update the slider value readouts in the Settings sheet.
+  if (e.target.id === "setAuto") { var v = document.getElementById("setAutoVal"); if (v) v.textContent = (+e.target.value).toFixed(2); }
+  if (e.target.id === "setNear") { var v2 = document.getElementById("setNearVal"); if (v2) v2.textContent = (+e.target.value).toFixed(2); }
+});
+document.addEventListener("change", function (e) {
+  if (e.target.id === "fileInput") readImportFile(e.target.files && e.target.files[0]);
+});
+function updateImportPreview() {
+  var pv = document.getElementById("importPreview");
+  var groups = [];
+  try {
+    if (IMPORT_TAB === "file") {
+      if (!IMPORT_FILE) { pv.innerHTML = '<span style="color:var(--text-faint)">Choose a file to preview its books.</span>'; return; }
+      groups = IMPORT_FILE.isJson ? parseJsonPreview(IMPORT_FILE.text) : parseMdPreview(IMPORT_FILE.text);
+    } else {
+      groups = [{ name: "Manual", books: [ (document.getElementById("mTitle").value || "—") + " — " + (document.getElementById("mAuthor").value || "—") ] }];
+    }
+  } catch (err) { pv.innerHTML = '<span style="color:var(--red)">Could not parse: ' + esc(err.message) + '</span>'; return; }
+  var n = groups.reduce(function (a, g) { return a + g.books.length; }, 0);
+  var html = '<div style="color:var(--text-dim);margin-bottom:6px">Preview · ' + groups.length + ' group(s), ' + n + ' book(s)</div>';
+  groups.forEach(function (g) {
+    html += '<div class="pg">' + esc(g.name) + '</div>';
+    g.books.forEach(function (b) { html += '<div class="pb">' + esc(b) + '</div>'; });
+  });
+  pv.innerHTML = html;
+}
+function parseMdPreview(md) {
+  var groups = [], cur = null;
+  md.split("\n").forEach(function (line) {
+    var l = line.trim();
+    var h = l.match(/^#{2,3}\s+(.*)/);
+    var t = l.match(/^#\s+(.*)/);
+    var it = l.match(/^(?:\d+[.)]|[-*])\s+(.*)/);
+    if (h) { cur = { name: h[1].replace(/^.*—\s*/, ""), books: [] }; groups.push(cur); }
+    else if (t) { /* list title */ }
+    else if (it) { if (!cur) { cur = { name: "Books", books: [] }; groups.push(cur); } cur.books.push(it[1]); }
+  });
+  return groups;
+}
+function parseJsonPreview(txt) {
+  var o = JSON.parse(txt);
+  return (o.sections || []).map(function (s) {
+    return { name: s.title || "Group", books: (s.books || []).map(function (b) { return b.title + (b.author ? " — " + b.author : ""); }) };
+  });
+}
+
+/* ---- simulation: animate the queue so flows are demoable ---- */
+var simTimer = null;
+function startSim() {
+  if (simTimer) return;
+  simTimer = setInterval(function () {
+    // The engine is global: advance/promote across ALL lists, capped by a global
+    // active limit (mirrors the shared per-host concurrency). Advance each
+    // downloading VARIATION independently.
+    var downloading = [];
+    everyBook().forEach(function (b) {
+      (b.versions || []).forEach(function (v) { if (v.state === "downloading") downloading.push(v); });
+    });
+    downloading.forEach(function (v) {
+      v.progress += 6 + ((v.size * 10) % 5);
+      if (v.progress >= 100) { v.progress = 100; v.state = "done"; }
+    });
+    // Prioritized ("move to top") books jump the queue; otherwise FIFO. Start
+    // the best available variation of the next queued book.
+    if (downloading.length < 5) {
+      var queued = everyBook().filter(function (b) { return effectiveStatus(b) === "queued" && (b.versions || []).length; });
+      var q = queued.filter(function (b) { return b.priority; })[0] || queued[0];
+      if (q) { q.versions[0].state = "downloading"; q.versions[0].progress = 4; q.priority = false; }
+    }
+    render();
+  }, 700);
+}
+function stopSim() { if (simTimer) { clearInterval(simTimer); simTimer = null; } }
+
+/* boot */
+render();
+/* expose a tiny hook so the headless test can assert state deterministically */
+/* Import drag & drop onto the dropzone. */
+(function () {
+  var dz = document.getElementById("dropzone");
+  if (dz) {
+    ["dragover", "dragenter"].forEach(function (ev) {
+      dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add("drag"); });
+    });
+    ["dragleave", "drop"].forEach(function (ev) {
+      dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove("drag"); });
+    });
+    dz.addEventListener("drop", function (e) {
+      readImportFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+    });
+  }
+})();
+window.__APP__ = {
+  counts: counts, globalCounts: globalCounts,
+  lists: function () { return LISTS; },
+  getCurrent: function () { return CURRENT; },
+  setCurrent: function (id) { CURRENT = id; FILTER = "all"; SELECTED = null; render(); },
+  getFilter: function () { return FILTER; }, getSelected: function () { return SELECTED; },
+  getSettings: function () { return SETTINGS; }, getAppCfg: function () { return APPCFG; },
+  getFormats: function () { return FORMATS; }
+};
+document.documentElement.setAttribute("data-ready", "1");
+</script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+{
+  "list_title": "Avery's Public-Domain Reading List",
+  "note": "All titles first published 1930 or earlier and in the US public domain.",
+  "sections": [
+    {
+      "id": 1,
+      "title": "Gentle Animal & Friendship Tales",
+      "books": [
+        { "title": "Winnie-the-Pooh", "author": "A.A. Milne", "year": 1926 },
+        { "title": "The House at Pooh Corner", "author": "A.A. Milne", "year": 1928 },
+        { "title": "The Velveteen Rabbit", "author": "Margery Williams", "year": 1922 },
+        { "title": "The Tale of Peter Rabbit", "author": "Beatrix Potter", "year": 1902 },
+        { "title": "Old Mother West Wind", "author": "Thornton W. Burgess", "year": 1910 },
+        { "title": "The Adventures of Reddy Fox", "author": "Thornton W. Burgess", "year": 1913 },
+        { "title": "Bambi, a Life in the Woods", "author": "Felix Salten", "year": 1923 },
+        { "title": "Millions of Cats", "author": "Wanda Gág", "year": 1928 },
+        { "title": "Just So Stories", "author": "Rudyard Kipling", "year": 1902 },
+        { "title": "The Story of Doctor Dolittle", "author": "Hugh Lofting", "year": 1920 }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Fairy Tales & Folklore",
+      "books": [
+        { "title": "Grimms' Fairy Tales", "author": "Brothers Grimm", "year": 1812 },
+        { "title": "Andersen's Fairy Tales", "author": "Hans Christian Andersen", "year": 1837 },
+        { "title": "The Blue Fairy Book", "author": "Andrew Lang", "year": 1889 },
+        { "title": "English Fairy Tales", "author": "Joseph Jacobs", "year": 1890 },
+        { "title": "The Aesop for Children", "author": "Aesop", "year": 1919 },
+        { "title": "The Happy Prince and Other Tales", "author": "Oscar Wilde", "year": 1888 },
+        { "title": "American Fairy Tales", "author": "L. Frank Baum", "year": 1901 },
+        { "title": "Rootabaga Stories", "author": "Carl Sandburg", "year": 1922 },
+        { "title": "The Light Princess", "author": "George MacDonald", "year": 1864 },
+        { "title": "Tanglewood Tales", "author": "Nathaniel Hawthorne", "year": 1853 }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Wonder & Adventure",
+      "books": [
+        { "title": "The Wonderful Wizard of Oz", "author": "L. Frank Baum", "year": 1900 },
+        { "title": "The Marvelous Land of Oz", "author": "L. Frank Baum", "year": 1904 },
+        { "title": "The Adventures of Pinocchio", "author": "Carlo Collodi", "year": 1883 },
+        { "title": "Peter Pan (Peter and Wendy)", "author": "J.M. Barrie", "year": 1911 },
+        { "title": "The Princess and the Goblin", "author": "George MacDonald", "year": 1872 },
+        { "title": "Five Children and It", "author": "E. Nesbit", "year": 1902 },
+        { "title": "The Railway Children", "author": "E. Nesbit", "year": 1906 },
+        { "title": "Raggedy Ann Stories", "author": "Johnny Gruelle", "year": 1918 },
+        { "title": "Uncle Wiggily's Adventures", "author": "Howard R. Garis", "year": 1912 },
+        { "title": "The Reluctant Dragon", "author": "Kenneth Grahame", "year": 1898 }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Heartfelt Classics",
+      "books": [
+        { "title": "Heidi", "author": "Johanna Spyri", "year": 1881 },
+        { "title": "The Secret Garden", "author": "Frances Hodgson Burnett", "year": 1911 },
+        { "title": "A Little Princess", "author": "Frances Hodgson Burnett", "year": 1905 },
+        { "title": "Anne of Green Gables", "author": "L.M. Montgomery", "year": 1908 },
+        { "title": "Rebecca of Sunnybrook Farm", "author": "Kate Douglas Wiggin", "year": 1903 },
+        { "title": "Pollyanna", "author": "Eleanor H. Porter", "year": 1913 },
+        { "title": "Eight Cousins", "author": "Louisa May Alcott", "year": 1875 },
+        { "title": "Understood Betsy", "author": "Dorothy Canfield Fisher", "year": 1916 },
+        { "title": "Five Little Peppers and How They Grew", "author": "Margaret Sidney", "year": 1881 },
+        { "title": "Little Lord Fauntleroy", "author": "Frances Hodgson Burnett", "year": 1886 }
+      ]
+    }
+  ]
+}

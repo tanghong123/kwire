@@ -1,0 +1,602 @@
+{
+  "title": "Jeremy's Public-Domain Reading List",
+  "settings": {
+    "format_pref": [
+      "epub",
+      "pdf"
+    ],
+    "naming_template": "{seq:02} - {authors} - {title}.{ext}",
+    "auto_threshold": 0.85,
+    "near_threshold": 0.45,
+    "title_match_threshold": 0.9,
+    "seq_per_group": true,
+    "keep_top": 5
+  },
+  "groups": [
+    {
+      "name": "High-Seas & Wilderness Adventure",
+      "books": [
+        {
+          "input": {
+            "title": "Treasure Island",
+            "authors": [
+              "Robert Louis Stevenson"
+            ],
+            "year": 1883,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Kidnapped",
+            "authors": [
+              "Robert Louis Stevenson"
+            ],
+            "year": 1886,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Call of the Wild",
+            "authors": [
+              "Jack London"
+            ],
+            "year": 1903,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "White Fang",
+            "authors": [
+              "Jack London"
+            ],
+            "year": 1906,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Robinson Crusoe",
+            "authors": [
+              "Daniel Defoe"
+            ],
+            "year": 1719,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Swiss Family Robinson",
+            "authors": [
+              "Johann David Wyss"
+            ],
+            "year": 1812,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Merry Adventures of Robin Hood",
+            "authors": [
+              "Howard Pyle"
+            ],
+            "year": 1883,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Around the World in Eighty Days",
+            "authors": [
+              "Jules Verne"
+            ],
+            "year": 1873,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Jungle Book",
+            "authors": [
+              "Rudyard Kipling"
+            ],
+            "year": 1894,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Captains Courageous",
+            "authors": [
+              "Rudyard Kipling"
+            ],
+            "year": 1897,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        }
+      ],
+      "subgroups": []
+    },
+    {
+      "name": "Fantasy & Wonder",
+      "books": [
+        {
+          "input": {
+            "title": "Alice's Adventures in Wonderland",
+            "authors": [
+              "Lewis Carroll"
+            ],
+            "year": 1865,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Through the Looking-Glass",
+            "authors": [
+              "Lewis Carroll"
+            ],
+            "year": 1871,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Wind in the Willows",
+            "authors": [
+              "Kenneth Grahame"
+            ],
+            "year": 1908,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Ozma of Oz",
+            "authors": [
+              "L. Frank Baum"
+            ],
+            "year": 1907,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "At the Back of the North Wind",
+            "authors": [
+              "George MacDonald"
+            ],
+            "year": 1871,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Enchanted Castle",
+            "authors": [
+              "E. Nesbit"
+            ],
+            "year": 1907,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Story of the Amulet",
+            "authors": [
+              "E. Nesbit"
+            ],
+            "year": 1906,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Voyages of Doctor Dolittle",
+            "authors": [
+              "Hugh Lofting"
+            ],
+            "year": 1922,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Wonderful Adventures of Nils",
+            "authors": [
+              "Selma Lagerlöf"
+            ],
+            "year": 1906,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "A Wonder-Book for Girls and Boys",
+            "authors": [
+              "Nathaniel Hawthorne"
+            ],
+            "year": 1851,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        }
+      ],
+      "subgroups": []
+    },
+    {
+      "name": "Coming-of-Age & Heart",
+      "books": [
+        {
+          "input": {
+            "title": "The Adventures of Tom Sawyer",
+            "authors": [
+              "Mark Twain"
+            ],
+            "year": 1876,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Adventures of Huckleberry Finn",
+            "authors": [
+              "Mark Twain"
+            ],
+            "year": 1884,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Prince and the Pauper",
+            "authors": [
+              "Mark Twain"
+            ],
+            "year": 1881,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Little Women",
+            "authors": [
+              "Louisa May Alcott"
+            ],
+            "year": 1868,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Little Men",
+            "authors": [
+              "Louisa May Alcott"
+            ],
+            "year": 1871,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "A Christmas Carol",
+            "authors": [
+              "Charles Dickens"
+            ],
+            "year": 1843,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Hans Brinker, or The Silver Skates",
+            "authors": [
+              "Mary Mapes Dodge"
+            ],
+            "year": 1865,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Story of My Life",
+            "authors": [
+              "Helen Keller"
+            ],
+            "year": 1903,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Rip Van Winkle and The Legend of Sleepy Hollow",
+            "authors": [
+              "Washington Irving"
+            ],
+            "year": 1820,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Black Beauty",
+            "authors": [
+              "Anna Sewell"
+            ],
+            "year": 1877,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        }
+      ],
+      "subgroups": []
+    },
+    {
+      "name": "Epics, Science Fiction & Legend",
+      "books": [
+        {
+          "input": {
+            "title": "Twenty Thousand Leagues Under the Sea",
+            "authors": [
+              "Jules Verne"
+            ],
+            "year": 1870,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Journey to the Center of the Earth",
+            "authors": [
+              "Jules Verne"
+            ],
+            "year": 1864,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Time Machine",
+            "authors": [
+              "H.G. Wells"
+            ],
+            "year": 1895,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The War of the Worlds",
+            "authors": [
+              "H.G. Wells"
+            ],
+            "year": 1898,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Gulliver's Travels",
+            "authors": [
+              "Jonathan Swift"
+            ],
+            "year": 1726,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Heroes: Greek Fairy Tales",
+            "authors": [
+              "Charles Kingsley"
+            ],
+            "year": 1856,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Story of King Arthur and His Knights",
+            "authors": [
+              "Howard Pyle"
+            ],
+            "year": 1903,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Hound of the Baskervilles",
+            "authors": [
+              "Arthur Conan Doyle"
+            ],
+            "year": 1902,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Children's Homer",
+            "authors": [
+              "Padraic Colum"
+            ],
+            "year": 1918,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Tales from Shakespeare",
+            "authors": [
+              "Charles",
+              "Mary Lamb"
+            ],
+            "year": 1807,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        }
+      ],
+      "subgroups": []
+    }
+  ]
+}

@@ -1,0 +1,601 @@
+{
+  "title": "Avery's Public-Domain Reading List",
+  "settings": {
+    "format_pref": [
+      "epub",
+      "pdf"
+    ],
+    "naming_template": "{seq:02} - {authors} - {title}.{ext}",
+    "auto_threshold": 0.85,
+    "near_threshold": 0.45,
+    "title_match_threshold": 0.9,
+    "seq_per_group": true,
+    "keep_top": 5
+  },
+  "groups": [
+    {
+      "name": "Gentle Animal & Friendship Tales",
+      "books": [
+        {
+          "input": {
+            "title": "Winnie-the-Pooh",
+            "authors": [
+              "A.A. Milne"
+            ],
+            "year": 1926,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The House at Pooh Corner",
+            "authors": [
+              "A.A. Milne"
+            ],
+            "year": 1928,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Velveteen Rabbit",
+            "authors": [
+              "Margery Williams"
+            ],
+            "year": 1922,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Tale of Peter Rabbit",
+            "authors": [
+              "Beatrix Potter"
+            ],
+            "year": 1902,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Old Mother West Wind",
+            "authors": [
+              "Thornton W. Burgess"
+            ],
+            "year": 1910,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Adventures of Reddy Fox",
+            "authors": [
+              "Thornton W. Burgess"
+            ],
+            "year": 1913,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Bambi, a Life in the Woods",
+            "authors": [
+              "Felix Salten"
+            ],
+            "year": 1923,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Millions of Cats",
+            "authors": [
+              "Wanda Gág"
+            ],
+            "year": 1928,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Just So Stories",
+            "authors": [
+              "Rudyard Kipling"
+            ],
+            "year": 1902,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Story of Doctor Dolittle",
+            "authors": [
+              "Hugh Lofting"
+            ],
+            "year": 1920,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        }
+      ],
+      "subgroups": []
+    },
+    {
+      "name": "Fairy Tales & Folklore",
+      "books": [
+        {
+          "input": {
+            "title": "Grimms' Fairy Tales",
+            "authors": [
+              "Brothers Grimm"
+            ],
+            "year": 1812,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Andersen's Fairy Tales",
+            "authors": [
+              "Hans Christian Andersen"
+            ],
+            "year": 1837,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Blue Fairy Book",
+            "authors": [
+              "Andrew Lang"
+            ],
+            "year": 1889,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "English Fairy Tales",
+            "authors": [
+              "Joseph Jacobs"
+            ],
+            "year": 1890,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Aesop for Children",
+            "authors": [
+              "Aesop"
+            ],
+            "year": 1919,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Happy Prince and Other Tales",
+            "authors": [
+              "Oscar Wilde"
+            ],
+            "year": 1888,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "American Fairy Tales",
+            "authors": [
+              "L. Frank Baum"
+            ],
+            "year": 1901,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Rootabaga Stories",
+            "authors": [
+              "Carl Sandburg"
+            ],
+            "year": 1922,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Light Princess",
+            "authors": [
+              "George MacDonald"
+            ],
+            "year": 1864,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Tanglewood Tales",
+            "authors": [
+              "Nathaniel Hawthorne"
+            ],
+            "year": 1853,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        }
+      ],
+      "subgroups": []
+    },
+    {
+      "name": "Wonder & Adventure",
+      "books": [
+        {
+          "input": {
+            "title": "The Wonderful Wizard of Oz",
+            "authors": [
+              "L. Frank Baum"
+            ],
+            "year": 1900,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Marvelous Land of Oz",
+            "authors": [
+              "L. Frank Baum"
+            ],
+            "year": 1904,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Adventures of Pinocchio",
+            "authors": [
+              "Carlo Collodi"
+            ],
+            "year": 1883,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Peter Pan (Peter and Wendy)",
+            "authors": [
+              "J.M. Barrie"
+            ],
+            "year": 1911,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Princess and the Goblin",
+            "authors": [
+              "George MacDonald"
+            ],
+            "year": 1872,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Five Children and It",
+            "authors": [
+              "E. Nesbit"
+            ],
+            "year": 1902,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Railway Children",
+            "authors": [
+              "E. Nesbit"
+            ],
+            "year": 1906,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Raggedy Ann Stories",
+            "authors": [
+              "Johnny Gruelle"
+            ],
+            "year": 1918,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Uncle Wiggily's Adventures",
+            "authors": [
+              "Howard R. Garis"
+            ],
+            "year": 1912,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Reluctant Dragon",
+            "authors": [
+              "Kenneth Grahame"
+            ],
+            "year": 1898,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        }
+      ],
+      "subgroups": []
+    },
+    {
+      "name": "Heartfelt Classics",
+      "books": [
+        {
+          "input": {
+            "title": "Heidi",
+            "authors": [
+              "Johanna Spyri"
+            ],
+            "year": 1881,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "The Secret Garden",
+            "authors": [
+              "Frances Hodgson Burnett"
+            ],
+            "year": 1911,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "A Little Princess",
+            "authors": [
+              "Frances Hodgson Burnett"
+            ],
+            "year": 1905,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Anne of Green Gables",
+            "authors": [
+              "L.M. Montgomery"
+            ],
+            "year": 1908,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Rebecca of Sunnybrook Farm",
+            "authors": [
+              "Kate Douglas Wiggin"
+            ],
+            "year": 1903,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Pollyanna",
+            "authors": [
+              "Eleanor H. Porter"
+            ],
+            "year": 1913,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Eight Cousins",
+            "authors": [
+              "Louisa May Alcott"
+            ],
+            "year": 1875,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Understood Betsy",
+            "authors": [
+              "Dorothy Canfield Fisher"
+            ],
+            "year": 1916,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Five Little Peppers and How They Grew",
+            "authors": [
+              "Margaret Sidney"
+            ],
+            "year": 1881,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        },
+        {
+          "input": {
+            "title": "Little Lord Fauntleroy",
+            "authors": [
+              "Frances Hodgson Burnett"
+            ],
+            "year": 1886,
+            "format_pref": []
+          },
+          "status": "queued",
+          "candidates": [],
+          "review": false,
+          "goal": "idle"
+        }
+      ],
+      "subgroups": []
+    }
+  ]
+}

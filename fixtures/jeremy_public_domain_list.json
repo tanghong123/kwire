@@ -1,0 +1,70 @@
+{
+  "list_title": "Jeremy's Public-Domain Reading List",
+  "note": "All titles first published 1930 or earlier and in the US public domain.",
+  "sections": [
+    {
+      "id": 1,
+      "title": "High-Seas & Wilderness Adventure",
+      "books": [
+        { "title": "Treasure Island", "author": "Robert Louis Stevenson", "year": 1883 },
+        { "title": "Kidnapped", "author": "Robert Louis Stevenson", "year": 1886 },
+        { "title": "The Call of the Wild", "author": "Jack London", "year": 1903 },
+        { "title": "White Fang", "author": "Jack London", "year": 1906 },
+        { "title": "Robinson Crusoe", "author": "Daniel Defoe", "year": 1719 },
+        { "title": "The Swiss Family Robinson", "author": "Johann David Wyss", "year": 1812 },
+        { "title": "The Merry Adventures of Robin Hood", "author": "Howard Pyle", "year": 1883 },
+        { "title": "Around the World in Eighty Days", "author": "Jules Verne", "year": 1873 },
+        { "title": "The Jungle Book", "author": "Rudyard Kipling", "year": 1894 },
+        { "title": "Captains Courageous", "author": "Rudyard Kipling", "year": 1897 }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Fantasy & Wonder",
+      "books": [
+        { "title": "Alice's Adventures in Wonderland", "author": "Lewis Carroll", "year": 1865 },
+        { "title": "Through the Looking-Glass", "author": "Lewis Carroll", "year": 1871 },
+        { "title": "The Wind in the Willows", "author": "Kenneth Grahame", "year": 1908 },
+        { "title": "Ozma of Oz", "author": "L. Frank Baum", "year": 1907 },
+        { "title": "At the Back of the North Wind", "author": "George MacDonald", "year": 1871 },
+        { "title": "The Enchanted Castle", "author": "E. Nesbit", "year": 1907 },
+        { "title": "The Story of the Amulet", "author": "E. Nesbit", "year": 1906 },
+        { "title": "The Voyages of Doctor Dolittle", "author": "Hugh Lofting", "year": 1922 },
+        { "title": "The Wonderful Adventures of Nils", "author": "Selma Lagerlöf", "year": 1906 },
+        { "title": "A Wonder-Book for Girls and Boys", "author": "Nathaniel Hawthorne", "year": 1851 }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Coming-of-Age & Heart",
+      "books": [
+        { "title": "The Adventures of Tom Sawyer", "author": "Mark Twain", "year": 1876 },
+        { "title": "Adventures of Huckleberry Finn", "author": "Mark Twain", "year": 1884 },
+        { "title": "The Prince and the Pauper", "author": "Mark Twain", "year": 1881 },
+        { "title": "Little Women", "author": "Louisa May Alcott", "year": 1868 },
+        { "title": "Little Men", "author": "Louisa May Alcott", "year": 1871 },
+        { "title": "A Christmas Carol", "author": "Charles Dickens", "year": 1843 },
+        { "title": "Hans Brinker, or The Silver Skates", "author": "Mary Mapes Dodge", "year": 1865 },
+        { "title": "The Story of My Life", "author": "Helen Keller", "year": 1903 },
+        { "title": "Rip Van Winkle and The Legend of Sleepy Hollow", "author": "Washington Irving", "year": 1820 },
+        { "title": "Black Beauty", "author": "Anna Sewell", "year": 1877 }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Epics, Science Fiction & Legend",
+      "books": [
+        { "title": "Twenty Thousand Leagues Under the Sea", "author": "Jules Verne", "year": 1870 },
+        { "title": "Journey to the Center of the Earth", "author": "Jules Verne", "year": 1864 },
+        { "title": "The Time Machine", "author": "H.G. Wells", "year": 1895 },
+        { "title": "The War of the Worlds", "author": "H.G. Wells", "year": 1898 },
+        { "title": "Gulliver's Travels", "author": "Jonathan Swift", "year": 1726 },
+        { "title": "The Heroes: Greek Fairy Tales", "author": "Charles Kingsley", "year": 1856 },
+        { "title": "The Story of King Arthur and His Knights", "author": "Howard Pyle", "year": 1903 },
+        { "title": "The Hound of the Baskervilles", "author": "Arthur Conan Doyle", "year": 1902 },
+        { "title": "The Children's Homer", "author": "Padraic Colum", "year": 1918 },
+        { "title": "Tales from Shakespeare", "author": "Charles and Mary Lamb", "year": 1807 }
+      ]
+    }
+  ]
+}

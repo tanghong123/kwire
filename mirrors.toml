@@ -1,0 +1,81 @@
+# Library Genesis mirror configuration.
+#
+# This file is read at runtime by `core::search` — edit it without rebuilding
+# when mirrors churn. Each search mirror lists a host, a `search_url` template,
+# a `kind` (how to parse the response), and a `priority` (lower = tried first).
+#
+# `search_url` placeholders:
+#   {query} — URL-encoded search terms (title + authors)
+#   {limit} — requested result count
+#
+# `kind` values:
+#   "libgen_li_html"     — scrape the libgen.li results table (id="tablelibgen")
+#   "libgen_json"        — libgen.is/.rs style json.php endpoint
+#   "libgen_rs_html"     — scrape the classic libgen.rs/.is search.php table
+#   "annas_archive_html" — scrape an Anna's Archive /search results card list
+
+# Live LG+ (libgen.li-fork) family — all share the `index.php?req=` results table
+# (`libgen_li_html`). These are the hosts SLUM (open-slum.org) actively monitors;
+# the old classic-LG mirrors (libgen.gs/.is/.rs) are dead and were removed. Phase B
+# re-orders these at runtime by live SLUM health + measured success, so a host that
+# is currently down sinks in the chain rather than blocking the others.
+[[search_mirror]]
+host = "libgen.la"
+search_url = "https://libgen.la/index.php?req={query}&res={limit}"
+kind = "libgen_li_html"
+priority = 1
+
+[[search_mirror]]
+host = "libgen.bz"
+search_url = "https://libgen.bz/index.php?req={query}&res={limit}"
+kind = "libgen_li_html"
+priority = 2
+
+[[search_mirror]]
+host = "libgen.gl"
+search_url = "https://libgen.gl/index.php?req={query}&res={limit}"
+kind = "libgen_li_html"
+priority = 3
+
+[[search_mirror]]
+host = "libgen.vg"
+search_url = "https://libgen.vg/index.php?req={query}&res={limit}"
+kind = "libgen_li_html"
+priority = 4
+
+[[search_mirror]]
+host = "libgen.li"
+search_url = "https://libgen.li/index.php?req={query}&res={limit}"
+kind = "libgen_li_html"
+priority = 5
+
+# Only the five live LG+ mirrors above are configured for search. The classic
+# `libgen.is` json.php lane and the `annas-archive.gl` card-list lane were removed:
+# libgen.is is dead upstream, and Anna's Archive gates search behind Cloudflare.
+# All five live mirrors share the `libgen_li_html` results table and are re-ordered
+# at runtime by live SLUM availability + measured success (a down host sinks).
+
+# Download resolvers (md5 -> download page). Consumed by the download engine;
+# listed here so the whole mirror set lives in one config file. Lower priority
+# is tried first; `{md5}` is substituted at resolve time.
+#
+# NOTE: the resolvers the engine actually builds for `--site` live in code
+# (`download::resolver_for_site` / `download::ALL_SITES`) because each mirror
+# family needs a bespoke multi-step resolve (ads.php→get.php, by-id JSON lookup,
+# md5→IPFS-CID). The entries below document the libgen.li-family ads.php hop that
+# the `LibgenLiResolver` performs. (`library.lol` is dead and has been removed.)
+
+[[download_resolver]]
+host = "libgen.li"
+url = "https://libgen.li/ads.php?md5={md5}"
+priority = 1
+
+[[download_resolver]]
+host = "libgen.vg"
+url = "https://libgen.vg/ads.php?md5={md5}"
+priority = 2
+
+[[download_resolver]]
+host = "libgen.la"
+url = "https://libgen.la/ads.php?md5={md5}"
+priority = 3

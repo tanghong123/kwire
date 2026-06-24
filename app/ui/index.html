@@ -1,0 +1,3102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kwire</title>
+<!--
+  Self-contained UX prototype. Everything (data, styles, logic) is inline and
+  uses a CLASSIC <script> (no ES modules), so it runs when opened directly via
+  file:// with a double-click — no server or build step.
+
+  Design goals, balanced:
+    1) Simplicity   — one primary view (the list), progressive disclosure via a
+                      detail drawer + import sheet; occasional actions stay out of
+                      the way.
+    2) Informative  — a "Needs you" filter surfaces exactly the items requiring a
+                      decision; inline status + progress; a per-host activity bar
+                      makes the polite per-host download queues visible.
+    3) Aesthetics   — native-macOS leaning: SF system font, restrained palette with
+                      a single accent, generous whitespace, light/dark via the OS.
+-->
+<style>
+  :root {
+    --accent: #2f6bff;
+    --bg: #ececee;
+    --chrome: #e6e6e9;
+    --panel: #ffffff;
+    --panel-2: #f6f6f8;
+    --sidebar: #e9e9ec;
+    --text: #1d1d1f;
+    --text-dim: #6e6e76;
+    --text-faint: #9a9aa2;
+    --border: #d9d9de;
+    --border-strong: #c6c6cc;
+    --row-hover: #f0f2f7;
+    --row-sel: #e4ecff;
+    --green: #1a9c4e;
+    --green-bg: #e3f5ea;
+    --amber: #b5710b;
+    --amber-bg: #fbeed3;
+    --red: #d23b32;
+    --red-bg: #fbe4e2;
+    --blue-bg: #e4ecff;
+    --shadow: 0 8px 30px rgba(0,0,0,.16);
+    --radius: 9px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #4d83ff;
+      --bg: #1c1c1e;
+      --chrome: #2a2a2d;
+      --panel: #232326;
+      --panel-2: #29292d;
+      --sidebar: #202023;
+      --text: #f2f2f4;
+      --text-dim: #a0a0a8;
+      --text-faint: #6f6f78;
+      --border: #38383d;
+      --border-strong: #46464d;
+      --row-hover: #2c2c31;
+      --row-sel: #2d3d63;
+      --green: #43c970; --green-bg: #173626;
+      --amber: #e3a23a; --amber-bg: #3a2e15;
+      --red: #ff6b60; --red-bg: #3a1e1c;
+      --blue-bg: #26345c;
+      --shadow: 0 10px 36px rgba(0,0,0,.5);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+
+  /* ---- window shell ---- */
+  .app { display: flex; flex-direction: column; height: 100vh; }
+  .titlebar {
+    height: 38px; flex: 0 0 38px; display: flex; align-items: center;
+    background: var(--chrome); border-bottom: 1px solid var(--border);
+    padding: 0 12px; gap: 12px; -webkit-user-select: none; user-select: none;
+  }
+  .traffic { display: flex; gap: 8px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+  .traffic .r { background: #ff5f57; } .traffic .y { background: #febc2e; } .traffic .g { background: #28c840; }
+  .titlebar .name { font-weight: 600; font-size: 13px; letter-spacing: .2px; }
+  .titlebar .spacer { flex: 1; }
+  .tbtn {
+    border: 1px solid var(--border-strong); background: var(--panel);
+    padding: 5px 12px; border-radius: 7px; font-weight: 500; font-size: 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .tbtn:hover { background: var(--row-hover); }
+  .tbtn:disabled { opacity: .4; cursor: not-allowed; }
+  .tbtn:disabled:hover { background: var(--panel); }
+  .ctxmenu { position: fixed; z-index: 60; background: var(--panel); border: 1px solid var(--border-strong);
+    border-radius: 8px; box-shadow: var(--shadow); padding: 4px; min-width: 170px; }
+  .ctxmenu.hide { display: none; }
+  .ctxmenu button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    border: 0; background: none; padding: 7px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  .ctxmenu button:hover { background: var(--row-hover); }
+  .ctxmenu .ctx-head { padding: 5px 10px 6px; font-size: 11px; color: var(--text-faint);
+    border-bottom: 1px solid var(--border); margin-bottom: 3px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+  .tbtn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .tbtn.primary:hover { filter: brightness(1.07); }
+
+  .body { flex: 1; display: flex; min-height: 0; }
+
+  /* ---- sidebar ---- */
+  .sidebar {
+    width: var(--sidebar-w, 216px); flex: 0 0 var(--sidebar-w, 216px); background: var(--sidebar);
+    border-right: 1px solid var(--border); padding: 12px 10px; overflow-y: auto;
+  }
+  .sidebar.collapsed { display: none; }
+  .sidebar.collapsed + .sidebar-resize { display: none; }
+  /* Drag handle to resize the sidebar (sits on its right edge). */
+  .sidebar-resize { flex: 0 0 5px; cursor: col-resize; margin-left: -3px; z-index: 5; }
+  .sidebar-resize:hover, .sidebar-resize.dragging { background: var(--accent); opacity: .5; }
+  .side-h { font-size: 11px; font-weight: 600; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: .6px; margin: 14px 8px 6px; }
+  .side-h:first-child { margin-top: 2px; }
+  .side-item {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border-radius: 7px; color: var(--text); width: 100%; border: 0; background: none;
+    text-align: left;
+  }
+  .side-item:hover { background: var(--row-hover); }
+  .side-item.active { background: var(--accent); color: #fff; }
+  .side-item .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+  .side-item .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side-item .ct { font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 12px; }
+  .side-item.active .ct { color: #fff; opacity: .85; }
+  .side-item .side-st { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; }
+  .side-item .side-st.active { background: var(--green); }
+  .side-item .side-st.paused { background: var(--text-dim); }
+  .side-item.active .side-st.active { background: #fff; }
+  .side-item .ic { width: 16px; text-align: center; opacity: .8; }
+
+  /* ---- main ---- */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--panel); }
+  .toolbar { padding: 14px 18px 10px; border-bottom: 1px solid var(--border); }
+  .toolbar .row1 { display: flex; align-items: baseline; gap: 10px; }
+  .toolbar h1 { font-size: 17px; font-weight: 700; margin: 0; }
+  .toolbar .sub { color: var(--text-dim); font-size: 12px; }
+  .toolbar .row2 { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
+  .prog-wrap { flex: 1; height: 7px; background: var(--panel-2); border-radius: 4px;
+    overflow: hidden; border: 1px solid var(--border); display: flex; }
+  .prog-wrap .seg { height: 100%; }
+  .seg.done { background: var(--green); } .seg.active { background: var(--accent); }
+  .seg.attn { background: var(--amber); } .seg.fail, .seg.cantdl { background: var(--red); }
+  .prog-num { font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+  .row3 { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+  .fmt-lbl { font-size: 11px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: .5px; }
+  .fmt-rank { display: block; }
+  .fmt-rank .sep { color: var(--text-faint); }
+  .frank-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+  .frank .mv.rm { color: var(--red); }
+  .frank .mv.rm:hover { background: var(--red); color: #fff; }
+  .frank-add { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .frank-add .add-lbl { font-size: 12px; color: var(--text-dim); }
+  .addchip { border: 1px solid var(--border-strong); background: var(--panel); border-radius: 14px;
+    padding: 3px 9px; font-size: 12px; font-weight: 500; }
+  .addchip:hover { background: var(--row-hover); border-color: var(--accent); }
+  .addchip.ghost { color: var(--accent); border-style: dashed; }
+  .frank { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-strong);
+    background: var(--panel-2); border-radius: 20px; padding: 3px 4px 3px 10px; font-size: 12px; font-weight: 600; }
+  .frank .rk { color: var(--text-faint); font-variant-numeric: tabular-nums; font-weight: 500; }
+  .frank .mv { border: 0; background: var(--panel); border-radius: 50%; width: 18px; height: 18px; line-height: 1;
+    color: var(--text-dim); padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .frank .mv:hover { background: var(--accent); color: #fff; }
+  .frank .mv[disabled] { opacity: .3; cursor: default; }
+
+  .filters { display: flex; gap: 7px; padding: 10px 18px; border-bottom: 1px solid var(--border);
+    overflow-x: auto; }
+  .chip {
+    border: 1px solid var(--border-strong); background: var(--panel);
+    padding: 4px 11px; border-radius: 20px; font-size: 12px; font-weight: 500;
+    display: inline-flex; gap: 6px; align-items: center; white-space: nowrap;
+  }
+  .chip:hover { background: var(--row-hover); }
+  .chip.active { background: var(--text); color: var(--panel); border-color: transparent; }
+  .chip .n { font-variant-numeric: tabular-nums; opacity: .7; }
+  .chip.attn.active { background: var(--amber); }
+  .chip.cantdl.active { background: var(--red); border-color: transparent; color: #fff; }
+  .querybar { display: flex; align-items: center; gap: 8px; padding: 8px 18px; font-size: 12px;
+    font-weight: 600; color: var(--accent); background: var(--blue-bg); border-bottom: 1px solid var(--border); }
+  .qspin { width: 12px; height: 12px; border: 2px solid var(--accent); border-top-color: transparent;
+    border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .workspace { flex: 1; display: flex; min-height: 0; }
+  .listwrap { flex: 1; overflow-y: auto; min-width: 0; }
+  .group-h {
+    position: sticky; top: 0; z-index: 1; background: var(--panel-2);
+    border-bottom: 1px solid var(--border); padding: 7px 18px;
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    font-weight: 600; font-size: 12px; color: var(--text-dim);
+  }
+  .group-h .tw { width: 12px; transition: transform .12s; color: var(--text-faint); display: inline-block; }
+  .group-h.collapsed .tw { transform: rotate(-90deg); }
+  .group-h .gname { color: var(--text); }
+  .group-h .gcount { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+  .cover { display: inline-block; vertical-align: middle; border-radius: 3px; object-fit: cover; box-shadow: 0 1px 3px rgba(0,0,0,.22); background: var(--panel-2); }
+  .cv-sm { width: 26px; height: 36px; }
+  .cv-lg { width: 96px; height: 132px; }
+  .cover-ph { display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 9px; box-shadow: none; }
+  .cv-lg.cover-ph { font-size: 14px; letter-spacing: .5px; }
+  .book {
+    display: grid; grid-template-columns: 30px 26px 1fr auto auto; align-items: center;
+    gap: 12px; padding: 8px 18px; border-bottom: 1px solid var(--border); cursor: pointer;
+  }
+  .book:hover { background: var(--row-hover); }
+  .book.sel { background: var(--row-sel); }
+  .book .seq { color: var(--text-faint); font-variant-numeric: tabular-nums; font-size: 12px; text-align: right; }
+  .book .meta { min-width: 0; }
+  .book .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .book .a { color: var(--text-dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fmt { font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
+    color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--border);
+    padding: 2px 6px; border-radius: 5px; }
+
+  .vglyphs { display: inline-flex; gap: 5px; align-items: center; }
+  .vg { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+    padding: 2px 6px; border-radius: 5px; border: 1px solid transparent; }
+  .vg-done { color: var(--green); background: var(--green-bg); }
+  .vg-active { color: var(--accent); background: var(--blue-bg); }
+  .vg-fail { color: var(--red); background: var(--red-bg); }
+  .status { display: inline-flex; align-items: center; gap: 7px; min-width: 150px; justify-content: flex-end; }
+  .chip-s { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
+  .s-queued { color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--border); }
+  .s-done { color: var(--green); background: var(--green-bg); }
+  .s-attn { color: var(--amber); background: var(--amber-bg); }
+  .s-fail { color: var(--red); background: var(--red-bg); }
+  .s-active { color: var(--accent); background: var(--blue-bg); }
+  .s-avail { color: var(--text-faint); background: var(--panel-2); border: 1px solid var(--border); }
+  .mini { width: 74px; height: 6px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 4px; overflow: hidden; }
+  .mini > i { display: block; height: 100%; background: var(--accent); }
+  .rowbtn { border: 1px solid var(--border-strong); background: var(--panel); padding: 3px 10px;
+    border-radius: 6px; font-size: 12px; font-weight: 500; }
+  .rowbtn:hover { background: var(--row-hover); }
+  .rowbtn.amber { color: var(--amber); border-color: var(--amber); }
+
+  /* ---- per-variation rows inside a book entry (stacked vertically) ---- */
+  .vlist { display: flex; flex-direction: column; gap: 3px; min-width: 230px; }
+  .vline { display: grid; grid-template-columns: 44px 56px minmax(108px, 1fr) 84px;
+    gap: 10px; align-items: center; font-size: 11px; line-height: 1.45; }
+  .vline.bookline { grid-template-columns: auto; justify-items: start; }
+  .vt { font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
+  .vsz { color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .vstat { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--text-dim); }
+  .vstat .vpct { font-variant-numeric: tabular-nums; }
+  .vbar { height: 6px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .vbar.empty { background: transparent; border-color: transparent; }
+  .vbar > i { display: block; height: 100%; background: var(--accent); }
+  /* Animated hourglass = ACTIVELY downloading; a still hourglass = queued/waiting. */
+  .hourglass { display: inline-block; }
+  .hourglass.run { animation: hgflip 1.5s ease-in-out infinite; }
+  @keyframes hgflip { 0%, 42% { transform: rotate(0deg); } 50%, 92% { transform: rotate(180deg); } 100% { transform: rotate(360deg); } }
+
+  /* ---- bottom active-work panel (collapsible) ---- */
+  .activepanel { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--chrome);
+    display: flex; flex-direction: column; min-height: 0; position: relative; }
+  /* Expanded: a FIXED, user-adjustable height (drag the top edge). Downloads coming and
+     going scroll the body internally instead of changing the panel height — so the book
+     list above never reflows on progress. Collapsed: header only (auto height). */
+  .activepanel:not(.collapsed) { height: var(--ap-h, 240px); }
+  .ap-resize { position: absolute; top: -3px; left: 0; right: 0; height: 7px; cursor: row-resize; z-index: 6; }
+  .ap-resize:hover, .ap-resize.dragging { background: var(--accent, #5b9aa0); opacity: .35; }
+  .activepanel.collapsed .ap-resize { display: none; }
+  .ap-head { display: flex; align-items: center; gap: 9px; padding: 7px 18px; cursor: pointer;
+    font-size: 12px; user-select: none; }
+  .ap-head .tw { display: inline-block; width: 11px; transition: transform .12s; color: var(--text-faint); }
+  .activepanel.collapsed .tw { transform: rotate(-90deg); }
+  .ap-title { font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .5px; color: var(--text-faint); }
+  .ap-sum { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .ap-head .spacer { flex: 1; }
+  .ap-hosts { display: inline-flex; gap: 12px; }
+  .activepanel.collapsed .ap-body { display: none; }
+  .ap-body { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 2px 18px 10px; }
+  .ap-sec { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--text-faint); margin: 8px 0 4px; }
+  .ap-row { display: grid; grid-template-columns: 1fr 110px 150px; gap: 12px; align-items: center;
+    padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--border); }
+  .ap-row .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ap-row .nm small { color: var(--text-dim); }
+  .ap-bar { height: 6px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .ap-bar > i { display: block; height: 100%; background: var(--accent); }
+  /* A speculative (hedge) leg racing the primary on another host. */
+  .hedge-badge { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+    color: var(--amber); background: var(--amber-bg); border: 1px solid var(--amber);
+    padding: 0 5px; border-radius: 4px; vertical-align: middle; }
+  /* "connecting" = no bytes yet: an indeterminate sliding sliver. */
+  .ap-bar.indet > i { width: 35% !important; background: var(--text-faint); animation: indet 1.2s ease-in-out infinite; }
+  @keyframes indet { 0% { margin-left: -35% } 100% { margin-left: 100% } }
+  .ap-stats { text-align: right; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ap-empty { color: var(--text-faint); font-size: 12px; padding: 8px 0; }
+  .host { display: inline-flex; align-items: center; gap: 7px; color: var(--text-dim); }
+  .host .slots { display: inline-flex; gap: 3px; }
+  .host .slots i { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); display: block; }
+  .host .slots i.on { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+  /* ---- inline detail panel (side-by-side with the list) ---- */
+  .detail {
+    flex: 0 0 380px; min-width: 0; background: var(--panel); border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .detail.collapsed { display: none; }
+  .detail .dh { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: flex-start; }
+  .detail .dh .dh-meta { min-width: 0; }
+  .detail .dh .x { margin-left: auto; border: 0; background: none; font-size: 16px; color: var(--text-dim); line-height: 1; cursor: pointer; }
+  .detail .dh h2 { font-size: 15px; margin: 0 0 2px; word-break: break-word; }
+  .detail .dh .da { color: var(--text-dim); font-size: 12px; word-break: break-word; }
+  .detail .dbody { padding: 14px 16px; overflow-y: auto; }
+  .kv { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .kv .k { color: var(--text-dim); width: 96px; flex: 0 0 96px; }
+  .kv .v { font-variant-numeric: tabular-nums; word-break: break-word; }
+  .sec-t { font-size: 11px; font-weight: 700; color: var(--text-faint); text-transform: uppercase;
+    letter-spacing: .5px; margin: 16px 0 8px; }
+  .hist { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+  .he { display: grid; grid-template-columns: 150px 90px 1fr; gap: 8px; align-items: baseline;
+    padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .he-t { color: var(--text-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .he-k { font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+  .he-d { color: var(--text-dim); }
+  .he-fmt { font-weight: 700; color: var(--text); }
+  .he-done { color: var(--green); } .he-failed { color: var(--red); }
+  .he-failover, .he-retry { color: var(--amber); }
+  .he-downloading { color: var(--accent); } .he-accepted { color: var(--green); }
+  .cand { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  .cand.rec { border-color: var(--amber); background: var(--amber-bg); }
+  .cand.best { border-color: var(--accent); }
+  .cand .ct { font-weight: 600; }
+  .cand .cand-id { font-size: 12px; color: var(--text); margin: 2px 0; }
+  .cand .cmeta { color: var(--text-dim); font-size: 12px; margin: 3px 0 7px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .conf { height: 5px; background: var(--panel-2); border-radius: 3px; overflow: hidden; margin: 7px 0; }
+  .conf > i { display: block; height: 100%; background: var(--accent); }
+  .cand .cact { display: flex; align-items: center; gap: 8px; }
+  .cand .score { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 12px; }
+
+  /* ---- modal / import sheet ---- */
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.32); opacity: 0; pointer-events: none;
+    transition: opacity .15s; z-index: 40; }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: fixed; left: 50%; top: 64px; transform: translateX(-50%) translateY(-8px) scale(.98);
+    width: min(640px, 92vw); max-height: 80vh; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: var(--shadow); z-index: 41; opacity: 0; pointer-events: none;
+    transition: opacity .15s, transform .15s; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .sheet.open { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0) scale(1); }
+  .sheet .sh { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; }
+  .sheet .sh h2 { margin: 0; font-size: 15px; }
+  .sheet .sh .x { margin-left: auto; border: 0; background: none; font-size: 18px; color: var(--text-dim); }
+  .tabs { display: flex; gap: 4px; padding: 10px 16px 0; }
+  .tab { border: 0; background: none; padding: 7px 12px; border-radius: 7px 7px 0 0; font-weight: 500; color: var(--text-dim); }
+  .tab.active { color: var(--text); background: var(--panel-2); }
+  .sheet .sbody { padding: 14px 16px; overflow-y: auto; }
+  textarea, input[type=text] {
+    width: 100%; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--text);
+    background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px; resize: vertical;
+  }
+  input[type=text] { font-family: inherit; }
+  .field { margin-bottom: 10px; }
+  .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+  .dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    text-align: center; border: 1.5px dashed var(--border-strong); border-radius: 10px; padding: 28px 16px;
+    cursor: pointer; background: var(--panel-2); }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: var(--row-hover); }
+  .dz-icon { font-size: 24px; color: var(--text-dim); }
+  .dz-title { font-weight: 600; }
+  .dz-sub { color: var(--text-dim); font-size: 12px; }
+  .file-chosen { margin-top: 10px; font-size: 12px; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 8px 10px; }
+  .preview { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); padding: 10px; font-size: 12px; }
+  .preview .pg { font-weight: 600; margin: 6px 0 2px; }
+  .preview .pb { color: var(--text-dim); padding-left: 10px; }
+  .sheet .sf { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+
+  .empty { padding: 40px; text-align: center; color: var(--text-faint); }
+  .hide { display: none !important; }
+
+  /* ---- settings sheet ---- */
+  .set-sec { margin: 0 0 18px; }
+  .set-sec > h3 { font-size: 11px; font-weight: 700; color: var(--text-faint); text-transform: uppercase;
+    letter-spacing: .5px; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .set-row { display: grid; grid-template-columns: 168px 1fr; gap: 12px; align-items: center; margin-bottom: 12px; }
+  .set-row > .lab { color: var(--text-dim); font-size: 12px; }
+  .set-row > .lab .hint { display: block; color: var(--text-faint); font-size: 11px; margin-top: 2px; }
+  .set-ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .set-ctl input[type=number] { width: 90px; font-family: inherit; }
+  .set-ctl input[type=range] { flex: 1; min-width: 120px; }
+  .set-ctl select { font: inherit; color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 10px; min-width: 140px; }
+  .set-ctl .rangeval { font-variant-numeric: tabular-nums; color: var(--text-dim); width: 36px; text-align: right; }
+  .toggle { position: relative; width: 40px; height: 22px; border-radius: 11px; background: var(--border-strong);
+    border: 0; padding: 0; transition: background .15s; flex: 0 0 40px; }
+  .toggle.on { background: var(--accent); }
+  .toggle i { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; transition: transform .15s; display: block; }
+  .toggle.on i { transform: translateX(18px); }
+  .site-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+  .site-row { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 7px;
+    padding: 5px 8px; background: var(--panel-2); }
+  .site-row.off { opacity: .55; }
+  .site-row .sname { flex: 1; font-weight: 500; }
+  .site-row .rk { color: var(--text-faint); font-variant-numeric: tabular-nums; width: 16px; }
+  .site-row .mv { border: 0; background: var(--panel); border-radius: 5px; width: 22px; height: 22px;
+    color: var(--text-dim); }
+  .site-row .mv:hover { background: var(--accent); color: #fff; }
+  .site-row .mv[disabled] { opacity: .3; cursor: default; }
+  .mirror-note { color: var(--text-faint); font-size: 12px; margin-top: 4px; }
+  .mirror-host { display: inline-block; background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 7px; margin: 0 4px 4px 0; font-size: 12px; }
+  .mh-group { color: var(--text-faint); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .04em; margin: 8px 0 3px; }
+  .mh-row { display: flex; align-items: baseline; gap: 7px; padding: 2px 0; font-size: 12px; }
+  .mh-dot { font-size: 9px; }
+  .mh-host { flex: 1; font-family: var(--mono, monospace); }
+  .mh-meta { color: var(--text-faint); font-size: 11px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- No fake traffic lights / app name here: the native macOS window already
+       provides them. This bar is just the app's action toolbar. -->
+  <div class="titlebar">
+    <button class="tbtn" data-action="toggle-sidebar" id="sidebarBtn" title="Toggle sidebar" aria-label="Toggle sidebar">☰</button>
+    <span class="spacer"></span>
+    <button class="tbtn" data-action="open-import">＋ Import list</button>
+    <button class="tbtn primary" data-action="toggle-run" id="runBtn">▶ Start downloading for all lists</button>
+  </div>
+
+  <div class="body">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="sidebar-resize" id="sidebarResize" title="Drag to resize"></div>
+
+    <main class="main">
+      <div class="toolbar">
+        <div class="row1">
+          <h1 id="listTitle">—</h1>
+          <span class="sub" id="listSub"></span>
+        </div>
+        <div class="row2">
+          <div class="prog-wrap" id="progBar"></div>
+          <span class="prog-num" id="progNum"></span>
+        </div>
+      </div>
+      <div class="filters" id="filters"></div>
+      <div class="querybar hide" id="queryBar"></div>
+      <!-- workspace: book list + inline (side-by-side) detail panel -->
+      <div class="workspace">
+        <div class="listwrap" id="listwrap"></div>
+        <aside class="detail collapsed" id="detail">
+          <div class="dh">
+            <div class="dh-meta">
+              <h2 id="dTitle">—</h2>
+              <div class="da" id="dAuthor"></div>
+            </div>
+            <button class="x" data-action="close-drawer" title="Collapse detail" aria-label="Collapse detail">⟩</button>
+          </div>
+          <div class="dbody" id="dBody"></div>
+        </aside>
+      </div>
+      <!-- collapsible bottom panel: everything currently in flight -->
+      <section class="activepanel collapsed" id="activePanel">
+        <div class="ap-resize" id="apResize" title="Drag to resize"></div>
+        <div class="ap-head" data-action="toggle-active">
+          <span class="tw" id="apTwirl">▾</span>
+          <span class="ap-title">Active work</span>
+          <span class="ap-sum" id="apSummary"></span>
+          <span class="spacer"></span>
+          <div class="ap-hosts" id="apHosts"></div>
+        </div>
+        <div class="ap-body" id="apBody"></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- import sheet -->
+<div class="scrim" id="scrim" data-action="close-import"></div>
+<div class="sheet" id="sheet">
+  <div class="sh"><h2>Import a reading list</h2><button class="x" data-action="close-import">×</button></div>
+  <div class="tabs" id="importTabs">
+    <button class="tab active" data-imptab="file">Upload file</button>
+    <button class="tab" data-imptab="manual">Manual entry</button>
+  </div>
+  <div class="sbody">
+    <div data-imppane="file">
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept=".md,.markdown,.json,.txt" hidden />
+        <div class="dz-icon">⬆︎</div>
+        <div class="dz-title">Choose a Markdown or JSON file</div>
+        <div class="dz-sub">or drag &amp; drop it here · .md / .json</div>
+      </label>
+      <div id="fileChosen" class="file-chosen hide"></div>
+    </div>
+    <div data-imppane="manual" class="hide">
+      <div class="field"><label>Title</label><input type="text" id="mTitle" placeholder="Treasure Island" /></div>
+      <div class="field"><label>Author(s)</label><input type="text" id="mAuthor" placeholder="Robert Louis Stevenson" /></div>
+      <div class="field"><label>Preferred format</label><input type="text" id="mFmt" placeholder="epub" /></div>
+    </div>
+    <div class="preview" id="importPreview"></div>
+  </div>
+  <div class="sf">
+    <button class="tbtn" data-action="close-import">Cancel</button>
+    <button class="tbtn primary" data-action="confirm-import">Add to list</button>
+  </div>
+</div>
+
+<!-- settings sheet -->
+<div class="scrim" id="settingsScrim" data-action="close-settings"></div>
+<div class="sheet" id="settingsSheet">
+  <div class="sh"><h2>Settings</h2><button class="x" data-action="close-settings">×</button></div>
+  <div class="sbody" id="settingsBody"></div>
+  <div class="sf">
+    <button class="tbtn" data-action="close-settings">Done</button>
+    <button class="tbtn primary" data-action="save-settings">Save</button>
+  </div>
+</div>
+
+<div class="scrim" id="histScrim" data-action="close-history"></div>
+<div class="sheet" id="histSheet" style="width:min(760px,94vw)">
+  <div class="sh"><h2 id="histTitle">History</h2><button class="x" data-action="close-history">×</button></div>
+  <div class="sbody" id="histBody"></div>
+</div>
+
+<!-- right-click context menu (list actions) -->
+<div class="ctxmenu hide" id="ctxMenu"></div>
+
+<script>
+/* =====================================================================
+   Tauri bridge. When running inside the Tauri webview, window.__TAURI__ is
+   present and we drive the REAL libgen-core engine through invoke()/listen():
+   a single list is loaded, its per-variation download state is projected from
+   the engine's ViewModel, and the per-variation / format-rank / queue actions
+   call real commands. When opened directly over file:// (no Tauri), we fall
+   back to the bundled multi-list demo data + simulation below, so the UI is
+   still fully inspectable and the headless test passes unchanged.
+   ===================================================================== */
+var TAURI = (typeof window !== "undefined") && window.__TAURI__ ? window.__TAURI__ : null;
+function hasTauri() { return !!TAURI; }
+function invoke(cmd, args) {
+  if (!TAURI || !TAURI.core || !TAURI.core.invoke) return Promise.reject(new Error("no tauri backend"));
+  return TAURI.core.invoke(cmd, args || {});
+}
+function listen(event, cb) {
+  if (!TAURI || !TAURI.event || !TAURI.event.listen) return Promise.resolve(function () {});
+  return TAURI.event.listen(event, cb);
+}
+
+/* =====================================================================
+   Demo data — public-domain sample lists.
+   Authored inline so the page is fully self-contained over file://, and used
+   as a graceful fallback when no Tauri backend is present.
+   ===================================================================== */
+var BATCHES = [
+  ["Lift-Off", [
+    ["The Tale of Peter Rabbit","Beatrix Potter"],["Winnie-the-Pooh","A.A. Milne"],
+    ["The Velveteen Rabbit","Margery Williams"],["Millions of Cats","Wanda Gag"],
+    ["Old Mother West Wind","Thornton W. Burgess"],["The Adventures of Reddy Fox","Thornton W. Burgess"],
+    ["Just So Stories","Rudyard Kipling"],["The Story of Doctor Dolittle","Hugh Lofting"],
+    ["Raggedy Ann Stories","Johnny Gruelle"],["Uncle Wiggily's Adventures","Howard R. Garis"],
+    ["The Reluctant Dragon","Kenneth Grahame"],["The Aesop for Children","Aesop"]
+  ]],
+  ["Fairy Tales & Folklore", [
+    ["Grimms' Fairy Tales","Brothers Grimm"],["Andersen's Fairy Tales","Hans Christian Andersen"],
+    ["The Blue Fairy Book","Andrew Lang"],["English Fairy Tales","Joseph Jacobs"],
+    ["The Happy Prince and Other Tales","Oscar Wilde"],["American Fairy Tales","L. Frank Baum"],
+    ["Rootabaga Stories","Carl Sandburg"],["The Light Princess","George MacDonald"],
+    ["Tanglewood Tales","Nathaniel Hawthorne"],["Tales from Shakespeare","Charles and Mary Lamb"],
+    ["A Wonder-Book for Girls and Boys","Nathaniel Hawthorne"],["The Heroes: Greek Fairy Tales","Charles Kingsley"]
+  ]],
+  ["Wonder & Quests", [
+    ["The Wonderful Wizard of Oz","L. Frank Baum"],["The Marvelous Land of Oz","L. Frank Baum"],
+    ["Ozma of Oz","L. Frank Baum"],["The Adventures of Pinocchio","Carlo Collodi"],
+    ["Peter Pan","J.M. Barrie"],["The Princess and the Goblin","George MacDonald"],
+    ["Five Children and It","E. Nesbit"],["The Railway Children","E. Nesbit"],
+    ["The Enchanted Castle","E. Nesbit"],["The Voyages of Doctor Dolittle","Hugh Lofting"],
+    ["The Wind in the Willows","Kenneth Grahame"],["Alice's Adventures in Wonderland","Lewis Carroll"]
+  ]],
+  ["High Seas & Wilderness", [
+    ["Treasure Island","Robert Louis Stevenson"],["Kidnapped","Robert Louis Stevenson"],
+    ["The Call of the Wild","Jack London"],["White Fang","Jack London"],
+    ["Robinson Crusoe","Daniel Defoe"],["The Swiss Family Robinson","Johann David Wyss"],
+    ["The Merry Adventures of Robin Hood","Howard Pyle"],["Around the World in Eighty Days","Jules Verne"],
+    ["The Jungle Book","Rudyard Kipling"],["Captains Courageous","Rudyard Kipling"],
+    ["The Hound of the Baskervilles","Arthur Conan Doyle"],["The Story of King Arthur and His Knights","Howard Pyle"]
+  ]],
+  ["Heartfelt Classics", [
+    ["Heidi","Johanna Spyri"],["The Secret Garden","Frances Hodgson Burnett"],
+    ["A Little Princess","Frances Hodgson Burnett"],["Anne of Green Gables","L.M. Montgomery"],
+    ["Little Women","Louisa May Alcott"],["Little Men","Louisa May Alcott"],
+    ["The Adventures of Tom Sawyer","Mark Twain"],["The Prince and the Pauper","Mark Twain"],
+    ["Black Beauty","Anna Sewell"],["A Christmas Carol","Charles Dickens"],
+    ["Pollyanna","Eleanor H. Porter"],["Rebecca of Sunnybrook Farm","Kate Douglas Wiggin"]
+  ]]
+];
+
+var HOSTS = ["libgen.li", "cdn.booksdl.lc", "ipfs.io"];
+
+/* Two more (smaller) lists so multi-list behavior is visible. Each list is its
+   own destination folder with its own settings + progress; they all share the
+   one global download engine. */
+var LIST2 = ["Mom's Book Club", "classics · 6 books", [
+  ["Nonfiction", [
+    ["Walden","Henry David Thoreau"],["The Story of My Life","Helen Keller"],
+    ["Narrative of the Life of Frederick Douglass","Frederick Douglass"],["The Souls of Black Folk","W. E. B. Du Bois"],
+    ["On the Origin of Species","Charles Darwin"],["The Education of Henry Adams","Henry Adams"]
+  ]]
+]];
+var LIST3 = ["Sci-Fi Classics", "all-time · 8 books", [
+  ["Foundations", [
+    ["The Time Machine","H. G. Wells"],["Twenty Thousand Leagues Under the Sea","Jules Verne"],
+    ["Frankenstein","Mary Shelley"],["The War of the Worlds","H. G. Wells"]
+  ]],
+  ["New Wave", [
+    ["A Princess of Mars","Edgar Rice Burroughs"],["The First Men in the Moon","H. G. Wells"],
+    ["Flatland","Edwin A. Abbott"],["Journey to the Center of the Earth","Jules Verne"]
+  ]]
+]];
+
+/* Build one list. Each book has a `discovery` state (queued / matched /
+   needs_selection / not_found) and a `versions` array; EACH version has its own
+   download `state`, so one book can have the epub done while the pdf downloads.
+   `seed` shifts the deterministic scenario so lists look different. */
+function buildList(id, title, subtitle, batches, seed) {
+  var groups = [], gi = 0;
+  for (var b = 0; b < batches.length; b++) {
+    var name = batches[b][0], rows = batches[b][1], books = [];
+    for (var i = 0; i < rows.length; i++) {
+      var n = gi; gi++;
+      var sc = pickScenario(seed, b, i);
+      var versions = makeVersions(rows[i][0], n);
+      var discovery = "matched";
+      if (sc === "notfound") { discovery = "not_found"; versions = []; }
+      else if (sc === "needs") { discovery = "needs_selection"; }
+      else if (sc === "done") { versions[0].state = "done"; }
+      else if (sc === "downloading") { versions[0].state = "downloading"; versions[0].progress = 30 + (n * 13) % 55; }
+      else if (sc === "multi") { versions[0].state = "done"; versions[1].state = "downloading"; versions[1].progress = 25 + (n * 17) % 50; }
+      else if (sc === "failed") { versions[0].state = "failed"; }
+      // "queued" leaves all versions available with discovery matched.
+      books.push({
+        id: id + "/bk" + n, bid: "bk" + n, list: id, title: rows[i][0], author: rows[i][1],
+        seq: i + 1, priority: false, discovery: discovery, versions: versions
+      });
+    }
+    groups.push({ name: name, books: books, collapsed: false });
+  }
+  return { id: id, title: title, subtitle: subtitle, groups: groups, collapsedAll: false };
+}
+
+/* Deterministic per-book scenario, distributed for a believable mix. */
+function pickScenario(seed, b, i) {
+  if (seed === 0) { // Jeremy (large)
+    if (b === 0) { if (i === 0) return "multi"; if (i === 2 || i === 9) return "needs"; if (i === 6) return "failed"; if (i < 6) return "done"; if (i < 11) return "downloading"; return "queued"; }
+    if (b === 1) { if (i === 3) return "needs"; if (i < 3) return "done"; if (i < 5) return "downloading"; return "queued"; }
+    if (b === 2) { if (i < 2) return "done"; return "queued"; }
+    if (b === 3) { if (i === 0) return "multi"; if (i === 17) return "needs"; return "queued"; }
+    return "queued";
+  }
+  if (seed === 1) { if (i === 0) return "multi"; if (i === 1) return "needs"; if (i < 4) return "done"; if (i === 4) return "downloading"; return "queued"; }
+  if (b === 0) { if (i === 0) return "multi"; if (i < 2) return "done"; if (i === 2) return "downloading"; return "queued"; }
+  if (b === 1 && i === 1) return "failed";
+  return "queued";
+}
+
+/* Kept variations (distinct md5s): Kindle/iPad-friendly formats, size-diverse.
+   Each starts `available`; scenarios above flip some to done/downloading/etc. */
+function makeVersions(title, n) {
+  var defs = [
+    { fmt: "epub", size: 2.1, year: 2011, publisher: "Yearling" },
+    { fmt: "epub", size: 6.4, year: 2007, publisher: "Scholastic" },
+    { fmt: "pdf", size: 9.1, year: 2015, publisher: "Puffin" }
+  ];
+  return defs.map(function (d, k) {
+    return {
+      fmt: d.fmt, size: d.size, year: d.year, publisher: d.publisher,
+      md5: (((title.length * 7 + k + n) >>> 0).toString(16) + "0000000").slice(0, 8) + "…",
+      state: "available", // available | queued | downloading | done | failed
+      progress: 0, host: HOSTS[(n + k) % 3]
+    };
+  });
+}
+
+/* A book's effective status (for filters/counts/row), derived from its
+   variations' states (the roll-up). */
+function effectiveStatus(bk) {
+  // "review" = downloaded, but a better match exists (verify); "querying" =
+  // search in flight; "needs" = the user must pick; "cantdl" = cannot download.
+  if (bk.discovery === "querying") return "querying";
+  if (bk.discovery === "not_found") return "cantdl";
+  var req = (bk.versions || []).filter(function (v) { return v.state !== "available"; });
+  // A live transfer (downloading, or paused mid-transfer) is the most immediate state
+  // and wins even over a pending "review"/"needs" flag — a book re-downloading a better
+  // copy reads as "Downloading" until it settles. This is what keeps the header's
+  // Downloading count equal to the active-downloads panel (which lists every in-flight
+  // transfer). A merely QUEUED (pending, not started) variation is NOT "Downloading".
+  if (req.some(function (v) { return v.state === "downloading" || v.state === "paused"; })) return "active";
+  if (bk.review) return "review";
+  if (bk.discovery === "needs_selection" && req.length === 0) return "needs";
+  if (req.length === 0) return "queued";
+  if (req.every(function (v) { return v.state === "done"; })) return "done";
+  if (req.some(function (v) { return v.state === "queued"; })) return "queued";
+  // At least one copy succeeded (the rest failed/cancelled) → the book IS
+  // downloaded; a failed sibling variation shouldn't mark the whole book failed.
+  if (req.some(function (v) { return v.state === "done"; })) return "done";
+  if (req.some(function (v) { return v.state === "failed"; })) return "cantdl";
+  return "queued";
+}
+
+var FMT_GLYPH = { done: "✓", downloading: "⏳", queued: "⏳", failed: "⚠" };
+
+/* Distinct color per file format so the format labels are scannable at a glance. */
+var FMT_COLORS = {
+  epub: "#2e9e5b", pdf: "#d2453f", mobi: "#e07b1a", azw3: "#8a5cd1", azw: "#8a5cd1",
+  cbz: "#0e9aa7", cbr: "#0e9aa7", djvu: "#7a6a55", txt: "#5b7083", fb2: "#c2569b"
+};
+function fmtColor(f) { return FMT_COLORS[(f || "").toLowerCase()] || "var(--text-faint)"; }
+function fmtLabel(f) {
+  return '<span style="color:' + fmtColor(f) + ';font-weight:700">' + (f || "").toUpperCase() + '</span>';
+}
+
+function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+/* =====================================================================
+   State + rendering
+   ===================================================================== */
+var LISTS = [
+  buildList("jeremy", "Jeremy's Reading List", "public-domain classics", BATCHES, 0),
+  buildList("bookclub", LIST2[0], LIST2[1], LIST2[2], 1),
+  buildList("scifi", LIST3[0], LIST3[1], LIST3[2], 2)
+];
+var CURRENT = "jeremy";   // selected list id, or "__all__" for the aggregate view
+// Ranked preferred formats (maps to ListSettings.format_pref). Default = the
+// set both an iPad (Apple Books) and a Kindle (Send-to-Kindle) accept.
+var FORMATS = ["epub", "pdf"];
+// e-reader formats offered FIRST in the add-picker (iPad/Kindle-accepted).
+var DEVICE_FORMATS = ["epub", "pdf", "mobi", "azw3"];
+// the full set the user can expand to (comics/scans/text beyond e-readers).
+var ALL_FORMATS = ["epub", "pdf", "mobi", "azw3", "djvu", "cbz", "cbr", "txt"];
+var SHOW_ALL_FORMATS = false; // expand the add-picker beyond device formats
+// Preferred-language options. "match-title" (the DEFAULT) = infer each book's
+// language from its title's script (a Chinese title → Chinese copy, etc.); it
+// applies no hard language filter. There is no "Any" — match-title is the default.
+// An empty/None language from the engine is shown as (and treated as) match-title.
+var LANGUAGES = ["match-title", "English", "Spanish", "French", "German",
+  "Italian", "Portuguese", "Dutch", "Russian", "Polish", "Chinese", "Japanese", "Arabic"];
+function langLabel(l) { return l === "match-title" ? "Match title language" : l; }
+// Normalize a stored language to a dropdown value (empty/None → the match-title default).
+function langValue(l) { return (l && l !== "match-title") ? l : "match-title"; }
+/* Per-list settings (maps to the engine's ListSettings). FORMATS above mirrors
+   SETTINGS.format_pref; both are kept in sync by the Settings sheet, and under
+   Tauri are populated from the active list's ViewModel + saved via set_settings. */
+var SETTINGS = {
+  language: "", naming_template: "{seq:02} - {authors} - {title}.{ext}",
+  auto_threshold: 0.85, near_threshold: 0.45, seq_per_group: true, keep_top: 5
+};
+/* Global app settings (maps to the backend AppSettings JSON config; under Tauri
+   populated from ViewLibrary.config and saved via set_config). */
+var APPCFG = {
+  out_dir: "~/Downloads",
+  max_concurrent_downloads: 5, query_concurrency: 8, max_attempts: 4,
+  hedge_enabled: false
+};
+var SEARCH_MIRRORS = ["libgen.li", "libgen.is"]; // read-only (mirrors.toml)
+var MIRROR_HEALTH = [];   // [{host,name,group,up,ping_ms,uptime_24h}] from refresh_mirrors (SLUM)
+var MIRROR_HEALTH_BUSY = false; // a refresh_mirrors call is in flight
+var MIRROR_HEALTH_AT = 0;       // epoch ms of the last SUCCESSFUL refresh (0 = never this session)
+var MIRROR_HEALTH_ERR = "";     // last refresh error message (surfaced, not swallowed)
+var REORG_COUNT = 0;            // # of downloaded files not at their canonical path (0 → gray "Reorganize now")
+var REORG_DIFF = null;          // null = details hidden; array of [from, to] path pairs when shown
+var FILTER = "all";       // all | needs | cantdl | active | done | queued
+var FMT_FILTER = "";      // "" = any format, else only books having that format
+var SELECTED = null;      // book id
+var EDIT_BOOK = null;     // book id whose title/author is being edited inline
+var MANUAL_FOR = null;    // book id whose "Enter manually" md5 input is open
+var DETAIL_COLLAPSED = false;  // inline detail panel expanded/collapsed
+var ACTIVE_COLLAPSED = true;   // bottom active-work panel starts collapsed
+var SIDEBAR_COLLAPSED = false; // left library sidebar expanded/collapsed
+var RUNNING = false;
+var IMPORT_TAB = "file";
+var IMPORT_FILE = null; // { text, isJson, name } once a file is chosen/dropped
+
+var STATUS_META = {
+  queued: { cls: "s-queued", label: "Queued" },
+  active: { cls: "s-active", label: "Downloading" },
+  done:   { cls: "s-done",   label: "Done" },
+  needs:  { cls: "s-attn",   label: "Needs you" },
+  review: { cls: "s-attn",   label: "Check download" },
+  cantdl: { cls: "s-fail",   label: "Cannot download" }
+};
+
+function currentList() { return LISTS.filter(function (l) { return l.id === CURRENT; })[0]; }
+function listBooks(l) { var out = []; l.groups.forEach(function (g) { g.books.forEach(function (bk) { out.push(bk); }); }); return out; }
+function everyBook() { var out = []; LISTS.forEach(function (l) { out = out.concat(listBooks(l)); }); return out; } // GLOBAL engine
+/* The books currently VISIBLE in the list, in render order (respecting the
+   active filter + collapsed lists/groups) — the set keyboard nav moves through. */
+function visibleBooks() {
+  var out = [];
+  if (CURRENT === "__all__") {
+    LISTS.forEach(function (l) {
+      if (l.collapsedAll) return;
+      listBooks(l).filter(matchesFilter).forEach(function (b) { out.push(b); });
+    });
+  } else {
+    var l = currentList();
+    if (l) l.groups.forEach(function (g) {
+      if (g.collapsed) return;
+      g.books.filter(matchesFilter).forEach(function (b) { out.push(b); });
+    });
+  }
+  return out;
+}
+function allBooks() { // books in the CURRENT scope (a list, or everything)
+  return CURRENT === "__all__" ? everyBook() : listBooks(currentList());
+}
+function countsOf(books) {
+  var c = { all: 0, needs: 0, review: 0, cantdl: 0, active: 0, done: 0, queued: 0 };
+  books.forEach(function (bk) { c.all++; c[effectiveStatus(bk)]++; });
+  return c;
+}
+function counts() { return countsOf(allBooks()); }       // scope-aware (current view)
+function globalCounts() { return countsOf(everyBook()); } // whole library
+/* A list's live transfer status for the sidebar: "active" if any variation is
+   downloading, else "paused" if any is paused, else null (idle/done/queued). */
+function statusOf(books) {
+  var dl = 0, pa = 0;
+  books.forEach(function (bk) {
+    (bk.versions || []).forEach(function (v) {
+      if (v.state === "downloading") dl++;
+      else if (v.state === "paused") pa++;
+    });
+  });
+  if (dl) return { kind: "active", label: "active", title: dl + " downloading" };
+  if (pa) return { kind: "paused", label: "paused", title: pa + " paused" };
+  return null;
+}
+function statusBadge(books) {
+  var s = statusOf(books);
+  // Compact: a small colored dot (green = active, gray = paused), kind in the title.
+  return s ? '<span class="side-st ' + s.kind + '" title="' + esc(s.title) + ' ' + s.label + '"></span>' : '';
+}
+function bookById(id) { return everyBook().filter(function (bk) { return bk.id === id; })[0]; }
+
+/* Normalize a variation's format to a stable filter key. Mirror-supplied
+   formats can arrive with inconsistent casing/whitespace (e.g. an unrecognized
+   "EPUB" projected verbatim vs the canonical lowercase "epub"), so the chips and
+   the filter must compare on the SAME normalized key or clicking a chip would
+   fail to match an otherwise-identical format. */
+function fmtKey(f) { return String(f || "").trim().toLowerCase(); }
+
+function matchesFilter(bk) {
+  // The format filter applies to the book's SELECTED/requested variations (the
+  // ones chosen for download), NOT every available candidate — so a book shows
+  // for a format only if it actually selected a copy in that format. A book with
+  // multiple selected formats matches any of them.
+  if (FMT_FILTER && !requestedVersions(bk).some(function (v) { return fmtKey(v.fmt) === FMT_FILTER; })) return false;
+  if (FILTER === "all") return true;
+  return inCategory(bk, FILTER);
+}
+
+/* Whether a book belongs to a filter category. A book has ONE roll-up status
+   (effectiveStatus) for its row/progress bar, but it can have variations in several
+   terminal states at once — so for FILTERING it can match more than one category. In
+   particular a book with a Done copy AND a Failed copy appears under BOTH "Done" and
+   "Cannot download" (not just whichever the roll-up picked). */
+function inCategory(bk, cat) {
+  var es = effectiveStatus(bk), req = requestedVersions(bk);
+  // Lifecycle categories are PER-VARIATION: a book matches every state any of its
+  // selected copies is in. So a book with a Done copy AND an in-progress (or queued, or
+  // failed) copy appears under BOTH — its copies are counted independently.
+  if (cat === "done") return es === "done" || req.some(function (v) { return v.state === "done"; });
+  if (cat === "cantdl") return es === "cantdl" || req.some(function (v) { return v.state === "failed"; });
+  if (cat === "active") return req.some(function (v) { return v.state === "downloading" || v.state === "paused"; });
+  if (cat === "queued") return es === "queued" || req.some(function (v) { return v.state === "queued"; });
+  return es === cat; // needs / review / querying — book-level
+}
+
+/* Distinct (normalized) formats among the SELECTED/requested variations across
+   the books in view — the same set `matchesFilter` keys on, so a chip always
+   narrows to books that selected that format. */
+function formatsInView() {
+  var seen = {}, out = [];
+  (CURRENT === "__all__" ? everyBook() : listBooks(currentList())).forEach(function (b) {
+    requestedVersions(b).forEach(function (v) {
+      var k = fmtKey(v.fmt);
+      if (k && !seen[k]) { seen[k] = 1; out.push(k); }
+    });
+  });
+  return out.sort();
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, function (c) {
+  return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+
+/* A render for high-frequency LIVE events (download progress): skip it while the
+   user is selecting text, so rebuilding the DOM doesn't clear their selection.
+   State is already updated in-memory; the next event after they release renders. */
+function isSelectingText() {
+  var sel = window.getSelection && window.getSelection();
+  return !!(sel && String(sel).length > 0);
+}
+/* TARGETED, frequency-capped live render for high-frequency progress events.
+   A bytes event only changes the active-downloads panel (+ the open detail, + the
+   sidebar counts WHEN they actually change) — NOT the expensive book list and its
+   300+ cover data-URLs. Coalesced so a burst of byte events collapses to ≤4 fps. */
+var _liveTimer = null, _lastSideSig = "", _lastCountSig = "";
+function renderLive() {
+  if (_liveTimer) return; // a render is already scheduled this tick — coalesce
+  _liveTimer = setTimeout(function () {
+    _liveTimer = null;
+    // The active-downloads panel + sidebar counts MUST keep updating even while the
+    // user has text selected — they're transient (no one selects text there), and
+    // skipping them is what made the whole UX look frozen during a selection. The
+    // book LIST is never touched here, so a selection in it is preserved regardless.
+    try { renderActivePanel(); } catch (e) {}
+    try { updateRowProgress(); } catch (e) {} // live list-row bars, in place (no list rebuild)
+    // Sidebar badges/counts change only on state transitions, not per byte — skip
+    // the DOM work unless its signature actually changed.
+    try {
+      var sig = LISTS.map(function (l) {
+        var bs = listBooks(l), c = countsOf(bs), s = statusOf(bs);
+        return c.done + "/" + c.all + "/" + (c.needs + c.cantdl) + "/" + (s ? s.kind : "-");
+      }).join("|");
+      if (sig !== _lastSideSig) { _lastSideSig = sig; renderSidebar(); }
+    } catch (e) {}
+    // Toolbar title/progress + the filter chips ("Downloading"/"Queued"/…) read
+    // effectiveStatus counts. They're rendered only by the full render() otherwise, so
+    // during downloads they'd lag the live panel (e.g. a book that just started shows
+    // as "downloading" in the panel but still "queued" in the chip). Refresh them here
+    // when the displayed counts change.
+    try {
+      var cc = counts();
+      var csig = [cc.all, cc.done, cc.active, cc.queued, cc.needs, cc.review, cc.cantdl,
+        FILTER, FMT_FILTER, CURRENT].join("/");
+      if (csig !== _lastCountSig) { _lastCountSig = csig; renderToolbar(); renderFilters(); }
+    } catch (e) {}
+    // Only the detail panel can hold a selection worth preserving (book metadata) —
+    // skip just that one render while a selection is active.
+    if (isSelectingText()) return;
+    try { renderDetail(); } catch (e) {}
+  }, 250);
+}
+var LAST_RENDER_ERROR = null; // set when a render phase throws (read by the test harness)
+function render() {
+  if (!LISTS.length) { renderEmpty(); return; }
+  // Each phase is isolated: a throw in one (e.g. the detail panel) must NOT abort
+  // the rest — in particular hydrateCovers, which runs last and loads thumbnails.
+  [renderSidebar, renderToolbar, renderFilters, renderList, renderActivePanel, renderDetail].forEach(function (fn) {
+    try { fn(); } catch (e) {
+      LAST_RENDER_ERROR = fn.name + ": " + (e && (e.stack || e.message || e));
+      try { console.error("render phase " + fn.name + " threw:", e); } catch (_) {}
+    }
+  });
+  hydrateCovers();
+}
+
+/* Locally-cached cover thumbnails are loaded as data: URLs via the backend (the
+   asset protocol proved unreliable). COVER_CACHE maps a local file path to its
+   loaded data URL. Once a path is in COVER_CACHE it STAYS (never evicted), so a
+   loaded cover never vanishes on a re-render.
+
+   hydrateCovers eagerly preloads EVERY book's cover (everyBook spans all lists),
+   but through a bounded queue so a 200-book library doesn't fire 200 backend
+   calls at once. A failed fetch is retried up to COVER_MAX_FAILS times (the old
+   code marked failures permanently, leaving books blank forever) — only after
+   that does it give up. */
+var COVER_CACHE = {};          // path -> data URL (loaded, sticky)
+var COVER_INFLIGHT = {};       // path -> true while a fetch is in flight
+var COVER_FAILS = {};          // path -> consecutive failed attempts
+var COVER_QUEUE = [];          // paths waiting for a slot
+var COVER_ACTIVE = 0;          // in-flight count
+var COVER_CONCURRENCY = 6;     // max simultaneous backend cover fetches
+var COVER_MAX_FAILS = 3;       // give up on a path after this many failures
+
+function coverNeedsFetch(u) {
+  return u && !/^https?:/i.test(u)            // a local path, not a remote URL
+    && COVER_CACHE[u] === undefined           // not already loaded
+    && !COVER_INFLIGHT[u]                      // not currently fetching
+    && (COVER_FAILS[u] || 0) < COVER_MAX_FAILS // not permanently given up
+    && COVER_QUEUE.indexOf(u) < 0;             // not already queued
+}
+
+function hydrateCovers() {
+  if (!hasTauri()) return;
+  var queued = 0;
+  everyBook().forEach(function (b) {
+    var u = bookCover(b);
+    if (coverNeedsFetch(u)) { COVER_QUEUE.push(u); queued++; }
+  });
+  if (queued) { try { console.log("covers: queued " + queued + " (" + COVER_QUEUE.length + " pending)"); } catch (e) {} }
+  pumpCovers();
+}
+
+function pumpCovers() {
+  while (COVER_ACTIVE < COVER_CONCURRENCY && COVER_QUEUE.length) {
+    startCover(COVER_QUEUE.shift());
+  }
+}
+
+function startCover(p) {
+  if (!p || COVER_INFLIGHT[p] || COVER_CACHE[p] !== undefined) return;
+  COVER_INFLIGHT[p] = true; COVER_ACTIVE++;
+  var done = function (data) {
+    delete COVER_INFLIGHT[p]; COVER_ACTIVE--;
+    if (data) {
+      COVER_CACHE[p] = data; COVER_FAILS[p] = 0; scheduleCoverRender();
+    } else {
+      // Miss (null payload or thrown error). Retry up to COVER_MAX_FAILS, after a
+      // short backoff, so a transient read failure recovers without needing a
+      // re-render — a loaded cover then never blanks again.
+      COVER_FAILS[p] = (COVER_FAILS[p] || 0) + 1;
+      if (COVER_FAILS[p] < COVER_MAX_FAILS) {
+        setTimeout(function () {
+          if (COVER_CACHE[p] === undefined && !COVER_INFLIGHT[p] && COVER_QUEUE.indexOf(p) < 0) {
+            COVER_QUEUE.push(p); pumpCovers();
+          }
+        }, 800);
+      }
+    }
+    pumpCovers();
+  };
+  invoke("cover_data_url", { path: p }).then(done).catch(function () { done(null); });
+}
+/* Coalesced re-render as covers arrive: re-render once shortly after a batch of
+   cover loads complete, so thumbnails appear incrementally (and a filter/view
+   switch mid-load still picks them up) without a render per cover. */
+var COVER_RENDER_T = null;
+function scheduleCoverRender() {
+  if (COVER_RENDER_T) return;
+  COVER_RENDER_T = setTimeout(function () { COVER_RENDER_T = null; render(); }, 150);
+}
+
+/* Empty state: no lists yet (fresh app / fresh DB). Prompt to import. */
+function renderEmpty() {
+  document.getElementById("sidebar").innerHTML =
+    '<div class="side-h">Library</div>' +
+    '<div style="padding:8px 10px;color:var(--text-faint);font-size:12px">No lists yet.</div>';
+  document.getElementById("listTitle").textContent = "No lists yet";
+  document.getElementById("listSub").textContent = "Import a Markdown/JSON file, or add a book, to get started.";
+  document.getElementById("progBar").innerHTML = "";
+  document.getElementById("progNum").textContent = "";
+  document.getElementById("filters").innerHTML = "";
+  document.getElementById("listwrap").innerHTML =
+    '<div class="empty">Nothing to download yet.<br>' +
+    '<button class="tbtn primary" data-action="open-import" style="margin-top:14px">＋ Import a list</button></div>';
+  // Active-work + detail panels (renamed from the old #activity/#drawer): keep
+  // them collapsed/empty in the empty state.
+  document.getElementById("activePanel").classList.add("collapsed");
+  document.getElementById("apSummary").textContent = "";
+  document.getElementById("apHosts").innerHTML = "";
+  document.getElementById("detail").classList.add("collapsed");
+}
+
+/* The ranked preferred-format control: epub › pdf › mobi, reorderable with the
+   ▲/▼ buttons. Order = priority (the matcher prefers earlier formats). Lives in
+   the Settings sheet (per-list "Preferred formats"). */
+function renderFormatRank() {
+  var el = document.getElementById("fmtRank");
+  if (!el) return;
+  var html = '<div class="frank-row">';
+  FORMATS.forEach(function (f, i) {
+    if (i > 0) html += '<span class="sep">›</span>';
+    html += '<span class="frank"><span class="rk">' + (i + 1) + '</span>' + f.toUpperCase() +
+      '<button class="mv" data-fmtmv="' + i + ':up" title="Rank higher"' + (i === 0 ? " disabled" : "") + '>▲</button>' +
+      '<button class="mv" data-fmtmv="' + i + ':down" title="Rank lower"' + (i === FORMATS.length - 1 ? " disabled" : "") + '>▼</button>' +
+      '<button class="mv rm" data-fmtrm="' + f + '" title="Remove"' + (FORMATS.length <= 1 ? " disabled" : "") + '>×</button>' +
+      '</span>';
+  });
+  html += '</div>';
+  var pool = (SHOW_ALL_FORMATS ? ALL_FORMATS : DEVICE_FORMATS).filter(function (f) { return FORMATS.indexOf(f) < 0; });
+  html += '<div class="frank-add">';
+  if (pool.length) {
+    html += '<span class="add-lbl">Add</span>';
+    pool.forEach(function (f) { html += '<button class="addchip" data-fmtadd="' + f + '">+ ' + f.toUpperCase() + '</button>'; });
+  } else {
+    html += '<span class="add-lbl" style="opacity:.6">' + (SHOW_ALL_FORMATS ? "All formats added" : "All device formats added") + '</span>';
+  }
+  html += '<button class="addchip ghost" data-fmtshowall="1">' + (SHOW_ALL_FORMATS ? "Show fewer" : "Show all formats") + '</button>';
+  html += '</div>';
+  html += '<div class="hint" style="margin-top:5px">Default is what Kindle &amp; iPad both accept (EPUB, PDF). Add others if you want.</div>';
+  el.innerHTML = html;
+}
+
+/* Render the Settings sheet body from the live per-list + app state. */
+function renderSettings() {
+  var b = document.getElementById("settingsBody");
+  if (!b) return;
+  var html = "";
+
+  // --- Per-list settings ---
+  html += '<div class="set-sec"><h3>Per-list settings</h3>';
+  html += '<div class="set-row"><div class="lab">Preferred formats<span class="hint">most-preferred first</span></div>' +
+    '<div class="set-ctl"><div class="fmt-rank" id="fmtRank"></div></div></div>';
+  html += '<div class="set-row"><div class="lab">Auto-download threshold<span class="hint">auto-download at/above this confidence</span></div>' +
+    '<div class="set-ctl"><input type="range" id="setAuto" min="0" max="1" step="0.01" value="' + SETTINGS.auto_threshold + '">' +
+    '<span class="rangeval" id="setAutoVal">' + SETTINGS.auto_threshold.toFixed(2) + '</span></div></div>';
+  html += '<div class="set-row"><div class="lab">Near-match threshold<span class="hint">below this is treated as not-found</span></div>' +
+    '<div class="set-ctl"><input type="range" id="setNear" min="0" max="1" step="0.01" value="' + SETTINGS.near_threshold + '">' +
+    '<span class="rangeval" id="setNearVal">' + SETTINGS.near_threshold.toFixed(2) + '</span></div></div>';
+  html += '<div class="set-row"><div class="lab">Filename template<span class="hint">tokens: {seq:02} {authors} {title} {ext}</span></div>' +
+    '<div class="set-ctl"><input type="text" id="setTpl" value="' + esc(SETTINGS.naming_template) + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Variations kept per book</div>' +
+    '<div class="set-ctl"><input type="number" id="setKeep" min="1" max="20" value="' + SETTINGS.keep_top + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Sequence numbering<span class="hint">' +
+    (SETTINGS.seq_per_group ? "per-batch" : "per-list") + '</span></div>' +
+    '<div class="set-ctl"><button class="toggle' + (SETTINGS.seq_per_group ? " on" : "") + '" id="setSeq" data-toggle-set="seq" aria-label="per-batch numbering"><i></i></button></div></div>';
+  var curLang = langValue(SETTINGS.language);
+  html += '<div class="set-row"><div class="lab">Preferred language<span class="hint">matches each book\'s title language</span></div>' +
+    '<div class="set-ctl"><select id="setLang">' +
+    LANGUAGES.map(function (l) { return '<option value="' + esc(l) + '"' + (curLang === l ? " selected" : "") + '>' + langLabel(l) + '</option>'; }).join("") +
+    '</select></div></div>';
+  html += '</div>';
+
+  // --- App settings ---
+  html += '<div class="set-sec"><h3>App settings</h3>';
+  html += '<div class="set-row"><div class="lab">Default download folder</div>' +
+    '<div class="set-ctl"><input type="text" id="setOut" value="' + esc(APPCFG.out_dir) + '">' +
+    '<button class="tbtn" data-action="choose-folder">Choose…</button></div></div>';
+  html += '<div class="set-row"><div class="lab">Max concurrent downloads<span class="hint">total across all mirrors</span></div>' +
+    '<div class="set-ctl"><input type="number" id="setMaxDl" min="1" max="64" value="' + (APPCFG.max_concurrent_downloads || 5) + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Concurrent queries</div>' +
+    '<div class="set-ctl"><input type="number" id="setQConc" min="1" max="32" value="' + APPCFG.query_concurrency + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Max retry attempts</div>' +
+    '<div class="set-ctl"><input type="number" id="setAttempts" min="1" max="10" value="' + APPCFG.max_attempts + '"></div></div>';
+  html += '<div class="set-row"><div class="lab">Speculative download<span class="hint">race slow mirrors</span></div>' +
+    '<div class="set-ctl"><input type="checkbox" id="setHedge"' + (APPCFG.hedge_enabled ? ' checked' : '') + '></div></div>';
+  html += '</div>';
+
+  // --- Search mirrors (read-only) ---
+  html += '<div class="set-sec"><h3>Search mirrors</h3>';
+  html += '<div class="set-ctl" style="display:block">' +
+    SEARCH_MIRRORS.map(function (h) { return '<span class="mirror-host">' + esc(h) + '</span>'; }).join("") +
+    '<div class="mirror-note">Read-only — edit <code>mirrors.toml</code> to change search mirrors.</div></div>';
+  html += '</div>';
+
+  // --- Mirror health (live, from open-slum.org) ---
+  html += '<div class="set-sec"><h3>Mirror health' +
+    '<span class="hint">live availability via open-slum.org</span></h3>';
+  html += '<div class="set-row"><div class="lab">Live mirror status</div>' +
+    '<div class="set-ctl"><button class="tbtn" data-action="refresh-mirrors"' +
+    (MIRROR_HEALTH_BUSY ? ' disabled' : '') + '>' +
+    (MIRROR_HEALTH_BUSY ? 'Refreshing…' : 'Refresh now') + '</button></div></div>';
+  html += '<div class="set-ctl" style="display:block" id="mirrorHealth"></div>';
+  html += '</div>';
+
+  // --- Files (maintenance) ---
+  html += '<div class="set-sec"><h3>Files<span class="hint">on-disk maintenance</span></h3>';
+  html += '<div class="set-row"><div class="lab">Reorganize downloaded files' +
+    '<span class="hint">' + (REORG_COUNT > 0
+      ? REORG_COUNT + ' file' + (REORG_COUNT === 1 ? '' : 's') + ' not at the current &lt;list&gt;/&lt;group&gt;/&lt;seq&gt; - name'
+      : 'all files are already in place') + '</span></div>' +
+    '<div class="set-ctl">' +
+    (REORG_COUNT > 0 ? '<button class="tbtn" data-action="reorganize-details">' + (REORG_DIFF ? 'Hide' : 'Details') + '</button> ' : '') +
+    '<button class="tbtn" data-action="reorganize-files"' +
+    (REORG_COUNT > 0 ? '' : ' disabled') + '>Reorganize now' + (REORG_COUNT > 0 ? ' (' + REORG_COUNT + ')' : '') + '</button></div></div>';
+  if (REORG_DIFF) {
+    if (!REORG_DIFF.length) {
+      html += '<div class="mirror-note">No mismatches — nothing to move.</div>';
+    } else {
+      // Each misplaced file: its current path → where it should go. Tail-shortened
+      // for readability; hover shows the full path.
+      html += '<div style="margin:2px 0 8px;max-height:240px;overflow:auto;font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid var(--border);border-radius:6px">' +
+        REORG_DIFF.map(function (p) {
+          return '<div style="padding:5px 8px;border-bottom:1px solid var(--border)">' +
+            '<div style="opacity:.65" title="' + esc(p[0]) + '">' + esc(shortPath(p[0])) + '</div>' +
+            '<div style="color:var(--accent)" title="' + esc(p[1]) + '">→ ' + esc(shortPath(p[1])) + '</div></div>';
+        }).join('') + '</div>';
+    }
+  }
+  html += '<div class="mirror-note" id="reorgStatus"></div>';
+  html += '<div class="set-row"><div class="lab">Clean up partial downloads' +
+    '<span class="hint">move leftover <code>.part</code> files (incomplete/abandoned downloads) to Trash</span></div>' +
+    '<div class="set-ctl"><button class="tbtn" data-action="cleanup-parts">Clean up .part files</button></div></div>';
+  html += '<div class="mirror-note" id="partStatus"></div>';
+  html += '</div>';
+
+  b.innerHTML = html;
+  renderFormatRank();
+  renderMirrorHealth();
+}
+
+/* The "Mirror health" panel: per-site up/down · ping · 24h uptime, grouped by
+   SLUM group, populated on demand by the `refresh-mirrors` action. */
+function mirrorRefreshedNote() {
+  if (MIRROR_HEALTH_ERR) return '<div class="mirror-note" style="color:#c0392b">Refresh failed: ' + esc(MIRROR_HEALTH_ERR) + '</div>';
+  if (MIRROR_HEALTH_AT) return '<div class="mirror-note">Last refreshed ' + esc(fmtEventTime(MIRROR_HEALTH_AT)) + '</div>';
+  return '';
+}
+function renderMirrorHealth() {
+  var el = document.getElementById("mirrorHealth");
+  if (!el) return;
+  if (!MIRROR_HEALTH.length) {
+    el.innerHTML = mirrorRefreshedNote() + '<div class="mirror-note">' +
+      (MIRROR_HEALTH_BUSY ? 'Fetching live status…'
+        : 'Click “Refresh now” to fetch live mirror availability.') + '</div>';
+    return;
+  }
+  // Group rows by their SLUM group, preserving first-seen order.
+  var order = [], byGroup = {};
+  MIRROR_HEALTH.forEach(function (s) {
+    if (!byGroup[s.group]) { byGroup[s.group] = []; order.push(s.group); }
+    byGroup[s.group].push(s);
+  });
+  var html = mirrorRefreshedNote();
+  order.forEach(function (g) {
+    html += '<div class="mh-group">' + esc(g) + '</div>';
+    byGroup[g].forEach(function (s) {
+      var dot = s.up ? '🟢' : '🔴';
+      var bits = [];
+      if (s.ping_ms != null) bits.push(s.ping_ms + ' ms');
+      if (s.uptime_24h != null) bits.push(Math.round(s.uptime_24h * 100) + '% 24h');
+      html += '<div class="mh-row"><span class="mh-dot">' + dot + '</span>' +
+        '<span class="mh-host">' + esc(s.host) + '</span>' +
+        '<span class="mh-meta">' + esc(bits.join(' · ')) + '</span></div>';
+    });
+  });
+  el.innerHTML = html;
+}
+
+/* Move already-downloaded files into the current folder/seq layout. */
+/* Shorten an absolute path to its last few components (…/<list>/<group>/<file>)
+   so the reorganize diff stays readable; the full path is shown on hover. */
+function shortPath(p) {
+  var parts = String(p || "").split("/").filter(Boolean);
+  return (parts.length > 3 ? "…/" : "") + parts.slice(-3).join("/");
+}
+
+/* Toggle the reorganize "Details" list: load the exact from→to pairs on show. */
+function onReorganizeDetails() {
+  if (REORG_DIFF) { REORG_DIFF = null; renderSettings(); return; }
+  if (!hasTauri()) { REORG_DIFF = []; renderSettings(); return; }
+  invoke("reorganize_diff")
+    .then(function (pairs) { REORG_DIFF = Array.isArray(pairs) ? pairs : []; renderSettings(); })
+    .catch(function (err) { toast("Couldn't load details: " + (errText(err) || "unknown error")); });
+}
+
+/* Move all leftover .part files to Trash (incomplete/abandoned downloads). */
+function onCleanupParts(btn) {
+  var status = document.getElementById("partStatus");
+  if (!hasTauri()) { if (status) status.textContent = "(only available in the app)"; return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Cleaning…"; }
+  if (status) status.textContent = "Moving .part files to Trash…";
+  invoke("cleanup_part_files")
+    .then(function (summary) { if (status) status.textContent = summary || "Done."; })
+    .catch(function (e) { if (status) status.textContent = "Failed: " + (e && (e.message || e)); })
+    .then(function () { if (btn) { btn.disabled = false; btn.textContent = "Clean up .part files"; } });
+}
+
+function onReorganizeFiles(btn) {
+  var status = document.getElementById("reorgStatus");
+  if (!hasTauri()) { if (status) status.textContent = "(only available in the app)"; return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Reorganizing…"; }
+  if (status) status.textContent = "Reorganizing…";
+  invoke("reorganize_files")
+    .then(function (summary) {
+      if (status) status.textContent = summary || "Done.";
+      REORG_DIFF = null; // the moves just happened — the old diff is stale
+      // Refresh the library so revealed paths reflect the moves.
+      if (hasTauri()) invoke("library").then(applyLibrary).catch(function () {});
+      // Re-check: after a successful pass the count should drop (→ gray the button).
+      if (hasTauri()) invoke("reorganize_needed").then(function (n) { REORG_COUNT = n | 0; renderSettings(); }).catch(function () {});
+    })
+    .catch(function (e) {
+      if (status) status.textContent = "Failed: " + (e && (e.message || e));
+    })
+    .then(function () {
+      if (btn && REORG_COUNT > 0) { btn.disabled = false; btn.textContent = "Reorganize now (" + REORG_COUNT + ")"; }
+    });
+}
+
+/* Fetch live mirror availability from SLUM and re-render the health panel. */
+function onRefreshMirrors() {
+  if (MIRROR_HEALTH_BUSY) return;
+  if (!hasTauri()) { MIRROR_HEALTH = []; renderMirrorHealth(); return; }
+  MIRROR_HEALTH_BUSY = true;
+  MIRROR_HEALTH_ERR = "";
+  // Re-rendering the sheet would clobber in-progress edits, so capture the current
+  // input values first, then re-render with them preserved.
+  collectSettings();
+  renderSettings();
+  invoke("refresh_mirrors")
+    .then(function (sites) {
+      MIRROR_HEALTH = sites || [];
+      MIRROR_HEALTH_AT = Date.now();        // stamp the successful refresh
+      MIRROR_HEALTH_ERR = "";
+    })
+    .catch(function (e) {
+      // Surface the failure instead of swallowing it (it used to fail silently).
+      MIRROR_HEALTH = [];
+      MIRROR_HEALTH_ERR = (e && (e.message || e)) ? String(e.message || e) : "could not reach open-slum.org";
+      console.error("refresh_mirrors failed:", e && (e.message || e));
+    })
+    .then(function () { MIRROR_HEALTH_BUSY = false; collectSettings(); renderSettings(); });
+}
+
+/* The download-site picker: each known site as an enable toggle + reorder
+   buttons. Enabled order = the failover chain (maps to AppSettings.sites). */
+
+function renderSidebar() {
+  var el = document.getElementById("sidebar");
+  var g = globalCounts();
+  var html = '<div class="side-h">Library</div>';
+  // Aggregate view across all lists.
+  html += '<button class="side-item' + (CURRENT === "__all__" ? " active" : "") + '" data-list="__all__">' +
+    '<span class="ic">🗂</span><span class="lbl">All downloads</span>' +
+    statusBadge(everyBook()) +
+    (g.needs + g.review + g.cantdl ? '<span class="dot" style="background:var(--amber)"></span>' : '') +
+    '<span class="ct">' + g.done + "/" + g.all + '</span></button>';
+  // One entry per list, with a live status badge (active/paused), attention dot,
+  // and done/total.
+  LISTS.forEach(function (l) {
+    var books = listBooks(l);
+    var c = countsOf(books);
+    var attn = c.needs + c.cantdl;
+    html += '<button class="side-item' + (CURRENT === l.id ? " active" : "") + '" data-list="' + l.id + '">' +
+      '<span class="ic">📕</span><span class="lbl">' + esc(l.title) + '</span>' +
+      statusBadge(books) +
+      (attn ? '<span class="dot" style="background:var(--amber)" title="' + c.needs + ' need you, ' + c.cantdl + ' cannot download"></span>' : '') +
+      '<span class="ct">' + c.done + "/" + c.all + '</span></button>';
+  });
+  el.innerHTML = html;
+}
+
+function renderToolbar() {
+  var title, subtitle, c;
+  if (CURRENT === "__all__") {
+    title = "All downloads"; subtitle = LISTS.length + " lists · " + globalCounts().all + " books"; c = globalCounts();
+  } else {
+    var l = currentList(); title = l.title; subtitle = l.subtitle; c = countsOf(listBooks(l));
+  }
+  document.getElementById("listTitle").textContent = title;
+  document.getElementById("listSub").textContent = subtitle;
+  var total = c.all || 1;
+  function pct(n) { return (100 * n / total) + "%"; }
+  document.getElementById("progBar").innerHTML =
+    '<div class="seg done" style="width:' + pct(c.done) + '"></div>' +
+    '<div class="seg active" style="width:' + pct(c.active) + '"></div>' +
+    '<div class="seg attn" style="width:' + pct(c.needs) + '"></div>' +
+    '<div class="seg cantdl" style="width:' + pct(c.cantdl) + '"></div>';
+  document.getElementById("progNum").textContent = c.done + " / " + total + " done";
+}
+
+function renderFilters() {
+  // Chip counts use the SAME category test as the filter (inCategory), so a Done+Failed
+  // book is counted under both "Done" and "Cannot download" — matching what clicking the
+  // chip shows. (The toolbar progress bar still uses the single-status partition.)
+  var books = (CURRENT === "__all__" ? everyBook() : listBooks(currentList()));
+  // Per-SELECTED-VARIATION counts: a book's copies are counted independently, so a book
+  // with a Done copy AND an in-progress (or queued/failed) copy is counted under EACH —
+  // done+active+queued+cantdl sums to the number of selected variations. needs/review are
+  // book-level (a book that has no selected variation in the download lifecycle yet).
+  var c = { all: books.length, needs: 0, review: 0, cantdl: 0, active: 0, done: 0, queued: 0 };
+  books.forEach(function (b) {
+    var es = effectiveStatus(b);
+    if (es === "needs") c.needs++;
+    if (es === "review") c.review++;
+    var n = 0, failed = 0;
+    requestedVersions(b).forEach(function (v) {
+      if (v.state === "done") { c.done++; n++; }
+      else if (v.state === "downloading" || v.state === "paused") { c.active++; n++; }
+      else if (v.state === "queued") { c.queued++; n++; }
+      else if (v.state === "failed") { c.cantdl++; n++; failed++; }
+    });
+    // "Cannot download" must include NOT-FOUND books too: those have no candidates (no
+    // variation to count above), so count the book once when it rolls up to cantdl and
+    // had no failed variation already counted. (A book with a Done copy + a Failed copy
+    // is still counted via its failed variation above, exactly like the filter shows.)
+    if (es === "cantdl" && failed === 0) c.cantdl++;
+    if (n === 0 && es === "queued") c.queued++; // queued for query — no variation yet
+  });
+  var el = document.getElementById("filters");
+  function chip(key, label, n) {
+    var extra = (key === "needs" || key === "review") ? " attn" : (key === "cantdl" ? " cantdl" : "");
+    return '<button class="chip' + extra + (FILTER === key ? " active" : "") + '" data-filter="' + key + '">' +
+      esc(label) + (n != null ? ' <span class="n">' + n + '</span>' : '') + '</button>';
+  }
+  var fmts = formatsInView();
+  var fmtChips = fmts.length
+    ? '<span style="opacity:.4;margin:0 4px">|</span>' + fmts.map(function (f) {
+        return '<button class="chip' + (FMT_FILTER === f ? " active" : "") + '" data-fmtfilter="' + f +
+          '" title="Show only books with a ' + f.toUpperCase() + ' copy" style="color:' + fmtColor(f) +
+          (FMT_FILTER === f ? ";border-color:" + fmtColor(f) : "") + '">' + f.toUpperCase() + '</button>';
+      }).join("")
+    : "";
+  el.innerHTML =
+    chip("all", "All", c.all) +
+    chip("needs", "Needs you", c.needs) +
+    chip("review", "Check download", c.review) +
+    chip("cantdl", "Cannot download", c.cantdl) +
+    chip("active", "In progress", c.active) +
+    chip("done", "Done", c.done) +
+    chip("queued", "Queued", c.queued) +
+    fmtChips;
+}
+
+function groupHeader(key, name, doneN, total, collapsed) {
+  return '<div class="group-h' + (collapsed ? " collapsed" : "") + '" data-toggle="' + key + '">' +
+    '<span class="tw">▾</span><span class="gname">' + esc(name) + '</span>' +
+    '<span class="gcount">' + doneN + " / " + total + '</span></div>';
+}
+function renderList() {
+  var wrap = document.getElementById("listwrap");
+  var html = "", shown = 0;
+  if (CURRENT === "__all__") {
+    // Aggregate: one collapsible section per list.
+    LISTS.forEach(function (l, li) {
+      var books = listBooks(l), visible = books.filter(matchesFilter);
+      if (visible.length === 0) return;
+      var doneN = books.filter(function (b) { return effectiveStatus(b) === "done"; }).length;
+      html += groupHeader("L" + li, l.title, doneN, books.length, l.collapsedAll);
+      if (!l.collapsedAll) visible.forEach(function (bk) { shown++; html += bookRow(bk); });
+    });
+  } else {
+    // Single list: one collapsible section per batch.
+    currentList().groups.forEach(function (g, gi) {
+      var visible = g.books.filter(matchesFilter);
+      if (visible.length === 0) return;
+      var doneN = g.books.filter(function (b) { return effectiveStatus(b) === "done"; }).length;
+      html += groupHeader("G" + gi, g.name, doneN, g.books.length, g.collapsed);
+      if (!g.collapsed) visible.forEach(function (bk) { shown++; html += bookRow(bk); });
+    });
+  }
+  if (shown === 0) html = '<div class="empty">Nothing here for this filter.</div>';
+  // Diff-guard: only touch the DOM when the (progress-free) markup actually changed,
+  // so a reload that finds nothing structurally different doesn't re-replace the list
+  // (re-decoding covers, flickering). Live download bars are filled in place below.
+  if (wrap.__ph !== html) { wrap.__ph = html; wrap.innerHTML = html; }
+  updateRowProgress();
+}
+
+/* Fill the live download bar + % on each active row IN PLACE — no list rebuild, so
+   progress ticks smoothly without flicker. Called from renderLive() (≤4 fps) and after
+   each renderList(). */
+function updateRowProgress() {
+  // Per-VARIATION bars: each downloading variation line carries data-vprog="bookId:md5".
+  var nodes = document.querySelectorAll("#listwrap [data-vprog]");
+  if (!nodes.length) return;
+  var byId = {};
+  everyBook().forEach(function (b) { byId[b.id] = b; });
+  nodes.forEach(function (el) {
+    var dp = el.getAttribute("data-vprog"); var sep = dp.indexOf(":");
+    var bk = byId[dp.slice(0, sep)]; if (!bk) return;
+    var md5 = dp.slice(sep + 1);
+    var v = (bk.versions || []).filter(function (x) { return x.md5 === md5; })[0];
+    if (!v) return;
+    var pct = v.state === "done" ? 100 : (v.progress || 0);
+    var bar = el.querySelector(".vbar i"); if (bar) bar.style.width = pct + "%";
+    var pc = el.querySelector(".vpct"); if (pc) pc.textContent = pct + "%";
+  });
+}
+
+function requestedVersions(bk) { return (bk.versions || []).filter(function (v) { return v.state !== "available"; }); }
+function rollup(bk) {
+  var req = requestedVersions(bk);
+  return { requested: req.length, done: req.filter(function (v) { return v.state === "done"; }).length };
+}
+function uniqueFormats(versions) {
+  var seen = {}, out = [];
+  (versions || []).forEach(function (v) { if (!seen[v.fmt]) { seen[v.fmt] = 1; out.push(v.fmt); } });
+  return out;
+}
+
+/* A representative file size for the book's row: prefer the downloaded copy, then
+   the recommended one, then the top candidate. "" when no candidate has a size. */
+function bookSize(bk) {
+  var vs = bk.versions || [];
+  var v = vs.filter(function (x) { return x.state === "done"; })[0]
+    || vs.filter(function (x) { return x.md5 === bk.recommended_md5; })[0]
+    || vs[0];
+  return (v && v.size) ? (v.size + " MB") : "";
+}
+
+/* Cover image URL for the book: downloaded copy → recommended → any with a cover. */
+function bookCover(bk) {
+  var vs = bk.versions || [];
+  var v = vs.filter(function (x) { return x.state === "done" && x.cover_url; })[0]
+    || vs.filter(function (x) { return x.md5 === bk.recommended_md5 && x.cover_url; })[0]
+    || vs.filter(function (x) { return x.cover_url; })[0];
+  return (v && v.cover_url) ? v.cover_url : "";
+}
+/* A cover <img> (lazy; swaps to a format-colored placeholder on 404), or the
+   placeholder directly when no cover URL is known. `cls` = "cv-sm" | "cv-lg". */
+function coverImg(bk, cls) {
+  var fmts = uniqueFormats(bk.versions), f = fmts[0] || "";
+  var ph = '<span class="cover ' + cls + ' cover-ph" style="background:' + fmtColor(f) +
+    '22;color:' + fmtColor(f) + '">' + esc((f || "?").toUpperCase().slice(0, 4)) + '</span>';
+  var url = coverSrc(bookCover(bk));
+  if (!url) return ph;
+  // loading="lazy" + decoding="async": a long list re-rendered during downloads must
+  // NOT synchronously decode every off-screen cover data-URL (that clogs the decode
+  // queue and makes covers lag / flicker). Off-screen covers decode when scrolled in.
+  return '<img class="cover ' + cls + '" loading="lazy" decoding="async" src="' + esc(url) + '" ' +
+    "onerror=\"this.outerHTML='" +
+    ph.replace(/'/g, "&#39;").replace(/"/g, "&quot;") + "'\">";
+}
+
+/* Resolve a cover value to a usable <img src>. Remote http(s) URLs are used as-is;
+   a LOCAL absolute path (a cached thumbnail) is served through Tauri's asset
+   protocol via convertFileSrc so the webview can load it. */
+function coverSrc(url) {
+  if (!url) return "";
+  if (/^https?:/i.test(url)) return url; // remote: load directly
+  // Local cached thumbnail: use the data URL once hydrateCovers has fetched it
+  // (empty string → placeholder until then, or if it failed).
+  var c = COVER_CACHE[url];
+  return (typeof c === "string" && c) ? c : "";
+}
+/* The per-format glyph strip: each REQUESTED variation as `fmt<glyph>` colored
+   by its own state. Before any download, show the available formats faintly. */
+function variationGlyphs(bk) {
+  // A cancelled variation was abandoned by the user (e.g. dropped in favor of a
+  // better copy) — don't keep showing it as an active chip in the list row. It
+  // stays visible in the detail variation manager (re-downloadable).
+  var req = requestedVersions(bk).filter(function (v) { return v.state !== "cancelled"; });
+  if (req.length === 0) {
+    return uniqueFormats(bk.versions).map(function (f) { return '<span class="fmt" style="color:' + fmtColor(f) + '">' + f + '</span>'; }).join(" ");
+  }
+  return req.map(function (v) {
+    // Format → text color; download state → background tint (vg-*) + trailing glyph.
+    var cls = v.state === "done" ? "vg-done" : (v.state === "failed" ? "vg-fail" : "vg-active");
+    return '<span class="vg ' + cls + '" style="color:' + fmtColor(v.fmt) + '">' +
+      v.fmt + " " + (FMT_GLYPH[v.state] || "") + '</span>';
+  }).join(" ");
+}
+
+/* Overall download percent across a book's requested variations (done = 100). */
+function downloadPct(bk) {
+  var r = requestedVersions(bk);
+  if (!r.length) return 0;
+  var s = 0;
+  r.forEach(function (v) { s += v.state === "done" ? 100 : (v.progress || 0); });
+  return Math.round(s / r.length);
+}
+
+/* One variation's status cell. An ANIMATED hourglass = actively downloading; a
+   still hourglass = queued/waiting — so the two are visually distinct. */
+function varStatusCell(v) {
+  if (v.state === "done") return '<span class="vstat" style="color:var(--green)">✓ Done</span>';
+  if (v.state === "downloading")
+    return '<span class="vstat" style="color:var(--accent)"><span class="hourglass run">⏳</span> <span class="vpct">…</span></span>';
+  if (v.state === "paused")
+    return '<span class="vstat">⏸ Paused' + (v.progress ? ' ' + v.progress + '%' : '') + '</span>';
+  if (v.state === "failed") return '<span class="vstat" style="color:var(--red)">⚠ Failed</span>';
+  if (v.state === "queued") return '<span class="vstat"><span class="hourglass">⏳</span> Queued</span>';
+  return '<span class="vstat">' + esc(v.state) + '</span>';
+}
+/* One variation's progress bar. Live (downloading) rows bake width:0% so the list
+   markup stays STABLE byte-to-byte (the diff-guard skips the rebuild); the live %
+   is filled in place by updateRowProgress on the [data-vprog] line. */
+function varProgCell(v) {
+  if (v.state === "done") return '<span class="vbar"><i style="width:100%;background:var(--green)"></i></span>';
+  if (v.state === "downloading") return '<span class="vbar"><i style="width:0%"></i></span>';
+  if (v.state === "paused") return '<span class="vbar"><i style="width:' + (v.progress || 0) + '%"></i></span>';
+  return '<span class="vbar empty"></span>';
+}
+function varLine(bk, v) {
+  var dp = v.state === "downloading" ? ' data-vprog="' + esc(bk.id) + ":" + esc(v.md5) + '"' : '';
+  return '<div class="vline"' + dp + '>' +
+    '<span class="vt" style="color:' + fmtColor(v.fmt) + '">' + esc(v.fmt) + '</span>' +
+    '<span class="vsz">' + (v.size ? v.size + ' MB' : '—') + '</span>' +
+    varStatusCell(v) + varProgCell(v) + '</div>';
+}
+/* The per-variation region of a book row: one line per REQUESTED variation
+   (type · size · status · progress, stacked vertically). A book with no requested
+   variation (querying / needs / not-found / queued-for-query) shows one book-level
+   status line instead. */
+function variationLines(bk) {
+  var req = requestedVersions(bk).filter(function (v) { return v.state !== "cancelled"; });
+  if (req.length === 0) {
+    var es = effectiveStatus(bk), txt, cls;
+    if (es === "querying") { txt = '<span class="hourglass run">⟳</span> Being queried…'; cls = "s-active"; }
+    else if (es === "needs") { txt = "Choose a copy"; cls = "s-attn"; }
+    else if (es === "review") { txt = "Check download"; cls = "s-attn"; }
+    else if (es === "cantdl") { txt = bk.discovery === "not_found" ? "Not found" : "Failed"; cls = "s-fail"; }
+    else { txt = bk.priority ? "⤴ Next up" : "Queued for query"; cls = bk.priority ? "s-active" : "s-queued"; }
+    return '<div class="vlist"><div class="vline bookline"><span class="chip-s ' + cls + '">' + txt + '</span></div></div>';
+  }
+  return '<div class="vlist">' + req.map(function (v) { return varLine(bk, v); }).join("") + '</div>';
+}
+/* The optional book-level action button (Choose / Review / Top), shown in the
+   row's action column. Empty otherwise. */
+function rowAction(bk) {
+  var es = effectiveStatus(bk);
+  if (es === "needs") return '<button class="rowbtn amber" data-open="' + bk.id + '">Choose…</button>';
+  if (es === "review") return '<button class="rowbtn amber" data-open="' + bk.id + '">Review…</button>';
+  if (es === "queued" && (bk.versions && bk.versions.length)) {
+    return '<button class="rowbtn' + (bk.priority ? " amber" : "") + '" data-top="' + bk.id +
+      '" title="Move to top of queue">' + (bk.priority ? "✓ Top" : "⤒ Top") + '</button>';
+  }
+  return '<span></span>';
+}
+
+function bookRow(bk) {
+  return '<div class="book' + (SELECTED === bk.id ? " sel" : "") + '" data-open="' + bk.id + '">' +
+    '<span class="seq">' + bk.seq + '</span>' +
+    coverImg(bk, "cv-sm") +
+    '<span class="meta"><div class="t">' + esc(bk.title) + '</div><div class="a">' + esc(bk.author) + '</div></span>' +
+    variationLines(bk) + rowAction(bk) + '</div>';
+}
+
+function fmtBytes(n) {
+  if (n == null) return "—";
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(0) + " KB";
+  return n + " B";
+}
+function fmtSpeed(bps) { return bps == null ? "—" : fmtBytes(bps) + "/s"; }
+function fmtEta(secs) {
+  if (secs == null) return "—";
+  if (secs >= 3600) return Math.floor(secs / 3600) + "h " + Math.floor((secs % 3600) / 60) + "m";
+  if (secs >= 60) return Math.floor(secs / 60) + "m " + (secs % 60) + "s";
+  return secs + "s";
+}
+
+/* The bottom panel: everything in flight right now — books being queried, and
+   variations being downloaded (with progress, speed, ETA). Collapsible. */
+/* Per-leg live download state for the active panel. With hedging ON, ONE variation
+   (md5) races on multiple hosts (LEGS); the progress events carry (md5, host), so we
+   track each leg separately and show it on its OWN line. The FIRST host seen for an
+   md5 is the PRIMARY; later ones are HEDGE legs (badged). Cleared on the variation's
+   terminal event; a leg with no update for LEG_TTL ages out (covers a leg that
+   failed over / lost without an explicit event). */
+var LEGS = {};                 // md5 -> { order: [host,...], byHost: { host -> leg } }
+var LEG_TTL = 6000;            // ms; a leg silent this long is dropped (e.g. a lost race leg)
+
+function noteLeg(p) {
+  if (!p.md5) return;
+  if (p.kind === "done" || p.kind === "failed" || p.kind === "cancelled") { delete LEGS[p.md5]; return; }
+  if (p.kind === "failing_over") {
+    // SEQUENTIAL host change (not a parallel hedge): the old host is dead — drop it
+    // so the new host isn't mistaken for a speculative leg of a still-running primary.
+    var Lf = LEGS[p.md5];
+    if (Lf && p.from_host) {
+      delete Lf.byHost[p.from_host];
+      Lf.order = Lf.order.filter(function (h) { return h !== p.from_host; });
+    }
+    return;
+  }
+  if ((p.kind !== "bytes" && p.kind !== "resolved") || !p.host) return;
+  var L = LEGS[p.md5] || (LEGS[p.md5] = { order: [], byHost: {} });
+  var prev = L.byHost[p.host];
+  if (!prev) L.order.push(p.host);
+  var prog = p.total_bytes ? Math.min(100, Math.round(100 * p.bytes_done / p.total_bytes)) : (prev ? prev.progress : 0);
+  L.byHost[p.host] = {
+    host: p.host,
+    bytes: (p.bytes_done != null ? p.bytes_done : (prev ? prev.bytes : null)),
+    total: (p.total_bytes != null ? p.total_bytes : (prev ? prev.total : null)),
+    speed: (p.kind === "bytes" ? (p.speed_bps != null ? p.speed_bps : null) : (prev ? prev.speed : null)),
+    eta: (p.kind === "bytes" ? (p.eta_secs != null ? p.eta_secs : null) : (prev ? prev.eta : null)),
+    progress: prog,
+    ts: Date.now(),
+  };
+}
+
+/* The legs to show for a downloading variation: live per-leg state when we have it
+   (a hedge race), else ONE leg synthesized from the viewmodel (no hedging / no
+   events yet). Each leg is tagged `hedge` (a non-primary host) for the badge. */
+function legsFor(v) {
+  var L = LEGS[v.md5], now = Date.now();
+  if (L && L.order.length) {
+    var fresh = L.order.filter(function (h) { return (now - (L.byHost[h].ts || 0)) < LEG_TTL; });
+    if (fresh.length) {
+      // hedge = a CONCURRENT secondary: only legs that are still active count, so a
+      // sequential failover (old leg gone) leaves the new leg as the sole PRIMARY.
+      return fresh.map(function (h, i) { var leg = L.byHost[h]; leg.hedge = i > 0; return leg; });
+    }
+  }
+  return [{ host: v.host, bytes: v.downloaded_bytes, total: v.total_bytes,
+    speed: v.speed_bps, eta: v.eta_secs, progress: v.progress, hedge: false }];
+}
+
+function renderActivePanel() {
+  var panel = document.getElementById("activePanel");
+  panel.classList.toggle("collapsed", ACTIVE_COLLAPSED);
+
+  var querying = [], downloading = [], seenMd5 = {};
+  everyBook().forEach(function (b) {
+    if (b.discovery === "querying") querying.push(b);
+    (b.versions || []).forEach(function (v) {
+      if (v.state !== "downloading" && v.state !== "paused") return;
+      // One row per md5: the same file selected by two book entries (e.g. a book
+      // duplicated across lists, or a mistaken same-file selection) is ONE underlying
+      // download job — show it once, not as two rows that share progress and flicker.
+      // The top "in progress" chip stays per-variation, so its count may exceed the
+      // rows here; that discrepancy is expected and acceptable.
+      if (v.md5) { if (seenMd5[v.md5]) return; seenMd5[v.md5] = true; }
+      downloading.push({ bk: b, v: v });
+    });
+  });
+
+  // Expand each downloading variation into its LEGS — with hedging on, one variation
+  // races on several hosts, each shown on its OWN line (hedge legs badged).
+  var legList = [];
+  downloading.forEach(function (d) {
+    legsFor(d.v).forEach(function (leg) { legList.push({ bk: d.bk, v: d.v, leg: leg }); });
+  });
+  // A leg is actively TRANSFERRING once it lands on a cdn edge (host recorded after
+  // the 307) OR bytes measurably flow; otherwise it's still CONNECTING (on the mirror).
+  function legTransferring(v, leg) {
+    return v.state === "downloading" &&
+      (/\.booksdl\.lc$/.test(leg.host || "") || (leg.speed || 0) > 0);
+  }
+  var active = 0, connecting = 0, paused = 0;
+  legList.forEach(function (item) {
+    if (item.v.state === "paused") paused++;
+    else if (legTransferring(item.v, item.leg)) active++;
+    else connecting++;
+  });
+  // "downloading" = actively transferring bytes (from a capped cdn edge). Everything
+  // BEFORE bytes flow — resolving the mirror, following the 307, opening the stream — is
+  // counted as CONNECTING. Connecting is uncapped (bounded only by total download
+  // concurrency), so it is deliberately NOT folded into the "downloading" number.
+  document.getElementById("apSummary").textContent =
+    querying.length + " querying · " + active + " downloading" +
+    (connecting ? " · " + connecting + " connecting" : "") +
+    (paused ? " · " + paused + " paused" : "");
+
+  // Per-host slots: filled by ACTIVELY-transferring legs (capped at the host
+  // concurrency); connecting/paused legs shown as a parenthetical, not as "on" slots.
+  // Slots shown per host = the PER-EDGE concurrency cap (download::MAX_CONCURRENT_PER_EDGE),
+  // since downloads are grouped by the cdnN edge serving them — not the global cap.
+  // The slot-dots header is ONLY for the capped cdn edges that are actively serving
+  // bytes. Connecting legs sit on the uncapped mirror (no per-host slot), so they're
+  // excluded here — they appear per-task in the rows below ("connecting via …").
+  var byHost = {}, cap = 3;
+  legList.forEach(function (item) {
+    // ONLY legs that landed on a capped cdn edge hold a per-edge slot. A leg still on the
+    // mirror (connecting) holds no permit — exclude it from the slot dots regardless of
+    // its byte count (which is just the resume offset of a partial).
+    if (!/\.booksdl\.lc$/.test(item.leg.host || "")) return;
+    (byHost[item.leg.host] || (byHost[item.leg.host] = { active: 0 })).active++;
+  });
+  document.getElementById("apHosts").innerHTML = Object.keys(byHost).map(function (h) {
+    var b = byHost[h], slots = "", taken = Math.min(b.active, cap);
+    for (var i = 0; i < cap; i++) slots += '<i class="' + (i < taken ? "on" : "") + '"></i>';
+    return '<span class="host"><span class="slots">' + slots + '</span>' + esc(h) +
+      ' <span style="opacity:.7">' + b.active + "/" + cap + '</span></span>';
+  }).join("");
+
+  if (ACTIVE_COLLAPSED) return; // body hidden — skip building it
+
+  var html = '<div class="ap-sec">Being queried (' + querying.length + ')</div>';
+  if (!querying.length) html += '<div class="ap-empty">Nothing being queried.</div>';
+  querying.forEach(function (b) {
+    html += '<div class="ap-row"><span class="nm">' + esc(b.title) +
+      ' <small>' + esc(b.author) + '</small></span>' +
+      '<span class="ap-bar"><i style="width:40%"></i></span>' +
+      '<span class="ap-stats">searching…</span></div>';
+  });
+
+  // List every active leg with WHAT it's doing: the mirror it's on, and either
+  // "connecting…" (slot held, resolving/opening the stream — no bytes yet) or a
+  // live progress bar + speed/ETA once bytes flow. (Genuinely-queued books with
+  // no worker aren't here — they read "Queued" in the main list.)
+  html += '<div class="ap-sec">Downloading (' + active +
+    (connecting ? ' · ' + connecting + ' connecting' : '') +
+    (paused ? ' · ' + paused + ' paused' : '') + ')</div>';
+  if (!legList.length) html += '<div class="ap-empty">No active downloads.</div>';
+  legList.forEach(function (item) {
+    var v = item.v, leg = item.leg;
+    var pct, stats, barCls = "", host = leg.host ? ' <small>· ' + esc(leg.host) + '</small>' : '';
+    if (v.state === "paused") {
+      pct = leg.progress || 0;
+      stats = "paused";
+    } else if (legTransferring(v, leg)) {
+      pct = leg.progress || 0;
+      stats = fmtSpeed(leg.speed) + " · " + fmtEta(leg.eta);
+    } else {
+      // Not transferring yet: resolving the mirror, following the 307, rotating edges.
+      // A partial already on disk (a resume) shows its %, never a 0% restart bar.
+      pct = leg.progress || 0;
+      if (pct > 0) {
+        stats = "resuming " + pct + "% · connecting via " + (leg.host || "mirror");
+      } else {
+        stats = "connecting via " + (leg.host || "mirror");
+        barCls = " indet";
+      }
+      host = ""; // already named in the stats — don't repeat it
+    }
+    // A HEDGE leg (speculative copy racing the primary on another host) is badged so
+    // it's clearly the secondary, not a second book.
+    var badge = leg.hedge ? '<span class="hedge-badge" title="hedge: speculative copy racing on another host">H</span> ' : '';
+    var bytes = (leg.bytes != null && leg.total != null)
+      ? ' <small>' + fmtBytes(leg.bytes) + " / " + fmtBytes(leg.total) + '</small>' : "";
+    html += '<div class="ap-row"><span class="nm">' + badge + esc(item.bk.title) +
+      ' <small>· </small>' + fmtLabel(v.fmt) + host + bytes + '</span>' +
+      '<span class="ap-bar' + barCls + '"><i style="width:' + pct + '%"></i></span>' +
+      '<span class="ap-stats">' + esc(stats) + '</span></div>';
+  });
+  document.getElementById("apBody").innerHTML = html;
+}
+
+/* The per-variation manager: each kept variation (distinct md5) with its OWN
+   state + action, so the user can download the epub and pdf independently, or
+   re-download a different copy if one isn't ideal. */
+function renderVariationManager(bk) {
+  if (!bk.versions || !bk.versions.length) return "";
+  var html = '<div class="sec-t">Variations (' + bk.versions.length + ')</div>';
+  bk.versions.forEach(function (v, idx) {
+    var label = "", action;
+    // Drop a copy that doesn't belong (e.g. a wrong-book file picked by mistake).
+    // remove_variation drops the candidate AND dismisses the md5 so a re-query won't
+    // resurface it. Only Done copies have a file to Trash; here there's none.
+    var removeBtn = ' <button class="tbtn" data-remove="' + bk.id + ':' + v.md5 +
+      '" title="Remove this copy from the book">✕ Remove</button>';
+    if (v.state === "done") {
+      label = '<span class="chip-s s-done">✓ Downloaded</span>';
+      action = '<button class="tbtn" data-reveal="' + esc(v.output_path || "") + '">Reveal</button>' +
+        '<button class="tbtn" data-dl="' + bk.id + ':' + idx + '">Re-download</button>' +
+        '<button class="tbtn" data-remove="' + bk.id + ':' + v.md5 + '" title="Move the file to Trash and remove this download">🗑 Remove</button>';
+    } else if (v.state === "downloading" || v.state === "queued") {
+      label = '<span class="chip-s s-active">' + (v.state === "queued" ? "Queued" : v.progress + "%") + '</span>';
+      // An in-flight/queued variation can be paused (resumable) or cancelled.
+      action =
+        '<button class="tbtn" data-pausev="' + bk.id + ':' + idx + '">❚❚ Pause</button>' +
+        '<button class="tbtn" data-canceldl="' + bk.id + ':' + idx + '">Cancel</button>';
+    } else if (v.state === "paused") {
+      label = '<span class="chip-s s-queued">Paused' + (v.progress ? " · " + v.progress + "%" : "") + '</span>';
+      action =
+        '<button class="tbtn primary" data-resumev="' + bk.id + ':' + idx + '">▶ Resume</button>' +
+        '<button class="tbtn" data-canceldl="' + bk.id + ':' + idx + '">Cancel</button>';
+    } else if (v.state === "cancelled") {
+      label = '<span class="chip-s s-queued">Cancelled</span>';
+      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">Download</button>' + removeBtn;
+    } else if (v.state === "failed") {
+      var why = v.last_error ? ' <small style="opacity:.7">· ' + esc(v.last_error) + '</small>' : '';
+      label = '<span class="chip-s s-fail">Failed</span>' + why;
+      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">Retry</button>' + removeBtn;
+    } else {
+      // Not requested for download (a search result the user hasn't chosen, or a
+      // chosen copy that was cancelled before starting). Label it so no variation
+      // ever renders "without status".
+      label = '<span class="chip-s s-avail">Available</span>';
+      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">Download</button>' + removeBtn;
+    }
+    // The candidate's OWN title/author (what the mirror returned) so the user
+    // can judge whether the result is the right book.
+    var idline = (v.title || v.author)
+      ? '<div class="cand-id">' + esc(v.title || "—") + (v.author ? ' · ' + esc(v.author) : '') + '</div>'
+      : '';
+    var lang = v.language ? '<span>' + esc(v.language) + '</span>' : '';
+    var pp = (v.pages != null) ? '<span>' + v.pages + ' pp</span>' : '';
+    var recBadge = (bk.recommended_md5 && v.md5 === bk.recommended_md5)
+      ? ' <span class="chip-s s-attn" title="Recommended replacement">★ Recommended</span>' : '';
+    var matchPct = (v.score != null)
+      ? '<span title="match confidence (title + author ranking)" style="font-weight:600">match ' + Math.round(v.score * 100) + '%</span>'
+      : '';
+    html += '<div class="cand' + (v.state === "done" ? " best" : "") + (recBadge ? " rec" : "") + '">' +
+      '<div class="ct">' + fmtLabel(v.fmt) + ' · ' + v.size + ' MB ' + label + recBadge + '</div>' +
+      idline +
+      '<div class="cmeta">' + matchPct + '<span>' + (v.year || "—") + '</span>' + lang + pp + '<span>' + esc(v.publisher) + '</span>' +
+      '<span style="opacity:.6">md5 ' + v.md5 + '</span></div>' +
+      ((v.state === "downloading" || v.state === "paused") && v.progress ? '<div class="conf"><i style="width:' + v.progress + '%"></i></div>' : '') +
+      '<div class="cact">' + action + '</div></div>';
+  });
+  return html;
+}
+
+/* A representative variation for book-level metadata: prefer a downloaded one,
+   else a requested one, else the top-ranked candidate. */
+function primaryVariation(bk) {
+  var vs = bk.versions || [];
+  return vs.filter(function (v) { return v.state === "done"; })[0]
+    || vs.filter(function (v) { return v.state !== "available"; })[0]
+    || vs[0] || null;
+}
+/* Book-level metadata rows (full title is the panel header; here: language +
+   pages + format/size of the representative copy). */
+function detailMeta(bk) {
+  var pv = primaryVariation(bk);
+  if (!pv) return "";
+  var rows = '<div class="kv"><span class="k">Language</span><span class="v">' + esc(pv.language || "—") + '</span></div>' +
+    '<div class="kv"><span class="k">Pages</span><span class="v">' + (pv.pages != null ? pv.pages : "—") + '</span></div>';
+  if (pv.year) rows += '<div class="kv"><span class="k">Year</span><span class="v">' + pv.year + '</span></div>';
+  if (pv.publisher) rows += '<div class="kv"><span class="k">Publisher</span><span class="v">' + esc(pv.publisher) + '</span></div>';
+  return rows;
+}
+
+/* The event chronicle for a book + its variations (born → discovered → selected
+   → downloading/retry/failover → done/failed). Oldest first. */
+function fmtEventTime(ms) {
+  if (!ms) return "";
+  try { return new Date(ms).toLocaleString(); } catch (e) { return ""; }
+}
+function historyRows(bk) {
+  return (bk.history || []).map(function (e) {
+    var fmt = e.fmt ? '<span class="he-fmt">' + esc(String(e.fmt).toUpperCase()) + '</span> ' : '';
+    return '<div class="he">' +
+      '<span class="he-t">' + esc(fmtEventTime(e.at_ms)) + '</span>' +
+      '<span class="he-k he-' + esc(e.kind) + '">' + esc(e.kind) + '</span>' +
+      '<span class="he-d">' + fmt + esc(e.detail) + '</span></div>';
+  }).join("");
+}
+/* Open the chronicle for a book in the history modal (oldest first). The modal
+   LIVE-REFRESHES while open: the backend keeps appending events (downloading,
+   retry, failover, resuming, done) to the persisted history, so we poll the
+   `library` command and re-fill — the in-memory `LISTS` only refreshes on a full
+   reload (done/failed), which would otherwise hide mid-download events. */
+var HIST_BOOK = null, HIST_TIMER = null, HIST_SIG = "";
+function findBookInVm(vm, uid) {
+  // uid is the UI's globally-unique "<listId>/<backendId>"; the backend vm uses
+  // the per-list backend id (bk.id) keyed under its list, so match on both.
+  var slash = String(uid).indexOf("/");
+  var listId = slash >= 0 ? uid.slice(0, slash) : null;
+  var bid = slash >= 0 ? uid.slice(slash + 1) : uid;
+  var ls = (vm && vm.lists) || [];
+  for (var i = 0; i < ls.length; i++) {
+    if (listId && ls[i].id !== listId) continue;
+    for (var g = 0; g < (ls[i].groups || []).length; g++)
+      for (var b = 0; b < (ls[i].groups[g].books || []).length; b++)
+        if (ls[i].groups[g].books[b].id === bid) return ls[i].groups[g].books[b];
+  }
+  return null;
+}
+function fillHistoryFrom(bk) {
+  if (!bk) return;
+  // Don't clobber a selection the user is making INSIDE the modal.
+  var sel = window.getSelection && window.getSelection();
+  var sheet = document.getElementById("histSheet");
+  if (sel && String(sel).length > 0 && sel.anchorNode && sheet.contains(sel.anchorNode)) return;
+  var sig = (bk.history || []).length + ":" + ((bk.history || [])[(bk.history || []).length - 1] || {}).at_ms;
+  if (sig === HIST_SIG) return; // nothing new → don't rebuild (keeps selection)
+  HIST_SIG = sig;
+  document.getElementById("histTitle").textContent = "History — " + bk.title;
+  document.getElementById("histBody").innerHTML =
+    '<div class="hist">' + (historyRows(bk) || '<div class="ap-empty">No events yet.</div>') + '</div>';
+}
+function refreshHistory() {
+  if (!HIST_BOOK) return;
+  if (!hasTauri()) { fillHistoryFrom(bookById(HIST_BOOK)); return; }
+  invoke("library")
+    .then(function (vm) { var b = findBookInVm(vm, HIST_BOOK); if (b) fillHistoryFrom(b); })
+    .catch(function () {});
+}
+function openHistory(bookId) {
+  HIST_BOOK = bookId; HIST_SIG = "";
+  fillHistoryFrom(bookById(bookId)); // immediate, from in-memory
+  document.getElementById("histScrim").classList.add("open");
+  document.getElementById("histSheet").classList.add("open");
+  if (HIST_TIMER) clearInterval(HIST_TIMER);
+  HIST_TIMER = setInterval(refreshHistory, 2000); // live: pull fresh events
+  refreshHistory();
+}
+function closeHistory() {
+  if (HIST_TIMER) { clearInterval(HIST_TIMER); HIST_TIMER = null; }
+  HIST_BOOK = null;
+  document.getElementById("histScrim").classList.remove("open");
+  document.getElementById("histSheet").classList.remove("open");
+}
+function renderDetail() {
+  var d = document.getElementById("detail");
+  var bk = SELECTED ? bookById(SELECTED) : null;
+  var show = bk && !DETAIL_COLLAPSED;
+  d.classList.toggle("collapsed", !show);
+  if (!show) return;
+  document.getElementById("dTitle").textContent = bk.title;          // full title, wraps
+  document.getElementById("dAuthor").textContent = bk.author;
+  var b = document.getElementById("dBody");
+  var es = effectiveStatus(bk);
+  // Cover floats to the right of the detail content.
+  var html = '<div style="float:right;margin:0 0 10px 14px">' + coverImg(bk, "cv-lg") + '</div>';
+
+  // Correct the search metadata + re-query: for a book whose imported title the
+  // mirrors couldn't match (e.g. "D'Aulaires' Book of Greek Myths" that resolves
+  // only as "Greek Myths D'Aulaires'"). Inline so it's discoverable on the book.
+  if (EDIT_BOOK === bk.id) {
+    html += '<div style="margin:0 0 12px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel-2)">' +
+      '<div style="font-size:12px;opacity:.7;margin-bottom:6px">Edit title/author, then re-query</div>' +
+      '<input id="editTitle" type="text" placeholder="Title" value="' + esc(bk.title) + '" style="width:100%;margin-bottom:6px;padding:6px;box-sizing:border-box">' +
+      '<input id="editAuthor" type="text" placeholder="Author(s), comma-separated" value="' + esc(bk.author || "") + '" style="width:100%;padding:6px;box-sizing:border-box">' +
+      '<div style="display:flex;gap:8px;margin-top:8px">' +
+        '<button class="tbtn primary" data-editsave="' + bk.id + '">Save &amp; re-query</button>' +
+        '<button class="tbtn" data-editcancel="1">Cancel</button>' +
+      '</div></div>';
+  } else {
+    html += '<div style="margin:0 0 10px"><button class="tbtn" data-editbook="' + bk.id + '">✎ Edit title/author &amp; re-query</button></div>';
+  }
+
+  if (bk.discovery === "querying") {
+    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-active">Being queried…</span></span></div>' +
+      '<div class="kv"><span class="k">Why</span><span class="v">Searching mirrors for matches.</span></div>';
+  } else if (bk.review) {
+    // Downloaded, but a better match was found on re-query.
+    var rec = (bk.versions || []).filter(function (v) { return v.md5 === bk.recommended_md5; })[0];
+    var dl = (bk.versions || []).filter(function (v) { return v.state === "done"; })[0];
+    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-attn">Check download</span></span></div>' +
+      '<div class="kv"><span class="k">Why</span><span class="v">The downloaded copy may not match this book — a better match was found on re-query.</span></div>';
+    if (dl) html += '<div class="kv"><span class="k">Downloaded</span><span class="v">' + esc(dl.title || "—") + ' · ' + dl.fmt.toUpperCase() + ' · ' + dl.size + ' MB</span></div>';
+    if (rec) html += '<div class="kv"><span class="k">Recommended</span><span class="v">' + esc(rec.title || "—") + ' · ' + rec.fmt.toUpperCase() + ' · ' + rec.size + ' MB</span></div>';
+    html += '<div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap">';
+    if (rec) html += '<button class="tbtn primary" data-replace="' + bk.id + ':' + bk.recommended_md5 + '">⤓ Download recommended &amp; Trash old</button>';
+    if (dl) html += '<button class="tbtn" data-accept="' + bk.id + '" title="Keep the copy you already downloaded">✓ Accept current copy</button>';
+    html += '</div>';
+    html += detailMeta(bk) + renderVariationManager(bk);
+  } else if (bk.discovery === "not_found") {
+    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-fail">Not found</span></span></div>' +
+      '<div class="kv"><span class="k">Why</span><span class="v">No mirror returned a match.</span></div>';
+    if (MANUAL_FOR === bk.id) {
+      html += '<div style="margin-top:12px">' +
+        '<div class="hint" style="margin-bottom:6px">Paste an md5 or a libgen URL (e.g. <code>…/ads.php?md5=…</code>):</div>' +
+        '<input id="manualMd5" type="text" placeholder="32-char md5 or libgen URL" ' +
+        'style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text)">' +
+        '<div id="manualErr" class="hint" style="color:#c0392b;margin-top:4px"></div>' +
+        '<div style="margin-top:8px;display:flex;gap:8px">' +
+        '<button class="tbtn primary" data-manualgo="' + bk.id + '">⤓ Download this md5</button>' +
+        '<button class="tbtn" data-manualcancel="1">Cancel</button></div></div>';
+    } else {
+      html += '<div style="margin-top:12px;display:flex;gap:8px">' +
+        '<button class="tbtn" data-requery="' + bk.id + '">Search again</button>' +
+        '<button class="tbtn" data-manual="' + bk.id + '">Enter manually</button></div>';
+    }
+  } else if (bk.discovery === "needs_selection" && requestedVersions(bk).length === 0) {
+    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-attn">Needs you</span></span></div>' +
+      '<div class="kv"><span class="k">Why</span><span class="v">No single match cleared the auto-download threshold — choose which variation(s) to download.</span></div>' +
+      detailMeta(bk) +
+      renderVariationManager(bk) +
+      '<div style="margin:12px 0 2px"><button class="tbtn" data-marknf="' + bk.id + '" title="None of these are right — move to Cannot download">✗ Mark as not found</button></div>';
+  } else {
+    var a = rollup(bk);
+    var summary = es === "done" ? '<span class="chip-s s-done">Done</span>'
+      : es === "active" ? '<span class="chip-s s-active">Downloading ' + a.done + "/" + a.requested + '</span>'
+      : es === "cantdl" ? '<span class="chip-s s-fail">Cannot download</span>'
+      : '<span class="chip-s s-queued">' + (bk.priority ? "Next up" : "Queued") + '</span>';
+    html += '<div class="kv"><span class="k">Status</span><span class="v">' + summary + '</span></div>';
+    if (es === "queued") {
+      html += '<div style="margin:10px 0"><button class="tbtn' + (bk.priority ? "" : " primary") +
+        '" data-top="' + bk.id + '">' + (bk.priority ? "Remove from top" : "⤒ Move to top of queue") + '</button></div>';
+    }
+    html += detailMeta(bk) + renderVariationManager(bk);
+  }
+  // History: a button that opens the chronicle in a modal (not inline).
+  if (bk.history && bk.history.length) {
+    html += '<div style="margin-top:14px"><button class="tbtn" data-history="' + bk.id +
+      '">🕑 Show history (' + bk.history.length + ')</button></div>';
+  }
+  // "Download whole series →": look the book's series up on Open Library and
+  // seed a fresh list with its ordered members (download_series under Tauri).
+  html += '<div class="series-actions" style="margin-top:14px;border-top:1px solid var(--line,#2a2a2a);padding-top:12px">' +
+    '<button class="tbtn" data-series="' + bk.id + '" title="Find this book&#39;s series on Open Library and download every entry">Download whole series →</button>' +
+    '</div>';
+  b.innerHTML = html;
+}
+
+/* =====================================================================
+   Interaction (event delegation - robust + testable)
+   ===================================================================== */
+document.addEventListener("click", function (e) {
+  var t = e.target.closest("[data-action],[data-filter],[data-fmtfilter],[data-list],[data-toggle],[data-open],[data-dl],[data-replace],[data-accept],[data-remove],[data-marknf],[data-cancelv],[data-canceldl],[data-pausev],[data-resumev],[data-reveal],[data-top],[data-series],[data-history],[data-fmtmv],[data-fmtrm],[data-fmtadd],[data-fmtshowall],[data-imptab],[data-toggle-set],[data-manual],[data-manualgo],[data-manualcancel],[data-requery],[data-editbook],[data-editsave],[data-editcancel]");
+  if (!t) return;
+
+  if (t.dataset.fmtmv) { // reorder preferred formats
+    var fp = t.dataset.fmtmv.split(":"), idx = +fp[0], j = fp[1] === "up" ? idx - 1 : idx + 1;
+    if (j >= 0 && j < FORMATS.length) { var tmp = FORMATS[idx]; FORMATS[idx] = FORMATS[j]; FORMATS[j] = tmp; }
+    renderFormatRank();
+    return;
+  }
+  if (t.dataset.fmtrm) { // remove a preferred format (keep at least one)
+    var ri = FORMATS.indexOf(t.dataset.fmtrm);
+    if (ri >= 0 && FORMATS.length > 1) FORMATS.splice(ri, 1);
+    renderFormatRank(); return;
+  }
+  if (t.dataset.fmtadd) { // add a format to the preferred list
+    if (FORMATS.indexOf(t.dataset.fmtadd) < 0) FORMATS.push(t.dataset.fmtadd);
+    renderFormatRank(); return;
+  }
+  if (t.dataset.fmtshowall) { SHOW_ALL_FORMATS = !SHOW_ALL_FORMATS; renderFormatRank(); return; }
+  if (t.dataset.toggleSet === "seq") { SETTINGS.seq_per_group = !SETTINGS.seq_per_group; renderSettings(); return; }
+
+  if (t.dataset.replace) { // download the recommended copy, Trash the old on success
+    var rp = t.dataset.replace.split(":"), rbk = bookById(rp[0]);
+    if (rbk) onReplaceDownload(rbk.bid, rp[1], rbk.list);
+    return;
+  }
+  if (t.dataset.history) { openHistory(t.dataset.history); return; }
+  if (t.dataset.manual) { // open the manual-md5 input for a not-found book
+    MANUAL_FOR = t.dataset.manual; render();
+    var mi = document.getElementById("manualMd5"); if (mi) mi.focus();
+    return;
+  }
+  if (t.dataset.manualcancel) { MANUAL_FOR = null; render(); return; }
+  if (t.dataset.manualgo) { // submit the pasted md5/URL for download
+    var inp = document.getElementById("manualMd5"), errEl = document.getElementById("manualErr");
+    var val = inp ? inp.value.trim() : "";
+    if (!val) { if (errEl) errEl.textContent = "Paste an md5 or libgen URL first."; return; }
+    onAddManual(t.dataset.manualgo, val, errEl);
+    return;
+  }
+  if (t.dataset.requery) { // "Search again": re-query this book's list
+    var rqbk = bookById(t.dataset.requery);
+    if (rqbk && hasTauri()) onRequery(rqbk.list);
+    return;
+  }
+  if (t.dataset.editbook) { EDIT_BOOK = t.dataset.editbook; render(); return; }
+  if (t.dataset.editcancel) { EDIT_BOOK = null; render(); return; }
+  if (t.dataset.editsave) {
+    var ebk = bookById(t.dataset.editsave);
+    var ti = document.getElementById("editTitle"), au = document.getElementById("editAuthor");
+    onEditBook(ebk, ti ? ti.value : "", au ? au.value : "");
+    return;
+  }
+  if (t.dataset.accept) { // accept the already-downloaded copy (clear review)
+    var abk = bookById(t.dataset.accept);
+    onAcceptDownload(abk && abk.bid, abk && abk.list);
+    return;
+  }
+  if (t.dataset.remove) { // move a downloaded variation's file to Trash + remove it
+    // The md5 is hex (no ":"), so split on the FIRST ":" only — the book id is
+    // everything before it. Do NOT gate on window.confirm(): in the Tauri webview
+    // a synchronous confirm() can return false without showing a dialog, which
+    // silently swallowed the click. Removal moves the file to Trash (recoverable).
+    var sep = t.dataset.remove.indexOf(":");
+    var rid = t.dataset.remove.slice(0, sep), rmd5 = t.dataset.remove.slice(sep + 1);
+    var rmbk = bookById(rid);
+    if (rmbk && hasTauri()) {
+      invoke("remove_download", { listId: listArg(rmbk.list), bookId: rmbk.bid, md5: rmd5 })
+        .then(applyLibrary)
+        .catch(function (err) { toast("Remove failed: " + (errText(err) || "unknown error")); });
+    }
+    return;
+  }
+  if (t.dataset.marknf) { // user gives up on a "Needs you" book → Cannot download
+    var nbk = bookById(t.dataset.marknf);
+    if (nbk) { nbk.discovery = "not_found"; nbk.review = false; render(); } // optimistic
+    if (hasTauri() && nbk) {
+      invoke("mark_not_found", { listId: listArg(nbk.list), bookId: nbk.bid })
+        .then(applyLibrary)
+        .catch(function (err) { console.error("mark_not_found failed:", err && err.message); });
+    }
+    return;
+  }
+  if (t.dataset.dl) { // download (or re-download/retry) a specific variation
+    var p = t.dataset.dl.split(":"), bk = bookById(p[0]), v = bk && bk.versions[+p[1]];
+    if (v) { v.state = "downloading"; v.progress = 3; }       // optimistic
+    render();
+    if (hasTauri() && v) onRequestVariation(bk.bid, v.md5, bk.list);
+    return;
+  }
+  if (t.dataset.cancelv) { // un-request a not-yet-started variation -> available
+    var p2 = t.dataset.cancelv.split(":"), bk2 = bookById(p2[0]), v2 = bk2 && bk2.versions[+p2[1]];
+    if (v2) { v2.state = "available"; v2.progress = 0; }       // optimistic
+    render();
+    if (hasTauri() && v2) onCancelVariation(bk2.bid, v2.md5, bk2.list);
+    return;
+  }
+  if (t.dataset.canceldl) { // cancel an in-flight/queued/paused variation download
+    var pc = t.dataset.canceldl.split(":"), bkc = bookById(pc[0]), vc = bkc && bkc.versions[+pc[1]];
+    if (vc) { vc.state = "cancelled"; vc.progress = 0; }       // optimistic
+    render();
+    if (hasTauri() && vc) onCancelDownload(bkc.bid, vc.md5, bkc.list);
+    return;
+  }
+  if (t.dataset.pausev) { // pause an in-flight/queued variation download
+    var pp = t.dataset.pausev.split(":"), bkp = bookById(pp[0]), vp = bkp && bkp.versions[+pp[1]];
+    if (vp) { vp.state = "paused"; }                            // optimistic
+    render();
+    if (hasTauri() && vp) onPauseVariation(bkp.bid, vp.md5, bkp.list);
+    return;
+  }
+  if (t.dataset.resumev) { // resume a paused variation download
+    var pr = t.dataset.resumev.split(":"), bkr = bookById(pr[0]), vr = bkr && bkr.versions[+pr[1]];
+    if (vr) { vr.state = "downloading"; }                       // optimistic
+    render();
+    if (hasTauri() && vr) onResumeVariation(bkr.bid, vr.md5, bkr.list);
+    return;
+  }
+  if (t.dataset.series) { // download the whole series this book belongs to
+    var sbk = bookById(t.dataset.series);
+    if (sbk) onDownloadSeries(sbk.bid, sbk.list);
+    return;
+  }
+  if (t.dataset.reveal != null) { if (t.dataset.reveal) onReveal(t.dataset.reveal); return; }
+  if (t.dataset.top) { var bt = bookById(t.dataset.top); if (bt) bt.priority = !bt.priority; render(); return; }
+  if (t.dataset.list) {
+    CURRENT = t.dataset.list; FILTER = "all"; FMT_FILTER = ""; SELECTED = null; render();
+    if (hasTauri()) invoke("select_list", { listId: CURRENT }).catch(function () {});
+    return;
+  }
+  if (t.dataset.filter) { FILTER = t.dataset.filter; SELECTED = null; render(); return; }
+  if (t.dataset.fmtfilter != null) { // toggle the format filter (click active = clear)
+    FMT_FILTER = (FMT_FILTER === t.dataset.fmtfilter ? "" : t.dataset.fmtfilter); SELECTED = null; render(); return;
+  }
+  if (t.dataset.toggle != null) {
+    var key = t.dataset.toggle;
+    if (key.charAt(0) === "L") { var l = LISTS[+key.slice(1)]; l.collapsedAll = !l.collapsedAll; }
+    else { var g = currentList().groups[+key.slice(1)]; g.collapsed = !g.collapsed; }
+    render(); return;
+  }
+  if (t.dataset.open) { // select a book → open its inline detail panel
+    if (SELECTED === t.dataset.open) { DETAIL_COLLAPSED = !DETAIL_COLLAPSED; }
+    else { SELECTED = t.dataset.open; DETAIL_COLLAPSED = false; }
+    render(); return;
+  }
+  if (t.dataset.imptab) { IMPORT_TAB = t.dataset.imptab; syncImportTabs(); return; }
+
+  var a = t.dataset.action;
+  if (a === "toggle-run") { onToggleRun(); return; }
+  if (a === "open-import") { openImport(); return; }
+  if (a === "close-import") { closeImport(); return; }
+  if (a === "confirm-import") { onConfirmImport(); return; }
+  if (a === "open-settings") { openSettings(); return; }
+  if (a === "close-settings") { closeSettings(); return; }
+  if (a === "close-history") { closeHistory(); return; }
+  if (a === "save-settings") { onSaveSettings(); return; }
+  if (a === "choose-folder") { onChooseFolder(); return; }
+  if (a === "refresh-mirrors") { onRefreshMirrors(); return; }
+  if (a === "reorganize-files") { onReorganizeFiles(t); return; }
+  if (a === "reorganize-details") { onReorganizeDetails(); return; }
+  if (a === "cleanup-parts") { onCleanupParts(t); return; }
+  if (a === "close-drawer") { DETAIL_COLLAPSED = true; render(); return; }
+  if (a === "toggle-active") { ACTIVE_COLLAPSED = !ACTIVE_COLLAPSED; renderActivePanel(); return; }
+  if (a === "toggle-sidebar") {
+    SIDEBAR_COLLAPSED = !SIDEBAR_COLLAPSED;
+    document.getElementById("sidebar").classList.toggle("collapsed", SIDEBAR_COLLAPSED);
+    return;
+  }
+  if (a === "noop") { return; }
+});
+
+/* ---- settings sheet ---- */
+function openSettings() {
+  renderSettings();
+  document.getElementById("settingsScrim").classList.add("open");
+  document.getElementById("settingsSheet").classList.add("open");
+  // Gray "Reorganize now" if the on-disk layout is already canonical.
+  if (hasTauri()) {
+    invoke("reorganize_needed")
+      .then(function (n) { REORG_COUNT = n | 0; renderSettings(); })
+      .catch(function () {});
+  }
+}
+function closeSettings() {
+  document.getElementById("settingsScrim").classList.remove("open");
+  document.getElementById("settingsSheet").classList.remove("open");
+}
+/* Read the inputs back into state. (Returns the collected values so the Tauri
+   save can forward them to set_settings + set_config.) */
+function collectSettings() {
+  function num(id, def) { var v = parseFloat((document.getElementById(id) || {}).value); return isNaN(v) ? def : v; }
+  function str(id, def) { var el = document.getElementById(id); return el ? el.value : def; }
+  SETTINGS.auto_threshold = num("setAuto", SETTINGS.auto_threshold);
+  SETTINGS.near_threshold = num("setNear", SETTINGS.near_threshold);
+  SETTINGS.naming_template = str("setTpl", SETTINGS.naming_template);
+  SETTINGS.keep_top = Math.max(1, Math.round(num("setKeep", SETTINGS.keep_top)));
+  SETTINGS.language = str("setLang", SETTINGS.language).trim();
+  APPCFG.out_dir = str("setOut", APPCFG.out_dir);
+  APPCFG.max_concurrent_downloads = Math.max(1, Math.round(num("setMaxDl", APPCFG.max_concurrent_downloads || 5)));
+  APPCFG.query_concurrency = Math.max(1, Math.round(num("setQConc", APPCFG.query_concurrency)));
+  APPCFG.max_attempts = Math.max(1, Math.round(num("setAttempts", APPCFG.max_attempts)));
+  var hedgeEl = document.getElementById("setHedge");
+  if (hedgeEl) APPCFG.hedge_enabled = !!hedgeEl.checked;
+}
+/* Save: collect the inputs, then (under Tauri) persist per-list settings via
+   set_settings and global settings via set_config; over file:// just round-trip
+   the JS state. */
+function onSaveSettings() {
+  collectSettings();
+  closeSettings();
+  render();
+  if (!hasTauri()) return;
+  // Persist to the engine. The client state (just collected) stays the source of
+  // truth for the open UI, so we do NOT re-apply the backend response (which
+  // could otherwise momentarily revert the sheet); a relaunch loads the
+  // persisted values fresh. "match-title" (the default) is sent as an empty
+  // language; the engine infers each book's language from its title's script and
+  // applies it as a soft preference (see matching::detect_title_language).
+  invoke("set_settings", {
+    listId: listArg(CURRENT),
+    settings: {
+      format_pref: FORMATS,
+      language: SETTINGS.language === "match-title" ? "" : SETTINGS.language,
+      naming_template: SETTINGS.naming_template,
+      auto_threshold: SETTINGS.auto_threshold,
+      near_threshold: SETTINGS.near_threshold,
+      seq_per_group: SETTINGS.seq_per_group,
+      keep_top: SETTINGS.keep_top
+    }
+  })
+    .then(function () {
+      return invoke("set_config", {
+        config: {
+          out_dir: APPCFG.out_dir,
+          max_concurrent_downloads: APPCFG.max_concurrent_downloads,
+          query_concurrency: APPCFG.query_concurrency,
+          max_attempts: APPCFG.max_attempts,
+          hedge_enabled: APPCFG.hedge_enabled
+        }
+      });
+    })
+    .catch(function (err) {
+      console.error("save settings failed:", err && err.message);
+      alert("Couldn't save settings: " + ((err && err.message) || err));
+    });
+}
+/* Choose a download folder. Uses the dialog plugin when available; otherwise the
+   text field remains the source of truth (an acceptable fallback). */
+function onChooseFolder() {
+  if (TAURI && TAURI.dialog && TAURI.dialog.open) {
+    TAURI.dialog.open({ directory: true, multiple: false })
+      .then(function (dir) {
+        if (dir) { APPCFG.out_dir = dir; var el = document.getElementById("setOut"); if (el) el.value = dir; }
+      })
+      .catch(function () {});
+  }
+}
+
+/* =====================================================================
+   Backend actions. Each calls a real Tauri command when the engine is present
+   and re-applies the returned ViewModel; over file:// the optimistic local
+   mutation above already reflected the change (the demo simulation drives the
+   rest).
+   ===================================================================== */
+/* `listId` is the engine-side list a book belongs to; "__all__" is never a real
+   list, so resolve it to null and let the backend fall back to the active list. */
+function listArg(listId) { return listId && listId !== "__all__" ? listId : null; }
+
+function onRequestVariation(bookId, md5, listId) {
+  invoke("request_variation", { listId: listArg(listId), bookId: bookId, md5: md5 })
+    .then(applyLibrary)
+    .catch(function (err) {
+      // Surface the cross-list guard ("this file is already chosen for …") and any
+      // other selection failure — silently swallowing it left the user wondering
+      // why a click did nothing.
+      toast(errText(err) || "Couldn't select that copy.");
+      console.error("request_variation failed:", err && err.message);
+    });
+}
+/* "Enter manually": send a user-pasted md5 (or libgen URL) for a not-found book.
+   `bookId` is the composite UI id; the backend needs the per-list bid + list. */
+function onAddManual(bookId, input, errEl) {
+  if (!hasTauri()) { if (errEl) errEl.textContent = "(only available in the app)"; return; }
+  var bk = bookById(bookId);
+  if (!bk) return;
+  invoke("add_manual_download", { listId: listArg(bk.list), bookId: bk.bid, input: input })
+    .then(function (lib) { MANUAL_FOR = null; applyLibrary(lib); })
+    .catch(function (err) { if (errEl) errEl.textContent = "Failed: " + (errText(err) || "unknown error"); });
+}
+/* Replace a wrong download with the recommended copy: queues the recommended
+   variation; the old file is moved to Trash once the new one finishes. */
+function onReplaceDownload(bookId, md5, listId) {
+  if (!hasTauri()) return;
+  invoke("replace_download", { listId: listArg(listId), bookId: bookId, recommendedMd5: md5 })
+    .then(applyLibrary)
+    .then(function () { return invoke("start_downloads", { listId: listArg(listId) }); })
+    .then(applyLibrary)
+    .catch(function (err) { console.error("replace_download failed:", err && err.message); });
+}
+/* Accept the already-downloaded copy of a book under review (clear "check
+   download"); the book settles as Done without re-downloading. */
+function onAcceptDownload(bookId, listId) {
+  if (!hasTauri()) {
+    var b = bookById(bookId); // offline/preview: optimistic
+    if (b) { b.review = false; render(); }
+    return;
+  }
+  invoke("accept_download", { listId: listArg(listId), bookId: bookId })
+    .then(applyLibrary)
+    .catch(function (err) { console.error("accept_download failed:", err && err.message); });
+}
+function onCancelVariation(bookId, md5, listId) {
+  invoke("cancel_variation", { listId: listArg(listId), bookId: bookId, md5: md5 })
+    .then(applyLibrary)
+    .catch(function (err) { console.error("cancel_variation failed:", err && err.message); });
+}
+/* Lifecycle: pause/resume/cancel an in-flight (or queued/paused) variation. */
+function onPauseVariation(bookId, md5, listId) {
+  invoke("pause_variation", { listId: listArg(listId), bookId: bookId, md5: md5 })
+    .then(applyLibrary)
+    .catch(function (err) { console.error("pause_variation failed:", err && err.message); });
+}
+function onResumeVariation(bookId, md5, listId) {
+  invoke("resume_variation", { listId: listArg(listId), bookId: bookId, md5: md5 })
+    .then(applyLibrary)
+    // Resuming returns the job to Pending; kick the queue so it actually continues.
+    .then(function (lib) { return invoke("start_downloads", { listId: listArg(listId), site: "libgen.li" }); })
+    .then(applyLibrary)
+    .catch(function (err) { console.error("resume_variation failed:", err && err.message); });
+}
+/* "Download whole series →": look the book's series up on Open Library, seed a
+   NEW list with its ordered members, and run it. On success the backend returns
+   the refreshed library with the new list already selected — adopt that
+   selection. Over file:// (no engine) this no-ops gracefully. */
+/* In-app toast. The Tauri webview does not reliably show window.alert()/confirm(),
+   so user feedback (errors, async results) must render in the DOM. Self-contained:
+   no markup/CSS needed up front. */
+function toast(msg, opts) {
+  opts = opts || {};
+  var d = document.createElement("div");
+  d.textContent = msg;
+  d.style.cssText = "position:fixed;bottom:26px;left:50%;transform:translateX(-50%);" +
+    "background:var(--text);color:var(--panel);padding:10px 16px;border-radius:8px;" +
+    "font-size:13px;z-index:9999;box-shadow:0 6px 20px rgba(0,0,0,.28);max-width:80%;text-align:center;";
+  document.body.appendChild(d);
+  // Sticky toasts stay until the caller removes the returned node (e.g. a long
+  // async op); otherwise they auto-dismiss.
+  if (!opts.sticky) setTimeout(function () { d.remove(); }, opts.ms || 4000);
+  return d;
+}
+function errText(err) { return (typeof err === "string" ? err : (err && err.message)) || ""; }
+
+function onDownloadSeries(bookId, listId) {
+  if (!hasTauri()) return;
+  // Sticky loading toast — the Open Library lookup can take several seconds, so
+  // keep the indicator up until it resolves (removed in both then/catch).
+  var loading = toast("Looking up the series on Open Library… (a few seconds)", { sticky: true });
+  invoke("download_series", { listId: listArg(listId), bookId: bookId })
+    .then(function (lib) {
+      loading.remove();
+      if (lib && lib.current) { CURRENT = lib.current; SELECTED = null; }
+      toast("Series list created — downloading its books.");
+      return applyLibrary(lib);
+    })
+    .catch(function (err) {
+      loading.remove();
+      toast(errText(err) || "Could not download the series.");
+    });
+}
+function onCancelDownload(bookId, md5, listId) {
+  invoke("cancel_download", { listId: listArg(listId), bookId: bookId, md5: md5 })
+    .then(applyLibrary)
+    .catch(function (err) { console.error("cancel_download failed:", err && err.message); });
+}
+function onSetFormatPref() {
+  invoke("set_format_pref", { listId: listArg(CURRENT), formats: FORMATS })
+    .then(applyLibrary)
+    .catch(function (err) { console.error("set_format_pref failed:", err && err.message); });
+}
+function onReveal(path) {
+  if (hasTauri() && path) invoke("reveal", { path: path }).catch(function (err) { console.error("reveal failed:", err && err.message); });
+}
+/* Global button: "Start downloading for all lists" (start_all) ⇄ "Stop all"
+   (stop_all). The engine drives discovery+download in the background. */
+function onToggleRun() {
+  RUNNING = !RUNNING;
+  document.getElementById("runBtn").textContent = RUNNING ? "❚❚ Stop all" : "▶ Start downloading for all lists";
+  if (hasTauri()) {
+    var cmd = RUNNING ? "start_all" : "stop_all";
+    invoke(cmd, {}).then(applyLibrary)
+      .catch(function (err) { console.error(cmd + " failed:", err && err.message); })
+      .finally(renderActivePanel);
+    return;
+  }
+  if (RUNNING) startSim(); else stopSim();
+  renderActivePanel();
+}
+
+/* Per-list download control (from the list right-click menu) — engine goals. */
+function startListDownloads(listId) {
+  if (!listId || listId === "__all__") return;
+  if (!hasTauri()) { setQuerying(true, "Starting…"); setTimeout(function () { setQuerying(false); }, 500); return; }
+  invoke("start", { listId: listId }).then(applyLibrary)
+    .catch(function (err) { console.error("start failed:", err && err.message); })
+    .finally(renderActivePanel);
+}
+function pauseListDownloads(listId) {
+  if (!listId || listId === "__all__") return;
+  if (!hasTauri()) return;
+  invoke("stop", { listId: listId }).then(applyLibrary)
+    .catch(function (err) { console.error("stop failed:", err && err.message); })
+    .finally(renderActivePanel);
+}
+function onConfirmImport() {
+  if (hasTauri()) {
+    var payload = importPayload();
+    if (payload) {
+      // load_list is an implicit Start (goal=Complete): the engine begins
+      // discovering + downloading right after import. No manual refresh.
+      invoke("load_list", { text: payload.text, isJson: payload.isJson })
+        .then(applyLibrary)
+        .catch(function (err) { console.error("load_list failed:", err && err.message); });
+    }
+  }
+  closeImport();
+}
+/* Collect the import sheet's current text + format into a backend payload. */
+function importPayload() {
+  if (IMPORT_TAB === "file") return IMPORT_FILE ? { text: IMPORT_FILE.text, isJson: IMPORT_FILE.isJson } : null;
+  var title = document.getElementById("mTitle").value || "";
+  var author = document.getElementById("mAuthor").value || "";
+  if (!title.trim()) return null;
+  return { text: "# Manual\n\n- " + title + (author ? " — " + author : "") + "\n", isJson: false };
+}
+
+/* ---- import sheet ---- */
+function openImport() {
+  IMPORT_FILE = null;
+  document.getElementById("fileInput").value = "";
+  document.getElementById("fileChosen").classList.add("hide");
+  IMPORT_TAB = "file"; syncImportTabs();
+  document.getElementById("scrim").classList.add("open");
+  document.getElementById("sheet").classList.add("open");
+}
+/* Read a chosen/dropped .md or .json file into the import flow. Format detected
+   from the extension, falling back to a content sniff ('{' = JSON). */
+function readImportFile(file) {
+  if (!file) return;
+  var r = new FileReader();
+  r.onload = function () {
+    var text = String(r.result || "");
+    var isJson = /\.json$/i.test(file.name) || text.trim().charAt(0) === "{";
+    IMPORT_FILE = { text: text, isJson: isJson, name: file.name };
+    var fc = document.getElementById("fileChosen");
+    fc.classList.remove("hide");
+    fc.innerHTML = "📄 " + esc(file.name) + " · " + (isJson ? "JSON" : "Markdown") +
+      " · " + Math.max(1, Math.round(text.length / 1024)) + " KB";
+    updateImportPreview();
+  };
+  r.readAsText(file);
+}
+function closeImport() {
+  document.getElementById("scrim").classList.remove("open");
+  document.getElementById("sheet").classList.remove("open");
+}
+function syncImportTabs() {
+  var tabs = document.querySelectorAll("#importTabs .tab");
+  tabs.forEach(function (b) { b.classList.toggle("active", b.dataset.imptab === IMPORT_TAB); });
+  document.querySelectorAll("[data-imppane]").forEach(function (p) { p.classList.toggle("hide", p.dataset.imppane !== IMPORT_TAB); });
+  updateImportPreview();
+}
+document.addEventListener("input", function (e) {
+  if (/^m(Title|Author|Fmt)$/.test(e.target.id)) updateImportPreview();
+  // Live-update the slider value readouts in the Settings sheet.
+  if (e.target.id === "setAuto") { var v = document.getElementById("setAutoVal"); if (v) v.textContent = (+e.target.value).toFixed(2); }
+  if (e.target.id === "setNear") { var v2 = document.getElementById("setNearVal"); if (v2) v2.textContent = (+e.target.value).toFixed(2); }
+});
+document.addEventListener("change", function (e) {
+  if (e.target.id === "fileInput") readImportFile(e.target.files && e.target.files[0]);
+});
+function updateImportPreview() {
+  var pv = document.getElementById("importPreview");
+  var groups = [];
+  try {
+    if (IMPORT_TAB === "file") {
+      if (!IMPORT_FILE) { pv.innerHTML = '<span style="color:var(--text-faint)">Choose a file to preview its books.</span>'; return; }
+      groups = IMPORT_FILE.isJson ? parseJsonPreview(IMPORT_FILE.text) : parseMdPreview(IMPORT_FILE.text);
+    } else {
+      groups = [{ name: "Manual", books: [ (document.getElementById("mTitle").value || "—") + " — " + (document.getElementById("mAuthor").value || "—") ] }];
+    }
+  } catch (err) { pv.innerHTML = '<span style="color:var(--red)">Could not parse: ' + esc(err.message) + '</span>'; return; }
+  var n = groups.reduce(function (a, g) { return a + g.books.length; }, 0);
+  var html = '<div style="color:var(--text-dim);margin-bottom:6px">Preview · ' + groups.length + ' group(s), ' + n + ' book(s)</div>';
+  groups.forEach(function (g) {
+    html += '<div class="pg">' + esc(g.name) + '</div>';
+    g.books.forEach(function (b) { html += '<div class="pb">' + esc(b) + '</div>'; });
+  });
+  pv.innerHTML = html;
+}
+function parseMdPreview(md) {
+  var groups = [], cur = null;
+  md.split("\n").forEach(function (line) {
+    var l = line.trim();
+    var h = l.match(/^#{2,3}\s+(.*)/);
+    var t = l.match(/^#\s+(.*)/);
+    var it = l.match(/^(?:\d+[.)]|[-*])\s+(.*)/);
+    if (h) { cur = { name: h[1].replace(/^.*—\s*/, ""), books: [] }; groups.push(cur); }
+    else if (t) { /* list title */ }
+    else if (it) { if (!cur) { cur = { name: "Books", books: [] }; groups.push(cur); } cur.books.push(it[1]); }
+  });
+  return groups;
+}
+function parseJsonPreview(txt) {
+  var o = JSON.parse(txt);
+  return (o.sections || []).map(function (s) {
+    return { name: s.title || "Group", books: (s.books || []).map(function (b) { return b.title + (b.author ? " — " + b.author : ""); }) };
+  });
+}
+
+/* ---- simulation: animate the queue so flows are demoable ---- */
+var simTimer = null;
+function startSim() {
+  if (simTimer) return;
+  simTimer = setInterval(function () {
+    // The engine is global: advance/promote across ALL lists, capped by a global
+    // active limit (mirrors the shared per-host concurrency). Advance each
+    // downloading VARIATION independently.
+    var downloading = [];
+    everyBook().forEach(function (b) {
+      (b.versions || []).forEach(function (v) { if (v.state === "downloading") downloading.push(v); });
+    });
+    downloading.forEach(function (v) {
+      v.progress += 6 + ((v.size * 10) % 5);
+      if (v.progress >= 100) { v.progress = 100; v.state = "done"; }
+    });
+    // Prioritized ("move to top") books jump the queue; otherwise FIFO. Start
+    // the best available variation of the next queued book.
+    if (downloading.length < 5) {
+      var queued = everyBook().filter(function (b) { return effectiveStatus(b) === "queued" && (b.versions || []).length; });
+      var q = queued.filter(function (b) { return b.priority; })[0] || queued[0];
+      if (q) { q.versions[0].state = "downloading"; q.versions[0].progress = 4; q.priority = false; }
+    }
+    render();
+  }, 700);
+}
+function stopSim() { if (simTimer) { clearInterval(simTimer); simTimer = null; } }
+
+/* =====================================================================
+   Backend integration — when running under Tauri, replace the multi-list demo
+   with the single real list the engine has loaded, and keep it congruent with
+   the demo shape so all the same render/interaction code applies.
+   ===================================================================== */
+
+/* Adapt a backend ViewModel into one entry of LISTS (the UI's list shape). The
+   engine already projects per-variation state, so this is a near-identity map. */
+function vmToList(vm) {
+  return {
+    id: vm.id || "loaded",
+    title: vm.title,
+    subtitle: vm.subtitle,
+    collapsedAll: false,
+    groups: (vm.groups || []).map(function (g) {
+      return {
+        name: g.name,
+        collapsed: !!g.collapsed,
+        books: (g.books || []).map(function (bk) {
+          return {
+            // `id` is GLOBALLY unique (list + backend id) — book ids reset to bk0
+            // per list, so a bare bk.id collides across lists (wrong detail panel).
+            // `bid` keeps the per-list backend id for engine calls (paired w/ list).
+            id: (vm.id || "loaded") + "/" + bk.id, bid: bk.id,
+            list: vm.id || "loaded", title: bk.title, author: bk.author,
+            seq: bk.seq, priority: false, discovery: bk.discovery,
+            review: !!bk.review, recommended_md5: bk.recommended_md5 || null,
+            history: bk.history || [],
+            versions: (bk.versions || []).map(function (v) {
+              return {
+                fmt: v.fmt, size: v.size, year: v.year, publisher: v.publisher || "",
+                title: v.title || "", author: v.author || "",
+                language: v.language || "", pages: (v.pages != null ? v.pages : null),
+                md5: v.md5, state: v.state, progress: v.progress || 0, host: v.host || null,
+                output_path: v.output_path || null,
+                cover_url: v.cover_url || null, score: (v.score != null ? v.score : null),
+                downloaded_bytes: (v.downloaded_bytes != null ? v.downloaded_bytes : null),
+                total_bytes: (v.total_bytes != null ? v.total_bytes : null),
+                speed_bps: (v.speed_bps != null ? v.speed_bps : null),
+                eta_secs: (v.eta_secs != null ? v.eta_secs : null)
+              };
+            })
+          };
+        })
+      };
+    })
+  };
+}
+
+/* Apply a backend ViewLibrary `{ lists, current }`: rebuild the multi-list
+   sidebar from the engine's persisted lists, preserving each list's
+   group-collapse state and the current selection/filter. The preferred-format
+   order is taken FROM the active list (authoritative). */
+function applyLibrary(libVm) {
+  if (!libVm || !libVm.lists) return libVm;
+  // Remember collapse state per list+group across rebuilds.
+  var collapsed = {}, liveProg = {};
+  LISTS.forEach(function (l) {
+    l.groups.forEach(function (g) {
+      collapsed[l.id + "::" + g.name] = !!g.collapsed;
+      // Snapshot LIVE in-flight telemetry: the backend viewmodel's downloaded_bytes
+      // comes from the persisted job (which lags the live download), so a rebuild here
+      // would reset a downloading variation toward 0 — that's the downloading↔connecting
+      // flicker. Keep the live numbers and re-apply them below if they're still ahead.
+      g.books.forEach(function (b) {
+        (b.versions || []).forEach(function (v) {
+          if (v.state === "downloading" && ((v.downloaded_bytes || 0) > 0 || (v.speed_bps || 0) > 0))
+            liveProg[v.md5] = { db: v.downloaded_bytes, sp: v.speed_bps, eta: v.eta_secs, tot: v.total_bytes, pr: v.progress };
+        });
+      });
+    });
+  });
+
+  LISTS = libVm.lists.map(function (vm) {
+    var list = vmToList(vm);
+    list.groups.forEach(function (g) { g.collapsed = !!collapsed[list.id + "::" + g.name]; });
+    return list;
+  });
+  // Re-apply live progress where it's still ahead of the (lagged) rebuild, so the bar
+  // and the active-panel "downloading"/"connecting" label don't jump backward.
+  LISTS.forEach(function (l) { l.groups.forEach(function (g) { g.books.forEach(function (b) {
+    (b.versions || []).forEach(function (v) {
+      var lp = liveProg[v.md5];
+      if (lp && v.state === "downloading" && (lp.db || 0) > (v.downloaded_bytes || 0)) {
+        v.downloaded_bytes = lp.db; v.speed_bps = lp.sp; v.eta_secs = lp.eta;
+        if (lp.tot) v.total_bytes = lp.tot;
+        if (lp.pr != null) v.progress = lp.pr;
+      }
+    });
+  }); }); });
+
+  // Keep the current selection if still valid; else follow the backend / first.
+  var ids = LISTS.map(function (l) { return l.id; });
+  if (CURRENT !== "__all__" && ids.indexOf(CURRENT) < 0) {
+    CURRENT = (libVm.current && (libVm.current === "__all__" || ids.indexOf(libVm.current) >= 0))
+      ? libVm.current : (ids[0] || "__all__");
+  }
+  // Preferred-format order + per-list settings from the active (or first) list.
+  var active = LISTS.filter(function (l) { return l.id === CURRENT; })[0] || LISTS[0];
+  var vmActive = libVm.lists.filter(function (v) { return (v.id || "loaded") === (active && active.id); })[0];
+  if (vmActive && vmActive.format_pref && vmActive.format_pref.length) FORMATS = vmActive.format_pref.slice();
+  if (vmActive && vmActive.settings) {
+    var s = vmActive.settings;
+    SETTINGS = {
+      language: s.language || "",
+      naming_template: s.naming_template,
+      auto_threshold: s.auto_threshold,
+      near_threshold: s.near_threshold,
+      seq_per_group: !!s.seq_per_group,
+      keep_top: s.keep_top
+    };
+    if (s.format_pref && s.format_pref.length) FORMATS = s.format_pref.slice();
+  }
+  // Global app config + read-only search mirrors.
+  if (libVm.config) {
+    var c = libVm.config;
+    APPCFG = {
+      out_dir: c.out_dir || "",
+      query_concurrency: c.query_concurrency,
+      max_concurrent_downloads: c.max_concurrent_downloads || 5,
+      max_attempts: c.max_attempts,
+      hedge_enabled: !!c.hedge_enabled
+    };
+  }
+  if (libVm.search_mirrors) SEARCH_MIRRORS = libVm.search_mirrors.slice();
+  // Do NOT re-render the Settings sheet here: a background library refresh (e.g. the
+  // coalesced reload during downloads) would otherwise clobber the user's in-progress
+  // edits back to the persisted values. The sheet keeps the values it opened with;
+  // collectSettings() reads them from the DOM on Save.
+  render();
+  return libVm;
+}
+
+
+/* Live per-variation download progress: update the matching variation (keyed by
+   md5) in place, so the right glyph/progress bar moves without a re-query. */
+/* Drag the handle on the sidebar's right edge to resize it; width persists. */
+function wireSidebarResize() {
+  var handle = document.getElementById("sidebarResize");
+  if (!handle) return;
+  try {
+    var saved = parseInt(localStorage.getItem("sidebarW") || "", 10);
+    if (saved >= 150 && saved <= 600) document.documentElement.style.setProperty("--sidebar-w", saved + "px");
+  } catch (e) {}
+  var dragging = false;
+  handle.addEventListener("mousedown", function (e) {
+    dragging = true; handle.classList.add("dragging");
+    document.body.style.userSelect = "none"; document.body.style.cursor = "col-resize";
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove", function (e) {
+    if (!dragging) return;
+    var sb = document.getElementById("sidebar");
+    var w = Math.max(150, Math.min(600, Math.round(e.clientX - sb.getBoundingClientRect().left)));
+    document.documentElement.style.setProperty("--sidebar-w", w + "px");
+  });
+  document.addEventListener("mouseup", function () {
+    if (!dragging) return;
+    dragging = false; handle.classList.remove("dragging");
+    document.body.style.userSelect = ""; document.body.style.cursor = "";
+    var cur = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--sidebar-w"), 10);
+    try { if (cur) localStorage.setItem("sidebarW", String(cur)); } catch (e) {}
+  });
+}
+/* Drag the active panel's TOP edge to set its (fixed) expanded height; persisted. A
+   fixed height means downloads starting/finishing scroll the panel body instead of
+   growing the panel — so the book list above never reflows on progress. */
+function wireActivePanelResize() {
+  var handle = document.getElementById("apResize");
+  if (!handle) return;
+  try {
+    var saved = parseInt(localStorage.getItem("apH") || "", 10);
+    if (saved >= 120 && saved <= 700) document.documentElement.style.setProperty("--ap-h", saved + "px");
+  } catch (e) {}
+  var dragging = false;
+  handle.addEventListener("mousedown", function (e) {
+    dragging = true; handle.classList.add("dragging");
+    document.body.style.userSelect = "none"; document.body.style.cursor = "row-resize";
+    e.preventDefault();
+  });
+  document.addEventListener("mousemove", function (e) {
+    if (!dragging) return;
+    var panel = document.getElementById("activePanel");
+    var maxH = Math.max(200, Math.round(window.innerHeight * 0.7));
+    // Top-edge drag: new height = panel bottom − cursor Y.
+    var h = Math.max(120, Math.min(maxH, Math.round(panel.getBoundingClientRect().bottom - e.clientY)));
+    document.documentElement.style.setProperty("--ap-h", h + "px");
+  });
+  document.addEventListener("mouseup", function () {
+    if (!dragging) return;
+    dragging = false; handle.classList.remove("dragging");
+    document.body.style.userSelect = ""; document.body.style.cursor = "";
+    var cur = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--ap-h"), 10);
+    try { if (cur) localStorage.setItem("apH", String(cur)); } catch (e) {}
+  });
+}
+function wireProgress() {
+  listen("download://progress", function (e) {
+    var p = e.payload || {};
+    if (p.kind === "all_done") {
+      RUNNING = false;
+      document.getElementById("runBtn").textContent = "▶ Start queue";
+      refresh(); return;
+    }
+    noteLeg(p); // track per-leg (md5+host) state so hedge legs get their own panel line
+    everyBook().forEach(function (b) {
+      (b.versions || []).forEach(function (v) {
+        if (v.md5 !== p.md5) return;
+        if (p.kind === "resolved") { v.state = "downloading"; v.host = p.host; }
+        else if (p.kind === "bytes") {
+          v.state = "downloading"; v.host = p.host;
+          v.downloaded_bytes = p.bytes_done; v.total_bytes = p.total_bytes;
+          v.speed_bps = (p.speed_bps != null ? p.speed_bps : null);
+          v.eta_secs = (p.eta_secs != null ? p.eta_secs : null);
+          if (p.total_bytes) v.progress = Math.min(100, Math.round(100 * p.bytes_done / p.total_bytes));
+        }
+        else if (p.kind === "done") { v.state = "done"; v.progress = 100; v.output_path = p.path; }
+        else if (p.kind === "failed") { v.state = "failed"; }
+        else if (p.kind === "paused") { v.state = "paused"; }
+        else if (p.kind === "cancelled") { v.state = "cancelled"; v.progress = 0; }
+      });
+    });
+    // TARGETED rendering: a high-frequency BYTES/resolved event only changes the
+    // active-downloads panel (+ sidebar counts + open detail), so update just those —
+    // never rebuild the whole book list + its 300+ cover data-URLs on every byte.
+    // Only a TERMINAL transition (done/failed/cancelled) needs the full refresh (to
+    // move the row out of "active", pull fresh state, and localize new covers).
+    if (p.kind === "done" || p.kind === "failed" || p.kind === "cancelled") {
+      scheduleReload();
+    } else {
+      renderLive();
+    }
+  });
+}
+
+/* Live per-book transitions from the execution engine: engine://book
+   {list_id, book_id, status, goal} — reflect status + goal as the engine
+   advances each book toward its goal, so the list/panels tick in real time. */
+function wireEngine() {
+  listen("engine://book", function (e) {
+    var p = e.payload || {};
+    var hit = null;
+    everyBook().forEach(function (b) {
+      if (b.bid === p.book_id && (!p.list_id || b.list === p.list_id)) hit = b;
+    });
+    if (hit) {
+      if (p.status) hit.discovery = p.status;
+      if (p.goal) hit.goal = p.goal;
+      // TARGETED update only (active panel + sidebar + detail). Do NOT rebuild the
+      // book list on every engine tick — that per-event innerHTML replace is what made
+      // the list flicker during downloads. The list's status chips refresh via the
+      // debounced reload below (coalesced), so they still update, just not flickery.
+      renderLive();
+    }
+    // Reconcile candidates/versions/progress from the backend (events don't carry
+    // them) — fixes done-books-reading-queued and two-jobs-sharing-one-row.
+    scheduleReload();
+  });
+  // The background integrity scan demoted some Done variations (missing files) —
+  // re-pull the library so the UI reflects the new state without a manual reload.
+  listen("library://refresh", function () {
+    if (hasTauri()) invoke("library").then(applyLibrary).catch(function () {});
+  });
+}
+
+/* Live per-book query stage: as the engine searches each book it emits
+   query://book {list_id, book_id, stage}; reflect it so a row shows
+   "⟳ Being queried…" and the active panel lists it, in real time. */
+function wireQueryStage() {
+  listen("query://book", function (e) {
+    var p = e.payload || {};
+    var hit = null;
+    everyBook().forEach(function (b) {
+      if (b.bid === p.book_id && (!p.list_id || b.list === p.list_id)) hit = b;
+    });
+    if (hit && p.stage) { hit.discovery = p.stage; renderList(); renderActivePanel(); renderDetail(); }
+    scheduleReload(); // pull the freshly-found candidates/versions into the view
+  });
+}
+
+/* Show/hide the "searching mirrors" indicator while a query is in flight. */
+function setQuerying(on, msg) {
+  var el = document.getElementById("queryBar");
+  if (!el) return;
+  if (on) {
+    el.innerHTML = '<span class="qspin"></span><span>' + esc(msg || "Searching mirrors for matches…") + '</span>';
+    el.classList.remove("hide");
+  } else {
+    el.classList.add("hide");
+  }
+}
+
+/* Re-query: re-run matching on un-downloaded books with the latest algorithm,
+   preserving anything already downloaded/queued (no wasted bandwidth). */
+/* Save a corrected title/author and re-query just this book. */
+function onEditBook(bk, title, author) {
+  if (!bk) return;
+  if (!title || !title.trim()) { toast("Title can't be empty."); return; }
+  EDIT_BOOK = null;
+  if (!hasTauri()) { bk.title = title.trim(); bk.author = author; render(); return; }
+  invoke("edit_book", { listId: listArg(bk.list), bookId: bk.bid, title: title.trim(), author: author || "" })
+    .then(applyLibrary)
+    .catch(function (err) { toast("Couldn't update: " + (errText(err) || "unknown error")); });
+}
+
+function onRequery(listId) {
+  listId = listId || CURRENT;
+  if (!listId || listId === "__all__") { alert("Select a specific list to re-query."); return; }
+  if (!hasTauri()) { setQuerying(true, "Re-querying…"); setTimeout(function () { setQuerying(false); }, 600); return; }
+  setQuerying(true, "Re-querying this list with the latest matching…");
+  invoke("requery", { listId: listArg(listId) })
+    .then(applyLibrary)
+    .catch(function (err) { console.error("requery failed:", err && err.message); })
+    .finally(function () { setQuerying(false); });
+}
+
+/* ---- list right-click context menu (per-list actions) ---- */
+var CTX_LIST = null;
+function hideCtxMenu() { var m = document.getElementById("ctxMenu"); if (m) m.classList.add("hide"); CTX_LIST = null; }
+function showCtxMenu(x, y, listId, listName) {
+  CTX_LIST = listId;
+  var m = document.getElementById("ctxMenu");
+  m.innerHTML =
+    '<div class="ctx-head">' + esc(listName || "List") + '</div>' +
+    '<button data-ctx="start">▶ Start downloads</button>' +
+    '<button data-ctx="pause">❚❚ Pause downloads</button>' +
+    '<button data-ctx="requery">↻ Re-query this list</button>';
+  m.classList.remove("hide");
+  // Keep the menu on-screen.
+  var w = m.offsetWidth || 180, h = m.offsetHeight || 120;
+  m.style.left = Math.min(x, window.innerWidth - w - 6) + "px";
+  m.style.top = Math.min(y, window.innerHeight - h - 6) + "px";
+}
+document.addEventListener("contextmenu", function (e) {
+  var li = e.target.closest(".side-item[data-list]");
+  if (!li) { hideCtxMenu(); return; }
+  var id = li.getAttribute("data-list");
+  if (id === "__all__") { hideCtxMenu(); return; } // aggregate has no per-list actions
+  e.preventDefault();
+  showCtxMenu(e.clientX, e.clientY, id, (li.querySelector(".lbl") || {}).textContent);
+});
+document.addEventListener("click", function (e) {
+  var b = e.target.closest("#ctxMenu [data-ctx]");
+  if (b) {
+    var id = CTX_LIST, act = b.getAttribute("data-ctx");
+    hideCtxMenu();
+    if (!id) return;
+    if (act === "start") startListDownloads(id);
+    else if (act === "pause") pauseListDownloads(id);
+    else if (act === "requery") onRequery(id);
+    return;
+  }
+  if (!e.target.closest("#ctxMenu")) hideCtxMenu(); // click elsewhere closes
+});
+document.addEventListener("keydown", function (e) { if (e.key === "Escape") hideCtxMenu(); });
+
+/* Keyboard navigation of the book list: ↑/↓ (or k/j) move the selection through
+   the visible books; if the detail panel is open it refreshes to the new book
+   (render() re-renders it). Enter toggles the detail panel. Ignored while typing
+   in a field or when a modal sheet is open. */
+document.addEventListener("keydown", function (e) {
+  var tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target && e.target.isContentEditable)) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // Don't hijack arrows while a sheet/modal is open (let it scroll).
+  var modalOpen = ["sheet", "settingsSheet", "histSheet"].some(function (id) {
+    var el = document.getElementById(id); return el && el.classList.contains("open");
+  });
+  if (modalOpen) return;
+
+  var down = (e.key === "ArrowDown" || e.key === "j");
+  var up = (e.key === "ArrowUp" || e.key === "k");
+  if (down || up) {
+    var books = visibleBooks();
+    if (!books.length) return;
+    var idx = -1;
+    for (var i = 0; i < books.length; i++) if (books[i].id === SELECTED) { idx = i; break; }
+    if (idx < 0) idx = down ? -1 : books.length;          // start at an edge
+    var ni = Math.max(0, Math.min(books.length - 1, idx + (down ? 1 : -1)));
+    SELECTED = books[ni].id;
+    e.preventDefault();
+    render();                                              // refreshes detail if open
+    var sel = document.querySelector(".book.sel");
+    if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: "nearest" });
+  } else if (e.key === "Enter" && SELECTED) {
+    DETAIL_COLLAPSED = !DETAIL_COLLAPSED;                  // toggle the detail panel
+    e.preventDefault();
+    render();
+  }
+});
+
+/* Re-query + match the active list, then apply the refreshed library. */
+function refresh() {
+  if (!hasTauri()) return Promise.resolve();
+  setQuerying(true);
+  return invoke("query_and_match", { listId: listArg(CURRENT) })
+    .then(applyLibrary)
+    .catch(function () {})
+    .finally(function () { setQuerying(false); });
+}
+
+/* Debounced READ-ONLY reconcile with the backend's true state. Engine events
+   (engine://book / download://progress) only carry status+goal+per-md5 progress;
+   they do NOT carry a book's candidates/versions. So after a query populates a
+   book's variations, or a download finishes, the in-memory copy drifts (a done
+   book reads as "queued" with empty versions; two download jobs can't be told
+   apart). A short debounce after any engine event reloads the full ViewLibrary
+   (no re-query — the read-only `library` projection) and applyLibrary reconciles
+   everything: candidates, per-variation states, progress, done/queued. */
+var _reloadTimer = null;
+/* Coalesced full refresh from the engine/DB: pulls fresh per-book state AND
+   freshly-localized cover URLs (the background backfill writes them to the DB;
+   the in-memory LISTS would otherwise lag, leaving downloaded books on
+   placeholders). Debounced so a burst of progress events triggers ONE reload
+   (no per-event DOM rebuild → no flicker), and deferred while the user is
+   selecting text (applyLibrary re-renders, which would clear the selection). */
+function scheduleReload() {
+  if (!hasTauri() || _reloadTimer) return;
+  _reloadTimer = setTimeout(function () {
+    _reloadTimer = null;
+    if (isSelectingText()) { scheduleReload(); return; } // try again once selection clears
+    invoke("library").then(applyLibrary).catch(function () {});
+  }, 1000);
+}
+
+/* Seed Tauri with a sample markdown list so the app opens with content. */
+function mdSample() {
+  var l = LISTS[0];
+  var out = "# " + l.title + "\n\n";
+  l.groups.forEach(function (g) {
+    out += "## " + g.name + "\n";
+    g.books.forEach(function (b) { out += "- " + b.title + " — " + b.author + "\n"; });
+    out += "\n";
+  });
+  return out;
+}
+
+function markReady() { document.documentElement.setAttribute("data-ready", "1"); }
+
+/* boot */
+function boot() {
+  wireImportDrop();
+  if (hasTauri()) {
+    // The engine is the source of truth: start EMPTY (no demo data), then load
+    // whatever is persisted. A fresh DB stays empty, waiting for the user to
+    // import a list — we never seed sample books.
+    LISTS = []; CURRENT = "__all__";
+    render();
+    wireProgress();
+    wireQueryStage();
+    wireEngine();
+    wireSidebarResize();
+    wireActivePanelResize();
+    // Settings lives in the native app menu (⌘,) — open the sheet when fired.
+    listen("menu://settings", function () { openSettings(); });
+    // Launch is PAUSED: just load + show the persisted state. The engine does
+    // nothing until the user Starts or Re-queries a list — no auto-download.
+    invoke("library")
+      .then(function (lib) { applyLibrary(lib || { lists: [], current: "__all__" }); })
+      .catch(function (err) { console.error("boot failed:", err && err.message); })
+      .finally(markReady);
+  } else {
+    // file:// prototype/headless: keep the bundled demo data so the UI is demoable.
+    render();
+    markReady();
+  }
+}
+/* Wire the import dropzone (drag & drop a .md/.json onto it). */
+function wireImportDrop() {
+  var dz = document.getElementById("dropzone");
+  if (!dz) return;
+  ["dragover", "dragenter"].forEach(function (ev) {
+    dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add("drag"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.remove("drag"); });
+  });
+  dz.addEventListener("drop", function (e) {
+    readImportFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+}
+
+/* expose a tiny hook so the headless test can assert state deterministically */
+window.__APP__ = {
+  counts: counts, globalCounts: globalCounts,
+  lists: function () { return LISTS; },
+  getCurrent: function () { return CURRENT; },
+  setCurrent: function (id) { CURRENT = id; FILTER = "all"; FMT_FILTER = ""; SELECTED = null; render(); },
+  getFilter: function () { return FILTER; }, getSelected: function () { return SELECTED; },
+  getSettings: function () { return SETTINGS; }, getAppCfg: function () { return APPCFG; },
+  getFormats: function () { return FORMATS; },
+  openSettings: openSettings, // Settings is in the native app menu (⌘,); hook for tests
+  hasTauri: hasTauri, refresh: refresh
+};
+
+boot();
+</script>
+</body>
+</html>
