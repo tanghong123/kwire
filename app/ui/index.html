@@ -2408,6 +2408,28 @@ function toast(msg, opts) {
 }
 function errText(err) { return (typeof err === "string" ? err : (err && err.message)) || ""; }
 
+/* Reliable in-DOM confirm (the webview's confirm() is unreliable — it can return
+   false WITHOUT showing a dialog). Renders a sticky toast with Cancel/Confirm and
+   runs onYes() only when confirmed. */
+function confirmToast(msg, confirmLabel, onYes) {
+  var d = document.createElement("div");
+  d.style.cssText = "position:fixed;bottom:26px;left:50%;transform:translateX(-50%);" +
+    "background:var(--text);color:var(--panel);padding:12px 16px;border-radius:8px;" +
+    "font-size:13px;z-index:9999;box-shadow:0 6px 20px rgba(0,0,0,.28);max-width:80%;" +
+    "display:flex;flex-direction:column;gap:10px;align-items:center;text-align:center;";
+  var m = document.createElement("div"); m.textContent = msg; d.appendChild(m);
+  var row = document.createElement("div"); row.style.cssText = "display:flex;gap:8px;";
+  var no = document.createElement("button"); no.textContent = "Cancel";
+  var yes = document.createElement("button"); yes.textContent = confirmLabel || "Confirm";
+  var bs = "padding:5px 14px;border-radius:6px;border:0;cursor:pointer;font-size:13px;";
+  no.style.cssText = bs + "background:var(--border-strong);color:var(--text);";
+  yes.style.cssText = bs + "background:var(--red);color:#fff;";
+  row.appendChild(no); row.appendChild(yes); d.appendChild(row);
+  document.body.appendChild(d);
+  no.onclick = function () { d.remove(); };
+  yes.onclick = function () { d.remove(); onYes(); };
+}
+
 function onDownloadSeries(bookId, listId) {
   if (!hasTauri()) return;
   // Sticky loading toast — the Open Library lookup can take several seconds, so
@@ -2470,26 +2492,24 @@ function pauseListDownloads(listId) {
     .finally(renderActivePanel);
 }
 function removeList(listId) {
-  if (!listId || listId === "__all__") return;
+  if (!listId || listId === "__all__" || !hasTauri()) return;
   var l = (LISTS || []).filter(function (x) { return x.id === listId; })[0];
   var name = (l && l.title) || "this list";
-  if (!confirm('Remove "' + name + '" from Kwire?\n\nThe list and its tracking are deleted. Your downloaded files on disk are NOT removed.')) return;
-  if (!hasTauri()) return;
-  invoke("delete_list", { listId: listId }).then(applyLibrary)
-    .catch(function (err) { console.error("delete_list failed:", err && err.message); });
+  confirmToast('Remove "' + name + '"? The list and its tracking are deleted; downloaded files on disk are kept.', "Remove list", function () {
+    invoke("delete_list", { listId: listId }).then(applyLibrary)
+      .catch(function (err) { toast("Remove failed: " + (errText(err) || "unknown error")); });
+  });
 }
 function onConfirmImport() {
-  if (hasTauri()) {
-    var payload = importPayload();
-    if (payload) {
-      // load_list is an implicit Start (goal=Complete): the engine begins
-      // discovering + downloading right after import. No manual refresh.
-      invoke("load_list", { text: payload.text, isJson: payload.isJson })
-        .then(applyLibrary)
-        .catch(function (err) { console.error("load_list failed:", err && err.message); });
-    }
-  }
-  closeImport();
+  if (!hasTauri()) { closeImport(); return; }
+  var payload = importPayload();
+  if (!payload) { closeImport(); return; }
+  // load_list is an implicit Start (goal=Complete): the engine begins discovering
+  // + downloading right after import. A duplicate-titled list is REJECTED — keep
+  // the sheet open and surface the reason (Remove the existing list first / rename).
+  invoke("load_list", { text: payload.text, isJson: payload.isJson })
+    .then(function (vl) { applyLibrary(vl); closeImport(); })
+    .catch(function (err) { toast(errText(err) || "Import failed."); });
 }
 /* Collect the import sheet's current text + format into a backend payload. */
 function importPayload() {
