@@ -202,6 +202,7 @@ pub async fn start(
         active_id(&lib, list_id)?
     };
     set_goal_for(&state, &id, Goal::Complete).await?;
+    tracing::info!(list = %id, "list start: goal → Complete (engine will pursue downloads)");
     refresh_library(&state).await
 }
 
@@ -238,6 +239,10 @@ pub async fn stop(
             }
         }
     }
+    // Observability: how many in-flight downloads this Stop actually paused. If a
+    // list's dot stays green after Stop with `inflight_paused=0`, the activity is a
+    // shared-md5 "free ride" driven by ANOTHER (still-active) list, not this one.
+    tracing::info!(list = %id, inflight_paused = inflight.len(), "list stop: goal → Idle");
     state.wake_engine();
     refresh_library(&state).await
 }
