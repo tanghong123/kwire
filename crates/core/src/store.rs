@@ -497,6 +497,54 @@ impl Store {
         Ok(())
     }
 
+    /// Append one new [`BookRequest`] to the END of the group at `group_path`
+    /// (chain of declaration indices), assigning it the next `ord`. Used by the
+    /// mutable **Manual** list to add a book without rewriting the whole tree (no
+    /// other book's persisted state is touched). Errors if the group is unknown.
+    pub fn append_book(
+        &mut self,
+        list_id: i64,
+        group_path: &[usize],
+        book: &BookRequest,
+    ) -> Result<()> {
+        let group_id = self
+            .group_id_at(list_id, group_path)?
+            .with_context(|| format!("no group at list {list_id} group_path {group_path:?}"))?;
+        let next_ord: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(ord) + 1, 0) FROM book WHERE group_id = ?1",
+                params![group_id],
+                |r| r.get(0),
+            )
+            .context("computing next book ord")?;
+        let tx = self.conn.transaction().context("begin append_book")?;
+        insert_book_tx(&tx, group_id, next_ord, book)?;
+        tx.commit().context("commit append_book")?;
+        Ok(())
+    }
+
+    /// Remove the book at the given tree position (its candidates/jobs cascade via
+    /// `ON DELETE CASCADE`). Used by the mutable **Manual** list. Other books in
+    /// the group keep their `ord` (gaps are harmless — loads order by `ord, id`).
+    /// Errors if no book exists at that position.
+    pub fn remove_book(
+        &mut self,
+        list_id: i64,
+        group_path: &[usize],
+        book_index: usize,
+    ) -> Result<()> {
+        let book_id = self
+            .book_id_at(list_id, group_path, book_index)?
+            .with_context(|| {
+                format!("no book at list {list_id} group_path {group_path:?} index {book_index}")
+            })?;
+        self.conn
+            .execute("DELETE FROM book WHERE id = ?1", params![book_id])
+            .context("deleting book")?;
+        Ok(())
+    }
+
     /// Resolve the DB id of the book at the given tree position.
     fn book_id_at(
         &self,
@@ -1285,6 +1333,70 @@ mod tests {
         let li = search.iter().find(|q| q.host == "libgen.li").unwrap();
         assert_eq!(li.successes, 2); // both case variants counted together
         assert_eq!(store.site_quality(SiteRole::Download).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn append_book_adds_to_end_and_remove_book_drops_one() {
+        let mut store = Store::open_in_memory().unwrap();
+        // A single-group list (like the Manual list).
+        let list = DownloadList {
+            title: "Manual".into(),
+            settings: ListSettings::default(),
+            groups: vec![Group::new("Manual")],
+        };
+        let id = store.insert_list(&list).unwrap();
+
+        // Append two books to the (empty) root group.
+        for t in ["First", "Second"] {
+            store
+                .append_book(
+                    id,
+                    &[0],
+                    &BookRequest::new(BookInput {
+                        title: t.into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        let loaded = store.load_list(id).unwrap().unwrap();
+        let titles: Vec<&str> = loaded.groups[0]
+            .books
+            .iter()
+            .map(|b| b.input.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["First", "Second"], "appended in order");
+
+        // Remove the first; the second survives (other books untouched).
+        store.remove_book(id, &[0], 0).unwrap();
+        let loaded = store.load_list(id).unwrap().unwrap();
+        let titles: Vec<&str> = loaded.groups[0]
+            .books
+            .iter()
+            .map(|b| b.input.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["Second"]);
+
+        // Removing a non-existent position errors.
+        assert!(store.remove_book(id, &[0], 5).is_err());
+    }
+
+    #[test]
+    fn is_manual_round_trips_and_defaults_false_for_old_settings() {
+        let mut store = Store::open_in_memory().unwrap();
+        let mut list = sample_list();
+        list.settings.is_manual = true;
+        let id = store.insert_list(&list).unwrap();
+        assert!(store.load_list(id).unwrap().unwrap().settings.is_manual);
+
+        // A settings blob WITHOUT the field (old list) decodes to is_manual=false.
+        let s: ListSettings = serde_json::from_str(
+            r#"{"format_pref":["epub"],"naming_template":"{seq:02} - {title}.{ext}",
+                "auto_threshold":0.85,"near_threshold":0.45,"title_match_threshold":0.9,
+                "seq_per_group":true,"keep_top":5}"#,
+        )
+        .unwrap();
+        assert!(!s.is_manual, "absent field defaults to false");
     }
 
     #[test]

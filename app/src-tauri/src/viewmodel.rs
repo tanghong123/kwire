@@ -32,6 +32,10 @@ pub struct ViewModel {
     /// mirror of the engine's [`ListSettings`]). `format_pref` above is the same
     /// data surfaced separately for the legacy toolbar/format-rank consumer.
     pub settings: ViewListSettings,
+    /// True only for the singleton mutable **Manual** list (the list's
+    /// `settings.is_manual`). The UI shows the per-book add/remove affordances
+    /// only when this is set; imported reading lists are immutable.
+    pub is_manual: bool,
     pub groups: Vec<ViewGroup>,
 }
 
@@ -365,6 +369,7 @@ pub fn build_with_id(id: String, list: &DownloadList) -> ViewModel {
         subtitle: format!("{total} book(s)"),
         format_pref: format_pref_strings(&list.settings),
         settings: ViewListSettings::from(&list.settings),
+        is_manual: list.settings.is_manual,
         groups,
     }
 }

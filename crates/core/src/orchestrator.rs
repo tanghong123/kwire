@@ -1110,6 +1110,64 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Append ONE new book (built from `title`/`authors`) to the list's root
+    /// group and persist it, returning its tree position. The new book starts
+    /// `Queued` with `goal = Complete` so the engine immediately queries and (on a
+    /// match) downloads it. Used by the mutable **Manual** list's add-book command.
+    /// Errors on an empty title. The orchestrator caches no list (every read goes
+    /// through `snapshot()`/`request_at()`), so persisting via the store is all
+    /// that's needed to keep the engine's view consistent.
+    pub fn add_book(&mut self, title: &str, authors: Vec<String>) -> Result<(Vec<usize>, usize)> {
+        let title = title.trim();
+        anyhow::ensure!(!title.is_empty(), "a book title cannot be empty");
+        let authors: Vec<String> = authors
+            .into_iter()
+            .map(|a| a.trim().to_string())
+            .filter(|a| !a.is_empty())
+            .collect();
+        let mut req = BookRequest::new(crate::model::BookInput {
+            title: title.to_string(),
+            authors,
+            ..Default::default()
+        });
+        // Drive it to completion (discover + download), like an import does.
+        req.goal = crate::model::Goal::Complete;
+
+        // The list always has a root group (parsing/creation guarantees ≥1 group).
+        // Append into the FIRST top-level group so the Manual list stays flat.
+        let group_path = vec![0usize];
+        let book_index = {
+            let list = self.snapshot()?;
+            group_at(&list.groups, &group_path)
+                .map(|g| g.books.len())
+                .context("manual list has no root group")?
+        };
+        self.store.append_book(self.list_id, &group_path, &req)?;
+        tracing::info!(
+            title = %req.input.title,
+            authors = ?req.input.authors,
+            "manual book added — querying"
+        );
+        Ok((group_path, book_index))
+    }
+
+    /// Remove the book at `(group_path, book_index)` from the store. Its
+    /// candidates/jobs cascade away; downloaded FILES on disk are left untouched
+    /// (consistent with Remove-list). Used by the mutable **Manual** list's
+    /// remove-book command, which first aborts any in-flight transfers via the
+    /// shared scheduler.
+    pub fn remove_book(&mut self, group_path: &[usize], book_index: usize) -> Result<()> {
+        self.store
+            .remove_book(self.list_id, group_path, book_index)?;
+        tracing::info!(
+            list = self.list_id,
+            ?group_path,
+            book_index,
+            "manual book removed (tracking deleted; files kept)"
+        );
+        Ok(())
+    }
+
     /// Set the execution `goal` for EVERY book in the list and persist it. The
     /// engine reads each book's goal when planning actionable work; this is how
     /// the per-list Start (`Complete`) / Stop (`Idle`) commands express intent.
@@ -5337,6 +5395,127 @@ mod tests {
         assert!(
             book.job.is_none(),
             "swapping md5 must clear the old job so the new copy downloads fresh"
+        );
+    }
+
+    /// A list resembling the app's singleton mutable Manual list: one root group,
+    /// `is_manual = true`, and the no-seq naming template.
+    fn manual_list() -> DownloadList {
+        let mut settings = ListSettings {
+            is_manual: true,
+            naming_template: "{authors} - {title}.{ext}".to_string(),
+            ..Default::default()
+        };
+        // Keep only one variation per book so the planned filename is unambiguous.
+        settings.keep_top = 1;
+        DownloadList {
+            title: "Manual".into(),
+            settings,
+            groups: vec![Group::new("Manual")],
+        }
+    }
+
+    #[tokio::test]
+    async fn add_book_twice_appends_two_books_to_one_manual_list() {
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch = Orchestrator::new(store, &manual_list(), search, "/books").unwrap();
+
+        let (gp1, bi1) = orch
+            .add_book("Treasure Island", vec!["Robert Louis Stevenson".into()])
+            .unwrap();
+        let (gp2, bi2) = orch
+            .add_book("The Adventures of Tom Sawyer", vec!["Mark Twain".into()])
+            .unwrap();
+
+        // Two DISTINCT positions appended to the same (only) root group — not
+        // rejected, not replaced.
+        assert_eq!((gp1.as_slice(), bi1), (&[0usize][..], 0));
+        assert_eq!((gp2.as_slice(), bi2), (&[0usize][..], 1));
+
+        let list = orch.snapshot().unwrap();
+        assert_eq!(list.groups.len(), 1, "still ONE manual list/group");
+        let books = &list.groups[0].books;
+        assert_eq!(books.len(), 2, "both books present");
+        assert_eq!(books[0].input.title, "Treasure Island");
+        assert_eq!(books[1].input.title, "The Adventures of Tom Sawyer");
+        // Added books are driven to completion.
+        assert_eq!(books[0].goal, crate::model::Goal::Complete);
+        assert_eq!(books[1].goal, crate::model::Goal::Complete);
+    }
+
+    #[test]
+    fn add_book_rejects_empty_title() {
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch = Orchestrator::new(store, &manual_list(), search, "/books").unwrap();
+        assert!(orch.add_book("   ", vec![]).is_err());
+        // Nothing was appended.
+        assert!(orch.snapshot().unwrap().groups[0].books.is_empty());
+    }
+
+    #[tokio::test]
+    async fn remove_book_removes_one_keeping_the_rest() {
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch = Orchestrator::new(store, &manual_list(), search, "/books").unwrap();
+
+        orch.add_book("Treasure Island", vec![]).unwrap();
+        orch.add_book("The Adventures of Tom Sawyer", vec![])
+            .unwrap();
+        orch.add_book("Anne of Green Gables", vec![]).unwrap();
+
+        // Remove the middle book.
+        orch.remove_book(&[0], 1).unwrap();
+
+        let books = orch.snapshot().unwrap().groups[0].books.clone();
+        assert_eq!(books.len(), 2);
+        let titles: Vec<&str> = books.iter().map(|b| b.input.title.as_str()).collect();
+        assert_eq!(titles, vec!["Treasure Island", "Anne of Green Gables"]);
+    }
+
+    #[tokio::test]
+    async fn manual_planned_filename_has_no_seq_but_keeps_md5_tag() {
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch = Orchestrator::new(store, &manual_list(), search, "/books").unwrap();
+
+        // Add a fixture-backed book and discover it so a variation is requested.
+        orch.add_book("Treasure Island", vec!["Robert Louis Stevenson".into()])
+            .unwrap();
+        let (tx, rx) = mpsc::channel(64);
+        let ev_task = tokio::spawn(drain(rx));
+        orch.query_all(&tx).await.unwrap();
+        drop(tx);
+        let _ = ev_task.await.unwrap();
+
+        let planned = orch.plan_downloads().unwrap();
+        assert_eq!(planned.len(), 1, "the matched book is planned");
+        let name = planned[0]
+            .destination
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        // No leading sequence number: the name does NOT start with `NN - `.
+        let leading = name.split(" - ").next().unwrap();
+        assert!(
+            !leading.chars().all(|c| c.is_ascii_digit()),
+            "manual filename must not start with a seq number: {name}"
+        );
+        assert!(
+            name.starts_with("Robert Louis Stevenson - Treasure Island"),
+            "expected `Author - Title …`, got {name}"
+        );
+
+        // Keeps the trailing 6-hex md5 tag before the extension: `… - <6hex>.ext`.
+        let stem = name.rsplit_once('.').unwrap().0;
+        let tag = stem.rsplit(" - ").next().unwrap();
+        assert_eq!(tag.len(), 6, "6-hex md5 tag present: {name}");
+        assert!(
+            tag.chars().all(|c| c.is_ascii_hexdigit()),
+            "md5 tag is hex: {name}"
         );
     }
 }

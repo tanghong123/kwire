@@ -511,6 +511,13 @@ pub struct ListSettings {
     /// request, so the user can later swap to a different copy.
     #[serde(default = "default_keep_top")]
     pub keep_top: usize,
+    /// True for the singleton **Manual** list — the only list whose set of books
+    /// is MUTABLE (the user adds/removes individual books). Imported reading lists
+    /// are immutable in their book set; this flag is what the add-/remove-book
+    /// commands gate on. Lives in the existing `settings_json` blob (no schema
+    /// migration); old lists deserialize with `false`.
+    #[serde(default)]
+    pub is_manual: bool,
 }
 
 fn default_format_pref() -> Vec<Format> {
@@ -552,6 +559,7 @@ impl Default for ListSettings {
             title_match_threshold: default_title_match_threshold(),
             seq_per_group: true,
             keep_top: default_keep_top(),
+            is_manual: false,
         }
     }
 }

@@ -165,6 +165,187 @@ pub async fn load_list(
     refresh_library(&state).await
 }
 
+/// The title of the singleton mutable list.
+const MANUAL_LIST_TITLE: &str = "Manual";
+
+/// The naming template the Manual list uses: NO leading sequence number (the
+/// user curates books individually, so a positional number is meaningless). The
+/// 6-hex md5 tag is appended by the naming code as a suffix (see
+/// `naming::filename`), so it is NOT a template token — the result is
+/// `Author - Title - <md5:6>.ext`.
+const MANUAL_NAMING_TEMPLATE: &str = "{authors} - {title}.{ext}";
+
+/// **Add a book to the mutable Manual list** (the UI's manual-add). Finds — or
+/// creates — the singleton list titled `"Manual"` (with `is_manual = true` and a
+/// no-seq naming template), appends one new book from `title`/`author`, drives it
+/// (goal = `Complete`) so the engine queries + downloads it, and returns the
+/// refreshed library. Rejects an empty title.
+#[tauri::command]
+pub async fn add_manual_book(
+    state: State<'_, AppState>,
+    title: String,
+    author: Option<String>,
+) -> Result<ViewLibrary, String> {
+    add_manual_book_inner(&state, title, author).await
+}
+
+/// Testable core of [`add_manual_book`] — operates on `&AppState` directly (no
+/// Tauri `State` wrapper) so integration tests can exercise the find-or-create +
+/// append path headlessly.
+pub(crate) async fn add_manual_book_inner(
+    state: &AppState,
+    title: String,
+    author: Option<String>,
+) -> Result<ViewLibrary, String> {
+    if title.trim().is_empty() {
+        return Err("Enter a book title to add.".to_string());
+    }
+    let authors: Vec<String> = author
+        .unwrap_or_default()
+        .split(',')
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+        .collect();
+
+    // Find-or-create the singleton Manual list, returning its loaded orchestrator.
+    let id = ensure_manual_list(state).await?;
+    let orch = {
+        let lib = state.library.lock().await;
+        lib.arc_for(&id)
+            .ok_or_else(|| format!("list {id} not loaded"))?
+    };
+    {
+        let mut guard = orch.lock().await;
+        let (group_path, book_index) = guard.add_book(&title, authors).map_err(err)?;
+        // Drive the new book to completion (discover + download).
+        guard
+            .set_goal_one(&group_path, book_index, Goal::Complete)
+            .map_err(err)?;
+    }
+    state.wake_engine();
+    refresh_library(state).await
+}
+
+/// Find the singleton **Manual** list (by title) and ensure it's loaded with an
+/// attached orchestrator, creating + persisting it on first use exactly like
+/// `load_list` does (insert list + attach orch + `state.library` insert + goal
+/// Complete + wake). Returns its loaded UI id. Idempotent: reuses an existing
+/// Manual list's store id + loaded orchestrator.
+async fn ensure_manual_list(state: &AppState) -> Result<String, String> {
+    let cfg = state.config.lock().expect("config mutex poisoned").clone();
+    let mut store = open_store(&cfg)?;
+
+    // Reuse the persisted Manual list if it exists; otherwise create it.
+    let store_id = match store.list_id_by_title(MANUAL_LIST_TITLE).map_err(err)? {
+        Some(existing) => existing,
+        None => {
+            let settings = libgen_core::model::ListSettings {
+                naming_template: MANUAL_NAMING_TEMPLATE.to_string(),
+                is_manual: true,
+                ..Default::default()
+            };
+            let list = DownloadList {
+                title: MANUAL_LIST_TITLE.to_string(),
+                settings,
+                // A single root group holds the manually-added books (flat).
+                groups: vec![libgen_core::model::Group::new(MANUAL_LIST_TITLE)],
+            };
+            store.insert_list(&list).map_err(err)?
+        }
+    };
+    let id = Library::id_for(store_id);
+
+    // Already loaded? Reuse the loaded orchestrator.
+    {
+        let lib = state.library.lock().await;
+        if lib.arc_for(&id).is_some() {
+            return Ok(id);
+        }
+    }
+
+    // Attach a fresh orchestrator to the persisted Manual list (mirrors load_list).
+    let search = build_search(&cfg)?;
+    let store2 = open_store(&cfg)?;
+    let orch = Orchestrator::attach(store2, store_id, search, cfg.effective_out_dir())
+        .with_query_concurrency(cfg.app.query_concurrency);
+    {
+        let mut lib = state.library.lock().await;
+        // Re-check under the lock (another task may have inserted it meanwhile).
+        if lib.arc_for(&id).is_none() {
+            lib.lists.push(LoadedList::new(id.clone(), orch));
+        }
+    }
+    set_goal_for(state, &id, Goal::Complete).await?;
+    state.wake_engine();
+    Ok(id)
+}
+
+/// **Remove a book from a mutable list** (the Manual list's per-book remove).
+/// Errors unless that list's `settings.is_manual` is true (imported lists stay
+/// immutable). Aborts any in-flight downloads for the book first, then deletes
+/// the book's tracking from the store. Downloaded FILES on disk are left
+/// untouched (consistent with Remove-list / Remove-download? — no: like
+/// Remove-list, files are kept).
+#[tauri::command]
+pub async fn remove_book(
+    state: State<'_, AppState>,
+    list_id: Option<String>,
+    book_id: String,
+) -> Result<ViewLibrary, String> {
+    remove_book_inner(&state, list_id, book_id).await
+}
+
+/// Testable core of [`remove_book`] — operates on `&AppState` directly so an
+/// integration test can verify the `is_manual` guard + removal headlessly.
+pub(crate) async fn remove_book_inner(
+    state: &AppState,
+    list_id: Option<String>,
+    book_id: String,
+) -> Result<ViewLibrary, String> {
+    let orch = resolve_arc(state, list_id).await?;
+    // Resolve position + guard mutability + snapshot the book's in-flight md5s
+    // under a brief orch lock, then signal the scheduler SEPARATELY (no nested
+    // locks — `docs/SYNCHRONIZATION.md` §5), then delete the tracking.
+    let inflight = {
+        let mut guard = orch.lock().await;
+        let pos = position_for(&guard, &book_id)?;
+        let snap = guard.snapshot().map_err(err)?;
+        if !snap.settings.is_manual {
+            return Err(
+                "This list is read-only — only the Manual list lets you remove books.".to_string(),
+            );
+        }
+        let to_cancel = book_at(&snap, &pos.group_path, pos.book_index)
+            .map(|b| {
+                use libgen_core::model::JobState;
+                b.candidates
+                    .iter()
+                    .filter(|c| {
+                        matches!(
+                            c.job.as_ref().map(|j| &j.state),
+                            Some(JobState::Resolving | JobState::Downloading | JobState::Verifying)
+                        )
+                    })
+                    .map(|c| c.md5.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        guard
+            .remove_book(&pos.group_path, pos.book_index)
+            .map_err(err)?;
+        to_cancel
+    };
+    if !inflight.is_empty() {
+        if let Ok(scheduler) = ensure_scheduler(state, None).await {
+            for md5 in &inflight {
+                scheduler.cancel(md5).await;
+            }
+        }
+    }
+    state.wake_engine();
+    refresh_library(state).await
+}
+
 // ---------------------------------------------------------------------------
 // Goal-setters: the UI's Start / Stop / Re-query controls. Each takes a BRIEF
 // lock to mutate goal/state + persist, notifies the engine, and returns the
@@ -891,6 +1072,15 @@ pub async fn set_settings(
     settings: SettingsPayload,
 ) -> Result<ViewLibrary, String> {
     let orch = resolve_arc(&state, list_id).await?;
+    // Preserve the existing `is_manual` flag — the Settings sheet doesn't send it,
+    // and a save must never flip the mutable Manual list back to immutable.
+    let is_manual = {
+        let guard = orch.lock().await;
+        guard
+            .snapshot()
+            .map(|l| l.settings.is_manual)
+            .unwrap_or(false)
+    };
     let s = libgen_core::model::ListSettings {
         format_pref: settings
             .format_pref
@@ -911,6 +1101,7 @@ pub async fn set_settings(
         seq_per_group: settings.seq_per_group,
         keep_top: settings.keep_top.max(1),
         title_match_threshold: settings.title_match_threshold.clamp(0.0, 1.0),
+        is_manual,
     };
     orch.lock().await.update_settings(s).map_err(err)?;
     refresh_library(&state).await
@@ -2207,6 +2398,26 @@ pub mod testsupport {
         };
         let guard = orch.lock().await;
         guard.snapshot().ok()
+    }
+
+    /// Add a book to the (find-or-created) mutable Manual list, headless — the
+    /// test analogue of the `add_manual_book` command.
+    pub async fn add_manual_book(
+        state: &AppState,
+        title: &str,
+        author: Option<&str>,
+    ) -> Result<ViewLibrary, String> {
+        super::add_manual_book_inner(state, title.to_string(), author.map(|s| s.to_string())).await
+    }
+
+    /// Remove a book (by UI id) from a mutable list, headless — the test analogue
+    /// of the `remove_book` command (enforces the `is_manual` guard).
+    pub async fn remove_book(
+        state: &AppState,
+        id: &str,
+        book_id: &str,
+    ) -> Result<ViewLibrary, String> {
+        super::remove_book_inner(state, Some(id.to_string()), book_id.to_string()).await
     }
 
     /// Inject a pre-built scheduler (e.g. a mock-host one) so the engine's

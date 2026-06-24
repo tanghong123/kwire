@@ -118,6 +118,8 @@ pub fn run() {
             commands::library,
             commands::select_list,
             commands::load_list,
+            commands::add_manual_book,
+            commands::remove_book,
             commands::delete_list,
             commands::start,
             commands::stop,
