@@ -464,6 +464,20 @@ check("detail: edit form renders + onEditBook invokes edit_book with trimmed val
   if (ctx.EDIT_BOOK !== null) throw new Error("EDIT_BOOK should clear after save");
 });
 
+check("detail: Remove-from-list shows ONLY for a Manual-list book (is_manual gate)", () => {
+  const bk = { id: "bk0", bid: "bk0", list: "L1", title: "Some Book", author: "A",
+    discovery: "not_found", review: false, versions: [] };
+  ctx.SELECTED = "bk0"; ctx.CURRENT = "L1"; ctx.DETAIL_COLLAPSED = false; ctx.EDIT_BOOK = null;
+  // Imported (non-manual) list → no remove-book affordance (entries are immutable).
+  ctx.LISTS = [{ id: "L1", title: "Imported", is_manual: false, groups: [{ name: "G", collapsed: false, books: [bk] }] }];
+  ctx.renderDetail();
+  if (els["dBody"].innerHTML.includes("data-removebook")) throw new Error("an imported-list book must NOT show Remove-from-list");
+  // Manual list → remove-book affordance present.
+  ctx.LISTS = [{ id: "L1", title: "Manual", is_manual: true, groups: [{ name: "G", collapsed: false, books: [bk] }] }];
+  ctx.renderDetail();
+  if (!els["dBody"].innerHTML.includes('data-removebook="bk0"')) throw new Error("a Manual-list book must show Remove-from-list");
+});
+
 check("detail: onEditBook rejects an empty title (no invoke)", () => {
   const bk = { id: "b1", bid: "b1", list: "L1", title: "X", author: "Y", discovery: "not_found", versions: [] };
   invokeLog.length = 0; ctx.EDIT_BOOK = "b1";

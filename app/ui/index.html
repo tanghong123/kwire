@@ -2007,7 +2007,9 @@ function renderDetail() {
         '<button class="tbtn" data-editcancel="1">Cancel</button>' +
       '</div></div>';
   } else {
-    html += '<div style="margin:0 0 10px"><button class="tbtn" data-editbook="' + bk.id + '">✎ Edit title/author &amp; re-query</button></div>';
+    html += '<div style="margin:0 0 10px"><button class="tbtn" data-editbook="' + bk.id + '">✎ Edit title/author &amp; re-query</button>' +
+      (isManualBook(bk) ? ' <button class="tbtn" data-removebook="' + bk.id + '">🗑 Remove from list</button>' : '') +
+      '</div>';
   }
 
   if (bk.discovery === "querying") {
@@ -2079,7 +2081,7 @@ function renderDetail() {
    Interaction (event delegation - robust + testable)
    ===================================================================== */
 document.addEventListener("click", function (e) {
-  var t = e.target.closest("[data-action],[data-filter],[data-fmtfilter],[data-list],[data-toggle],[data-open],[data-dl],[data-replace],[data-accept],[data-remove],[data-marknf],[data-cancelv],[data-canceldl],[data-pausev],[data-resumev],[data-reveal],[data-top],[data-series],[data-history],[data-fmtmv],[data-fmtrm],[data-fmtadd],[data-fmtshowall],[data-imptab],[data-toggle-set],[data-manual],[data-manualgo],[data-manualcancel],[data-requery],[data-editbook],[data-editsave],[data-editcancel]");
+  var t = e.target.closest("[data-action],[data-filter],[data-fmtfilter],[data-list],[data-toggle],[data-open],[data-dl],[data-replace],[data-accept],[data-remove],[data-marknf],[data-cancelv],[data-canceldl],[data-pausev],[data-resumev],[data-reveal],[data-top],[data-series],[data-history],[data-fmtmv],[data-fmtrm],[data-fmtadd],[data-fmtshowall],[data-imptab],[data-toggle-set],[data-manual],[data-manualgo],[data-manualcancel],[data-requery],[data-editbook],[data-editsave],[data-editcancel],[data-removebook]");
   if (!t) return;
 
   if (t.dataset.fmtmv) { // reorder preferred formats
@@ -2132,6 +2134,7 @@ document.addEventListener("click", function (e) {
     onEditBook(ebk, ti ? ti.value : "", au ? au.value : "");
     return;
   }
+  if (t.dataset.removebook) { var rmb = bookById(t.dataset.removebook); if (rmb) removeBook(rmb); return; }
   if (t.dataset.accept) { // accept the already-downloaded copy (clear review)
     var abk = bookById(t.dataset.accept);
     onAcceptDownload(abk && abk.bid, abk && abk.list);
@@ -2523,24 +2526,43 @@ function removeList(listId) {
       .catch(function (err) { toast("Remove failed: " + (errText(err) || "unknown error")); });
   });
 }
+/* A book belongs to the mutable Manual list (per-book add/remove allowed). */
+function isManualBook(bk) {
+  var l = (LISTS || []).filter(function (x) { return x.id === bk.list; })[0];
+  return !!(l && l.is_manual);
+}
+function removeBook(bk) {
+  if (!bk || !hasTauri()) return;
+  confirmToast('Remove "' + (bk.title || "this book") + '" from the Manual list? Its downloaded file (if any) stays on disk.', "Remove book", function () {
+    invoke("remove_book", { listId: listArg(bk.list), bookId: bk.bid }).then(applyLibrary)
+      .catch(function (err) { toast("Remove failed: " + (errText(err) || "unknown error")); });
+  });
+}
 function onConfirmImport() {
   if (!hasTauri()) { closeImport(); return; }
+  // Manual tab → APPEND one book to the mutable Manual list (find-or-create). This
+  // is a per-book add, NOT a list import — so it isn't subject to the duplicate-title
+  // reject and the Manual list keeps accumulating books.
+  if (IMPORT_TAB === "manual") {
+    var title = (document.getElementById("mTitle").value || "").trim();
+    var author = (document.getElementById("mAuthor").value || "").trim();
+    if (!title) { toast("Title can't be empty."); return; }
+    invoke("add_manual_book", { title: title, author: author || null })
+      .then(function (vl) { applyLibrary(vl); closeImport(); })
+      .catch(function (err) { toast(errText(err) || "Couldn't add the book."); });
+    return;
+  }
+  // File tab → import a whole list. load_list is an implicit Start; a duplicate-titled
+  // list is REJECTED — keep the sheet open and surface the reason.
   var payload = importPayload();
   if (!payload) { closeImport(); return; }
-  // load_list is an implicit Start (goal=Complete): the engine begins discovering
-  // + downloading right after import. A duplicate-titled list is REJECTED — keep
-  // the sheet open and surface the reason (Remove the existing list first / rename).
   invoke("load_list", { text: payload.text, isJson: payload.isJson })
     .then(function (vl) { applyLibrary(vl); closeImport(); })
     .catch(function (err) { toast(errText(err) || "Import failed."); });
 }
-/* Collect the import sheet's current text + format into a backend payload. */
+/* The file tab's payload (the manual tab is handled directly in onConfirmImport). */
 function importPayload() {
-  if (IMPORT_TAB === "file") return IMPORT_FILE ? { text: IMPORT_FILE.text, isJson: IMPORT_FILE.isJson } : null;
-  var title = document.getElementById("mTitle").value || "";
-  var author = document.getElementById("mAuthor").value || "";
-  if (!title.trim()) return null;
-  return { text: "# Manual\n\n- " + title + (author ? " — " + author : "") + "\n", isJson: false };
+  return IMPORT_FILE ? { text: IMPORT_FILE.text, isJson: IMPORT_FILE.isJson } : null;
 }
 
 /* ---- import sheet ---- */
@@ -2668,6 +2690,7 @@ function vmToList(vm) {
     id: vm.id || "loaded",
     title: vm.title,
     subtitle: vm.subtitle,
+    is_manual: !!vm.is_manual,
     collapsedAll: false,
     groups: (vm.groups || []).map(function (g) {
       return {
