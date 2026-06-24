@@ -138,6 +138,10 @@ pub enum Progress {
     /// Resolution succeeded; routed onto `host`'s queue.
     Resolved {
         md5: String,
+        /// Stable per-leg id within this md5's race (primary = 0, hedges = 1,2,…).
+        leg_id: u64,
+        /// Whether the backend launched this leg as a hedge (authoritative label).
+        is_hedge: bool,
         host: String,
         total_bytes: Option<u64>,
     },
@@ -146,12 +150,16 @@ pub enum Progress {
     /// (chronicle); the `Resolved`/`Bytes` events drive state.
     Resuming {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         host: String,
         offset: u64,
     },
     /// Bytes streamed so far for a request (cumulative).
     Bytes {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         host: String,
         bytes_done: u64,
         total_bytes: Option<u64>,
@@ -167,6 +175,8 @@ pub enum Progress {
     /// slow leg keeps running as insurance.
     Stalled {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         host: String,
         bytes_done: u64,
         speed_bps: Option<u64>,
@@ -174,6 +184,8 @@ pub enum Progress {
     /// A retry is scheduled after a transient failure.
     Retrying {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         host: String,
         attempt: u32,
         backoff: Duration,
@@ -182,6 +194,8 @@ pub enum Progress {
     /// Failing over to an alternate mirror after exhausting a host.
     FailingOver {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         from_host: String,
         error: String,
     },
@@ -200,6 +214,9 @@ pub enum Progress {
     /// Best-effort and behavior-neutral: emitted alongside the real control flow,
     /// never gating it.
     Note { md5: String, detail: String },
+    /// A specific leg ended (won, exhausted, cancelled, panicked, or abandoned when
+    /// a sibling won). Emitted by the leg task's Drop guard so it fires on EVERY exit.
+    LegEnded { md5: String, leg_id: u64 },
     /// The request was deliberately stopped via cancellation. `paused` true means
     /// the `.part` (+ `resume_offset`) was kept so it can resume; false means it
     /// was a hard cancel (the `.part` is removed).
@@ -440,6 +457,9 @@ struct RaceGroup {
     leg_count: std::sync::atomic::AtomicUsize,
     /// Hosts already racing, so a hedge target avoids them.
     hosts: Mutex<Vec<String>>,
+    /// Monotonic source of per-leg ids within this race. The primary takes 0, each
+    /// hedge `fetch_add(1)` (start order). Stable identity for the UI.
+    next_leg_id: std::sync::atomic::AtomicU64,
 }
 
 /// A leg's temp target inside a [`RaceGroup`].
@@ -452,6 +472,9 @@ struct LegTemp {
 
 /// Per-leg context threaded through `process_one_inner`/`download_on_host`.
 struct LegCtx {
+    /// Stable per-leg id within the race (primary = 0, hedges = 1,2,…). The UI keys
+    /// legs by this, so a host change within a leg stays one line.
+    leg_id: u64,
     /// Where THIS leg streams to (the primary uses the real dest; a hedge uses a
     /// unique sibling temp). On a win this is promoted to `race.dest`.
     leg_dest: std::path::PathBuf,
@@ -467,6 +490,25 @@ struct LegCtx {
     _hedge_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
+/// RAII guard whose `Drop` emits [`Progress::LegEnded`] for a leg. Installed at the
+/// top of `process_one_leg`, it fires the leg's death signal on EVERY exit path
+/// (return, `?`, cancel/abort, unwind, race-group cancel) from one place.
+struct LegEndGuard {
+    events: mpsc::Sender<Progress>,
+    md5: String,
+    leg_id: u64,
+}
+
+impl Drop for LegEndGuard {
+    fn drop(&mut self) {
+        // Drop can't await; best-effort. A lost LegEnded is caught by the UI's TTL backstop.
+        let _ = self.events.try_send(Progress::LegEnded {
+            md5: self.md5.clone(),
+            leg_id: self.leg_id,
+        });
+    }
+}
+
 impl RaceGroup {
     fn new(dest: std::path::PathBuf) -> Self {
         RaceGroup {
@@ -476,6 +518,7 @@ impl RaceGroup {
             legs: Mutex::new(Vec::new()),
             leg_count: std::sync::atomic::AtomicUsize::new(0),
             hosts: Mutex::new(Vec::new()),
+            next_leg_id: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -610,6 +653,8 @@ impl Scheduler {
         });
         race.leg_count.store(1, Ordering::SeqCst);
         let leg = LegCtx {
+            // The primary leg takes id 0 (first `fetch_add`).
+            leg_id: race.next_leg_id.fetch_add(1, Ordering::SeqCst),
             leg_dest: req.dest.clone(),
             is_hedge: false,
             resolver_start: 0,
@@ -688,6 +733,16 @@ impl Scheduler {
         hedges: &Arc<Mutex<Vec<tokio::task::JoinHandle<JobOutcome>>>>,
     ) -> JobOutcome {
         let md5 = req.md5.clone();
+        // RAII death signal: emit `LegEnded` for THIS leg on EVERY exit path
+        // (normal return, `?`, cancel/abort, unwind, race-group cancel). One piece
+        // of code covers them all — `Drop` runs whenever this function's frame
+        // unwinds or returns. Capture `leg.leg_id` (Copy) now, before `leg` is later
+        // borrowed/consumed.
+        let _leg_end_guard = LegEndGuard {
+            events: events.clone(),
+            md5: md5.clone(),
+            leg_id: leg.leg_id,
+        };
         // Mirror index to start resolving from; advanced on failover.
         let mut resolver_start = leg.resolver_start;
         // CDNs whose hosts have already failed this leg — their siblings are
@@ -775,6 +830,8 @@ impl Scheduler {
                     spill_permit,
                     &race,
                     &leg,
+                    leg.leg_id,
+                    leg.is_hedge,
                     hedges,
                 )
                 .await
@@ -835,6 +892,8 @@ impl Scheduler {
                         let _ = events
                             .send(Progress::FailingOver {
                                 md5: md5.clone(),
+                                leg_id: leg.leg_id,
+                                is_hedge: leg.is_hedge,
                                 from_host: host.clone(),
                                 error: last_error.clone(),
                             })
@@ -1064,6 +1123,8 @@ impl Scheduler {
         mut first_permit: Option<tokio::sync::OwnedSemaphorePermit>,
         race: &Arc<RaceGroup>,
         leg: &LegCtx,
+        leg_id: u64,
+        is_hedge: bool,
         hedges: &Arc<Mutex<Vec<tokio::task::JoinHandle<JobOutcome>>>>,
     ) -> Result<(std::path::PathBuf, u64), DownloadError> {
         let max_attempts = queue.limits.max_attempts.max(1);
@@ -1122,6 +1183,8 @@ impl Scheduler {
                 let _ = events
                     .send(Progress::Resolved {
                         md5: req.md5.clone(),
+                        leg_id,
+                        is_hedge,
                         host: target.host.clone(),
                         total_bytes: target.total_bytes,
                     })
@@ -1132,6 +1195,8 @@ impl Scheduler {
                     let _ = events
                         .send(Progress::Resuming {
                             md5: req.md5.clone(),
+                            leg_id,
+                            is_hedge,
                             host: target.host.clone(),
                             offset: existing,
                         })
@@ -1154,6 +1219,8 @@ impl Scheduler {
             let _ = events
                 .send(Progress::Bytes {
                     md5: req.md5.clone(),
+                    leg_id,
+                    is_hedge,
                     host: crate::download::current_edge(&req.md5)
                         .unwrap_or_else(|| target.host.clone()),
                     bytes_done,
@@ -1210,6 +1277,8 @@ impl Scheduler {
                             let _ = events
                                 .send(Progress::Bytes {
                                     md5: req.md5.clone(),
+                                    leg_id,
+                                    is_hedge,
                                     host: crate::download::current_edge(&req.md5)
                                         .unwrap_or_else(|| target.host.clone()),
                                     bytes_done: on_disk,
@@ -1231,6 +1300,8 @@ impl Scheduler {
                                 let _ = events
                                     .send(Progress::Stalled {
                                         md5: req.md5.clone(),
+                                        leg_id,
+                                        is_hedge,
                                         host: target.host.clone(),
                                         bytes_done: on_disk,
                                         speed_bps: sp,
@@ -1253,6 +1324,8 @@ impl Scheduler {
                     let _ = events
                         .send(Progress::Bytes {
                             md5: req.md5.clone(),
+                            leg_id,
+                            is_hedge,
                             host: crate::download::current_edge(&req.md5)
                                 .unwrap_or_else(|| target.host.clone()),
                             bytes_done,
@@ -1298,6 +1371,8 @@ impl Scheduler {
                     let _ = events
                         .send(Progress::Retrying {
                             md5: req.md5.clone(),
+                            leg_id,
+                            is_hedge,
                             host: target.host.clone(),
                             attempt,
                             backoff,
@@ -1402,6 +1477,8 @@ impl Scheduler {
         });
 
         let hedge_leg = LegCtx {
+            // Next id in start order (primary was 0).
+            leg_id: race.next_leg_id.fetch_add(1, Ordering::SeqCst),
             leg_dest,
             is_hedge: true,
             // Start resolving from the top of the chain; the exclude list keeps it
@@ -1481,5 +1558,41 @@ mod cdn_tests {
         // alternate mirror, or the test mock on 127.0.0.1, still fails over).
         assert_eq!(cdn_group("example.com"), None);
         assert_eq!(cdn_group("127.0.0.1"), None);
+    }
+}
+
+#[cfg(test)]
+mod leg_guard_tests {
+    use super::{LegEndGuard, Progress};
+    use tokio::sync::mpsc;
+
+    /// The Drop guard is the death signal for a leg: dropping it (any exit path
+    /// of `process_one_leg`) emits exactly one `LegEnded` carrying the leg's id.
+    /// This is the mechanism §3-A relies on; the end-to-end behavior on a real
+    /// download is covered in `tests/download_queue.rs`
+    /// (`leg_emits_exactly_one_leg_ended_with_monotonic_primary_id`).
+    #[tokio::test]
+    async fn drop_guard_emits_exactly_one_leg_ended() {
+        let (tx, mut rx) = mpsc::channel::<Progress>(8);
+        {
+            let _guard = LegEndGuard {
+                events: tx,
+                md5: "abc123".into(),
+                leg_id: 7,
+            };
+            // Guard alive: nothing emitted yet.
+            assert!(rx.try_recv().is_err());
+        } // guard dropped here → emits LegEnded
+
+        match rx.try_recv() {
+            Ok(Progress::LegEnded { md5, leg_id }) => {
+                assert_eq!(md5, "abc123");
+                assert_eq!(leg_id, 7);
+            }
+            other => panic!("expected one LegEnded, got {other:?}"),
+        }
+        // Exactly one event; the sender is dropped with the guard, so the channel
+        // is now closed/empty.
+        assert!(rx.try_recv().is_err(), "exactly one LegEnded");
     }
 }

@@ -1151,6 +1151,8 @@ pub struct QueryStagePayload {
 pub enum ProgressPayload {
     Resolved {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         host: String,
         total_bytes: Option<u64>,
     },
@@ -1158,11 +1160,15 @@ pub enum ProgressPayload {
     /// it — the chronicle is persisted and shown via "Show history").
     Resuming {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         host: String,
         offset: u64,
     },
     Bytes {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         host: String,
         bytes_done: u64,
         total_bytes: Option<u64>,
@@ -1175,17 +1181,23 @@ pub enum ProgressPayload {
     /// Drives the UI's "trying another mirror" hint. Informational only.
     Stalled {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         host: String,
         speed_bps: Option<u64>,
     },
     Retrying {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         host: String,
         attempt: u32,
         error: String,
     },
     FailingOver {
         md5: String,
+        leg_id: u64,
+        is_hedge: bool,
         from_host: String,
         error: String,
     },
@@ -1208,6 +1220,12 @@ pub enum ProgressPayload {
     Cancelled {
         md5: String,
     },
+    /// A specific download leg ended (any exit path). The UI removes exactly this
+    /// `leg_id` from the md5's active-leg set; survivors remain.
+    LegEnded {
+        md5: String,
+        leg_id: u64,
+    },
     /// All downloads for this run finished.
     AllDone,
 }
@@ -1221,20 +1239,34 @@ impl ProgressPayload {
         Some(match p {
             Progress::Resolved {
                 md5,
+                leg_id,
+                is_hedge,
                 host,
                 total_bytes,
             } => ProgressPayload::Resolved {
                 md5: md5.clone(),
+                leg_id: *leg_id,
+                is_hedge: *is_hedge,
                 host: host.clone(),
                 total_bytes: *total_bytes,
             },
-            Progress::Resuming { md5, host, offset } => ProgressPayload::Resuming {
+            Progress::Resuming {
+                md5,
+                leg_id,
+                is_hedge,
+                host,
+                offset,
+            } => ProgressPayload::Resuming {
                 md5: md5.clone(),
+                leg_id: *leg_id,
+                is_hedge: *is_hedge,
                 host: host.clone(),
                 offset: *offset,
             },
             Progress::Bytes {
                 md5,
+                leg_id,
+                is_hedge,
                 host,
                 bytes_done,
                 total_bytes,
@@ -1242,6 +1274,8 @@ impl ProgressPayload {
                 eta_secs,
             } => ProgressPayload::Bytes {
                 md5: md5.clone(),
+                leg_id: *leg_id,
+                is_hedge: *is_hedge,
                 host: host.clone(),
                 bytes_done: *bytes_done,
                 total_bytes: *total_bytes,
@@ -1250,32 +1284,44 @@ impl ProgressPayload {
             },
             Progress::Stalled {
                 md5,
+                leg_id,
+                is_hedge,
                 host,
                 speed_bps,
                 ..
             } => ProgressPayload::Stalled {
                 md5: md5.clone(),
+                leg_id: *leg_id,
+                is_hedge: *is_hedge,
                 host: host.clone(),
                 speed_bps: *speed_bps,
             },
             Progress::Retrying {
                 md5,
+                leg_id,
+                is_hedge,
                 host,
                 attempt,
                 error,
                 ..
             } => ProgressPayload::Retrying {
                 md5: md5.clone(),
+                leg_id: *leg_id,
+                is_hedge: *is_hedge,
                 host: host.clone(),
                 attempt: *attempt,
                 error: error.clone(),
             },
             Progress::FailingOver {
                 md5,
+                leg_id,
+                is_hedge,
                 from_host,
                 error,
             } => ProgressPayload::FailingOver {
                 md5: md5.clone(),
+                leg_id: *leg_id,
+                is_hedge: *is_hedge,
                 from_host: from_host.clone(),
                 error: error.clone(),
             },
@@ -1311,6 +1357,11 @@ impl ProgressPayload {
                     ProgressPayload::Cancelled { md5: md5.clone() }
                 }
             }
+            // A leg ended: the UI removes exactly this leg_id from the md5's set.
+            Progress::LegEnded { md5, leg_id } => ProgressPayload::LegEnded {
+                md5: md5.clone(),
+                leg_id: *leg_id,
+            },
             // History-only diagnostic — not surfaced to the UI.
             Progress::Note { .. } => return None,
         })

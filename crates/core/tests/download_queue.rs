@@ -604,6 +604,86 @@ async fn retry_recovers_after_503s() {
     assert_eq!(md5_hex(&std::fs::read(&dest).unwrap()), md5);
 }
 
+/// A normal single-leg (no hedge) download emits exactly one `LegEnded`, for the
+/// primary's `leg_id` (= 0), via the leg task's Drop guard. The primary's per-leg
+/// events all carry `leg_id = 0, is_hedge = false`. (Backend leg-lifecycle
+/// contract — see docs/LEG_LIFECYCLE.md §9.)
+#[tokio::test]
+async fn leg_emits_exactly_one_leg_ended_with_monotonic_primary_id() {
+    let server = MockServer::start().await;
+    let blob = make_blob(4000);
+    let md5 = md5_hex(&blob);
+    server
+        .set(&format!("/get/{md5}"), PathConfig::new(blob.clone()))
+        .await;
+
+    let resolver = DirectUrlResolver::new("mock", server.template("/get"), client());
+    let chain = ResolverChain::new(vec![Arc::new(resolver)]);
+    let sched = Arc::new(
+        SchedulerBuilder::new(chain, client())
+            .default_limits(HostLimits {
+                max_concurrency: 2,
+                min_interval: Duration::from_millis(0),
+                max_attempts: 4,
+            })
+            .build(),
+    );
+
+    let dir = tempdir();
+    let dest = dir.join("out.bin");
+    let (tx, rx) = mpsc::channel(256);
+    let ev_task = tokio::spawn(collect_events(rx));
+    let outcomes = sched
+        .run(vec![DownloadRequest::new(md5.clone(), dest.clone())], tx)
+        .await;
+    let events = ev_task.await.unwrap();
+
+    assert!(outcomes[0].result.is_ok(), "{:?}", outcomes[0].result);
+
+    // Exactly one LegEnded, and it names the primary leg (id 0).
+    let ended: Vec<u64> = events
+        .iter()
+        .filter_map(|e| match e {
+            Progress::LegEnded { leg_id, md5: m } if *m == md5 => Some(*leg_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ended,
+        vec![0],
+        "exactly one LegEnded for the primary (leg_id 0); got {ended:?}"
+    );
+
+    // Every per-leg event on this single-leg run is the primary: leg_id 0, not hedge.
+    for e in &events {
+        let stamp = match e {
+            Progress::Resolved {
+                leg_id, is_hedge, ..
+            }
+            | Progress::Resuming {
+                leg_id, is_hedge, ..
+            }
+            | Progress::Bytes {
+                leg_id, is_hedge, ..
+            }
+            | Progress::Stalled {
+                leg_id, is_hedge, ..
+            }
+            | Progress::Retrying {
+                leg_id, is_hedge, ..
+            }
+            | Progress::FailingOver {
+                leg_id, is_hedge, ..
+            } => Some((*leg_id, *is_hedge)),
+            _ => None,
+        };
+        if let Some((leg_id, is_hedge)) = stamp {
+            assert_eq!(leg_id, 0, "primary leg id is 0: {e:?}");
+            assert!(!is_hedge, "primary is not a hedge: {e:?}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn permanent_404_fails_fast_without_retry() {
     let server = MockServer::start().await;

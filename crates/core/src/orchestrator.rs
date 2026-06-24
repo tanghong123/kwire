@@ -2750,6 +2750,9 @@ impl Orchestrator {
             Progress::FailingOver { md5, .. } => md5.clone(),
             Progress::Resuming { md5, .. } => md5.clone(),
             Progress::Note { md5, .. } => md5.clone(),
+            // Per-leg death signal: carries an md5 but no chronicle change (the inner
+            // match's `_ => None` arm handles it). Leg lifecycle is a UI concern.
+            Progress::LegEnded { md5, .. } => md5.clone(),
         };
         for p in planned.iter().filter(|p| p.md5 == md5) {
             let mut req = match self.request_at(&p.group_path, p.book_index)? {
@@ -2899,6 +2902,10 @@ impl Orchestrator {
                     // outcome, Range-ignored restart). Does NOT touch job state — the
                     // real lifecycle events (Bytes/Failed/Done) still drive it.
                     event = Some(("note", detail.clone()));
+                }
+                Progress::LegEnded { .. } => {
+                    // A single leg ended; lifecycle is a UI concern (it removes the
+                    // leg by id). No job-state change, no chronicle entry.
                 }
                 Progress::Cancelled {
                     paused,
@@ -4628,6 +4635,8 @@ mod tests {
             &planned,
             &Progress::Resolved {
                 md5: md5.clone(),
+                leg_id: 0,
+                is_hedge: false,
                 host: "libgen.li".into(),
                 total_bytes: Some(1000),
             },
@@ -4637,6 +4646,8 @@ mod tests {
             &planned,
             &Progress::Resuming {
                 md5: md5.clone(),
+                leg_id: 0,
+                is_hedge: false,
                 host: "libgen.li".into(),
                 offset: 5 * 1024 * 1024,
             },

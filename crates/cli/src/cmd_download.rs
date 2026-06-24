@@ -144,6 +144,7 @@ pub async fn run(args: Args) -> Result<()> {
                     md5,
                     host,
                     total_bytes,
+                    ..
                 } => {
                     eprintln!(
                         "resolved {md5} -> host={host} total={}",
@@ -152,7 +153,9 @@ pub async fn run(args: Args) -> Result<()> {
                             .unwrap_or_else(|| "?".into())
                     );
                 }
-                Progress::Resuming { md5, host, offset } => {
+                Progress::Resuming {
+                    md5, host, offset, ..
+                } => {
                     eprintln!("resuming {md5} on host={host} from offset={offset}");
                 }
                 Progress::Bytes {
@@ -191,6 +194,7 @@ pub async fn run(args: Args) -> Result<()> {
                     md5,
                     from_host,
                     error,
+                    ..
                 } => {
                     eprintln!("  {md5}: failing over from {from_host} ({error})");
                 }
@@ -207,6 +211,9 @@ pub async fn run(args: Args) -> Result<()> {
                 }
                 Progress::Note { md5, detail } => {
                     eprintln!("note {md5}: {detail}");
+                }
+                Progress::LegEnded { md5, leg_id } => {
+                    eprintln!("leg ended {md5} (leg {leg_id})");
                 }
                 Progress::Cancelled {
                     md5,
