@@ -298,8 +298,9 @@ check("active panel: hedge legs render as separate, badged lines (primary + hedg
       downloaded_bytes: 30, total_bytes: 100, speed_bps: 1000 }] };
   ctx.LISTS = [{ id: "L1", title: "L", groups: [{ name: "G", collapsed: false, books: [bk] }] }];
   ctx.CURRENT = "L1"; ctx.ACTIVE_COLLAPSED = false;
-  ctx.noteLeg({ kind: "bytes", md5, host: "cdn2.booksdl.lc", bytes_done: 30, total_bytes: 100, speed_bps: 1000 });
-  ctx.noteLeg({ kind: "bytes", md5, host: "cdn5.booksdl.lc", bytes_done: 10, total_bytes: 100, speed_bps: 800 });
+  // Primary = leg 0; a real hedge = leg 1 (distinct leg_id).
+  ctx.noteLeg({ kind: "bytes", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", bytes_done: 30, total_bytes: 100, speed_bps: 1000 });
+  ctx.noteLeg({ kind: "bytes", md5, leg_id: 1, is_hedge: true, host: "cdn5.booksdl.lc", bytes_done: 10, total_bytes: 100, speed_bps: 800 });
   ctx.renderActivePanel();
   const html = els["apBody"].innerHTML;
   const rows = (html.match(/class="ap-row"/g) || []).length;
@@ -312,7 +313,7 @@ check("active panel: hedge legs render as separate, badged lines (primary + hedg
   ctx.LEGS = {};
 });
 
-check("active panel: a failover (sequential host change) is NOT badged as a hedge", () => {
+check("active panel: a host change within ONE leg (failover / cdn edge-rotation) stays ONE line", () => {
   ctx.LEGS = {};
   const md5 = "f".repeat(32);
   const bk = { id: "bk0", list: "L1", bid: "bk0", title: "Sisters", author: "X", seq: 1,
@@ -321,15 +322,56 @@ check("active panel: a failover (sequential host change) is NOT badged as a hedg
       downloaded_bytes: 42, total_bytes: 100, speed_bps: 900 }] };
   ctx.LISTS = [{ id: "L1", title: "L", groups: [{ name: "G", collapsed: false, books: [bk] }] }];
   ctx.CURRENT = "L1"; ctx.ACTIVE_COLLAPSED = false;
-  // Primary on cdn2, then it FAILS OVER to cdn3 (the old host is dead — not a hedge).
-  ctx.noteLeg({ kind: "bytes", md5, host: "cdn2.booksdl.lc", bytes_done: 40, total_bytes: 100, speed_bps: 1000 });
-  ctx.noteLeg({ kind: "failing_over", md5, from_host: "cdn2.booksdl.lc" });
-  ctx.noteLeg({ kind: "bytes", md5, host: "cdn3.booksdl.lc", bytes_done: 42, total_bytes: 100, speed_bps: 900 });
+  // ONE leg (leg_id 0) whose host moves cdn2→cdn3: first via failover, then a bare
+  // host change (cdn edge-rotation emits no failing_over). Same leg_id → one line.
+  ctx.noteLeg({ kind: "bytes", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", bytes_done: 40, total_bytes: 100, speed_bps: 1000 });
+  ctx.noteLeg({ kind: "failing_over", md5, leg_id: 0, is_hedge: false, from_host: "cdn2.booksdl.lc" });
+  ctx.noteLeg({ kind: "bytes", md5, leg_id: 0, is_hedge: false, host: "cdn3.booksdl.lc", bytes_done: 42, total_bytes: 100, speed_bps: 900 });
   ctx.renderActivePanel();
   const html = els["apBody"].innerHTML;
-  if ((html.match(/class="ap-row"/g) || []).length !== 1) throw new Error("failover should leave ONE leg, not two");
-  if (/hedge-badge/.test(html)) throw new Error("a failover host must NOT be badged as hedge");
-  if (!/cdn3\.booksdl\.lc/.test(html)) throw new Error("the new (failover) host should be shown");
+  if ((html.match(/class="ap-row"/g) || []).length !== 1) throw new Error("a host change within one leg must stay ONE line, not two");
+  if (/hedge-badge/.test(html)) throw new Error("a single leg changing host must NOT be badged as hedge");
+  if (!/cdn3\.booksdl\.lc/.test(html)) throw new Error("the leg's current host should be shown");
+  ctx.LEGS = {};
+});
+
+check("active panel: primary leg_ended promotes the surviving hedge to primary", () => {
+  ctx.LEGS = {};
+  const md5 = "c".repeat(32);
+  const bk = { id: "bk0", list: "L1", bid: "bk0", title: "Sisters", author: "X", seq: 1,
+    discovery: "matched", review: false,
+    versions: [{ md5, fmt: "epub", state: "downloading", host: "cdn2.booksdl.lc", progress: 30,
+      downloaded_bytes: 30, total_bytes: 100, speed_bps: 1000 }] };
+  ctx.LISTS = [{ id: "L1", title: "L", groups: [{ name: "G", collapsed: false, books: [bk] }] }];
+  ctx.CURRENT = "L1"; ctx.ACTIVE_COLLAPSED = false;
+  ctx.noteLeg({ kind: "bytes", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", bytes_done: 30, total_bytes: 100, speed_bps: 1000 });
+  ctx.noteLeg({ kind: "bytes", md5, leg_id: 1, is_hedge: true, host: "cdn5.booksdl.lc", bytes_done: 60, total_bytes: 100, speed_bps: 2000 });
+  // The primary (leg 0) ends; leg 1 survives and must become the primary (no badge).
+  ctx.noteLeg({ kind: "leg_ended", md5, leg_id: 0 });
+  ctx.renderActivePanel();
+  const html = els["apBody"].innerHTML;
+  if ((html.match(/class="ap-row"/g) || []).length !== 1) throw new Error("after primary leg_ended, exactly one leg should remain");
+  if (/hedge-badge/.test(html)) throw new Error("the promoted survivor must NOT be badged as hedge");
+  if (!/cdn5\.booksdl\.lc/.test(html)) throw new Error("the surviving leg's host should be shown");
+  ctx.LEGS = {};
+});
+
+check("active panel: a stalled-but-silent leg (no bytes) is kept alive, not dropped", () => {
+  ctx.LEGS = {};
+  const md5 = "d".repeat(32);
+  const bk = { id: "bk0", list: "L1", bid: "bk0", title: "Sisters", author: "X", seq: 1,
+    discovery: "matched", review: false,
+    versions: [{ md5, fmt: "epub", state: "downloading", host: "cdn2.booksdl.lc", progress: 0,
+      downloaded_bytes: 0, total_bytes: 100, speed_bps: 0 }] };
+  ctx.LISTS = [{ id: "L1", title: "L", groups: [{ name: "G", collapsed: false, books: [bk] }] }];
+  ctx.CURRENT = "L1"; ctx.ACTIVE_COLLAPSED = false;
+  // A leg that only reports liveness (resolved then stalled, never bytes) must still
+  // be tracked + shown — the keep-alive that the 60s TTL is just a backstop for.
+  ctx.noteLeg({ kind: "resolved", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", total_bytes: 100 });
+  ctx.noteLeg({ kind: "stalled", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", bytes_done: 0, speed_bps: 0 });
+  if (!ctx.LEGS[md5] || !ctx.LEGS[md5].byLeg[0]) throw new Error("a stalled/resolved leg must be tracked (keep-alive)");
+  ctx.renderActivePanel();
+  if ((els["apBody"].innerHTML.match(/class="ap-row"/g) || []).length !== 1) throw new Error("a stalled-but-alive leg should render one line");
   ctx.LEGS = {};
 });
 

@@ -1625,73 +1625,80 @@ function fmtEta(secs) {
 
 /* The bottom panel: everything in flight right now — books being queried, and
    variations being downloaded (with progress, speed, ETA). Collapsible. */
-/* Per-leg live download state for the active panel. With hedging ON, ONE variation
-   (md5) races on multiple hosts (LEGS); the progress events carry (md5, host), so we
-   track each leg separately and show it on its OWN line. The FIRST host seen for an
-   md5 is the PRIMARY; later ones are HEDGE legs (badged). Cleared on the variation's
-   terminal event; a leg with no update for LEG_TTL ages out (covers a leg that
-   failed over / lost without an explicit event). */
-var LEGS = {};                 // md5 -> { order: [host,...], byHost: { host -> leg } }
-var LEG_TTL = 6000;            // ms; a leg silent this long is dropped (e.g. a lost race leg)
+/* Per-leg live download state for the active panel. One variation (md5) may run
+   several LEGS at once — the primary plus speculative hedge legs. Each per-leg
+   event carries an authoritative `leg_id` (primary=0, hedges 1,2,… in start order)
+   and `is_hedge`, so we key by leg_id — NOT host. A leg that changes host (failover
+   or cdn edge-rotation) keeps its leg_id → stays ONE line; only a real hedge adds
+   one. A leg is removed on its explicit `leg_ended`; the whole md5 clears on a
+   terminal (done/failed/cancelled). LEG_TTL is a 60s BACKSTOP only — every per-leg
+   event (incl. liveness: stalled/retrying/resuming) refreshes the leg, so an
+   alive-but-silent leg (TTFB) is never dropped. See docs/LEG_LIFECYCLE.md. */
+var LEGS = {};                 // md5 -> { byLeg: { leg_id -> leg } }
+var LEG_TTL = 60000;           // ms; pure backstop for a lost leg_ended (not a liveness timer)
 
 function noteLeg(p) {
   if (!p.md5) return;
+  // Whole-download terminals clear every leg for the md5.
   if (p.kind === "done" || p.kind === "failed" || p.kind === "cancelled") { delete LEGS[p.md5]; return; }
-  if (p.kind === "failing_over") {
-    // SEQUENTIAL host change (not a parallel hedge): the old host is dead — drop it
-    // so the new host isn't mistaken for a speculative leg of a still-running primary.
-    var Lf = LEGS[p.md5];
-    if (Lf && p.from_host) {
-      delete Lf.byHost[p.from_host];
-      Lf.order = Lf.order.filter(function (h) { return h !== p.from_host; });
-    }
+  // One specific leg ended → remove just it; survivors remain (a lower one ending
+  // promotes the next as primary by leg_id order).
+  if (p.kind === "leg_ended") {
+    var Le = LEGS[p.md5];
+    if (Le) { delete Le.byLeg[p.leg_id]; if (!Object.keys(Le.byLeg).length) delete LEGS[p.md5]; }
     return;
   }
-  if ((p.kind !== "bytes" && p.kind !== "resolved") || !p.host) return;
-  var L = LEGS[p.md5] || (LEGS[p.md5] = { order: [], byHost: {} });
-  var prev = L.byHost[p.host];
-  if (!prev) L.order.push(p.host);
-  var prog = p.total_bytes ? Math.min(100, Math.round(100 * p.bytes_done / p.total_bytes)) : (prev ? prev.progress : 0);
-  L.byHost[p.host] = {
-    host: p.host,
+  // Every other per-leg event carries leg_id and acts as a keep-alive. `failing_over`
+  // has no new host (only from_host), so it just refreshes the leg until the next
+  // `resolved` lands the new host on the SAME leg_id.
+  if (p.leg_id == null) return;
+  var L = LEGS[p.md5] || (LEGS[p.md5] = { byLeg: {} });
+  var prev = L.byLeg[p.leg_id];
+  var prog = (p.total_bytes != null && p.bytes_done != null)
+    ? Math.min(100, Math.round(100 * p.bytes_done / p.total_bytes))
+    : (prev ? prev.progress : 0);
+  L.byLeg[p.leg_id] = {
+    leg_id: p.leg_id,
+    host: (p.host != null ? p.host : (prev ? prev.host : null)),
     bytes: (p.bytes_done != null ? p.bytes_done : (prev ? prev.bytes : null)),
     total: (p.total_bytes != null ? p.total_bytes : (prev ? prev.total : null)),
     speed: (p.kind === "bytes" ? (p.speed_bps != null ? p.speed_bps : null) : (prev ? prev.speed : null)),
     eta: (p.kind === "bytes" ? (p.eta_secs != null ? p.eta_secs : null) : (prev ? prev.eta : null)),
+    is_hedge: (p.is_hedge != null ? p.is_hedge : (prev ? prev.is_hedge : false)),
     progress: prog,
     ts: Date.now(),
   };
 }
 
-/* The legs to show for a downloading variation: live per-leg state when we have it
-   (a hedge race), else ONE leg synthesized from the viewmodel (no hedging / no
-   events yet). Each leg is tagged `hedge` (a non-primary host) for the badge. */
+/* The legs to show for a downloading variation: live per-leg state when we have it,
+   else ONE leg synthesized from the viewmodel (no events yet). Legs are ordered by
+   leg_id (= start order); the lowest LIVE leg_id is the PRIMARY, the rest badged
+   hedge — so when the primary's leg ends, the next-earliest survivor promotes. */
 function legsFor(v) {
   var L = LEGS[v.md5], now = Date.now();
-  if (L && L.order.length) {
-    var fresh = L.order.filter(function (h) { return (now - (L.byHost[h].ts || 0)) < LEG_TTL; });
-    if (fresh.length) {
-      // hedge = a CONCURRENT secondary: only legs that are still active count, so a
-      // sequential failover (old leg gone) leaves the new leg as the sole PRIMARY.
-      return fresh.map(function (h, i) { var leg = L.byHost[h]; leg.hedge = i > 0; return leg; });
+  if (L) {
+    var ids = Object.keys(L.byLeg).map(Number)
+      .filter(function (id) { return (now - (L.byLeg[id].ts || 0)) < LEG_TTL; })
+      .sort(function (a, b) { return a - b; });
+    if (ids.length) {
+      return ids.map(function (id, i) { var leg = L.byLeg[id]; leg.hedge = i > 0; return leg; });
     }
   }
   return [{ host: v.host, bytes: v.downloaded_bytes, total: v.total_bytes,
     speed: v.speed_bps, eta: v.eta_secs, progress: v.progress, hedge: false }];
 }
 
-/* The LEADING leg for an md5 = the live leg that has transferred the most bytes
-   (the one winning the race). The variation's headline progress should track this
-   leg, NOT flip to a slower hedge leg that's stuck behind. Returns null if no live
-   legs. (Also makes a from-scratch restart correct: the sole leg's own reduced
-   bytes still lead, so the variation follows it down.) */
-function leadingLeg(md5) {
-  var L = LEGS[md5]; if (!L || !L.order.length) return null;
+/* The PRIMARY leg for an md5 = the live leg with the lowest leg_id (earliest start).
+   The variation's headline progress tracks the primary, so it never flips to a
+   hedge; when the primary's leg ends, the next-earliest survivor takes over.
+   Returns null if no live legs. */
+function primaryLeg(md5) {
+  var L = LEGS[md5]; if (!L) return null;
   var now = Date.now(), best = null;
-  L.order.forEach(function (h) {
-    var leg = L.byHost[h];
+  Object.keys(L.byLeg).forEach(function (k) {
+    var leg = L.byLeg[k];
     if ((now - (leg.ts || 0)) >= LEG_TTL) return;
-    if (!best || (leg.bytes || 0) > (best.bytes || 0)) best = leg;
+    if (!best || leg.leg_id < best.leg_id) best = leg;
   });
   return best;
 }
@@ -2865,10 +2872,10 @@ function wireProgress() {
         if (p.kind === "resolved") { v.state = "downloading"; v.host = p.host; }
         else if (p.kind === "bytes") {
           v.state = "downloading";
-          // With hedging, one md5 races on multiple hosts; track the LEADING leg so a
-          // slower/losing hedge leg can't drag the variation backwards (winner at 100%
-          // flipping to a hedge leg stuck at 13%). Falls back to this event's values.
-          var lead = leadingLeg(p.md5) ||
+          // The variation's headline tracks the PRIMARY leg (lowest live leg_id), so
+          // a slower hedge leg can't drag it backwards and it never flips between
+          // legs. Falls back to this event's values before any leg is registered.
+          var lead = primaryLeg(p.md5) ||
             { host: p.host, bytes: p.bytes_done, total: p.total_bytes, speed: p.speed_bps, eta: p.eta_secs };
           v.host = lead.host;
           v.downloaded_bytes = lead.bytes; v.total_bytes = lead.total;
