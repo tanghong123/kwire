@@ -125,22 +125,89 @@ pub async fn select_list(
 /// Parse + persist a NEW list into the shared database, add a fresh orchestrator
 /// for it, select it, and return the refreshed library. Unlike before, this is
 /// ADDITIVE — existing lists stay loaded (the multi-list sidebar).
+/// Match key for re-import merge: normalized title + first author.
+fn merge_key(b: &libgen_core::model::BookRequest) -> String {
+    let norm = |s: &str| {
+        s.trim()
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let t = norm(&b.input.title);
+    let a = b.input.authors.first().map(|s| norm(s)).unwrap_or_default();
+    format!("{t}\u{1}{a}")
+}
+
+/// Re-import WITHOUT losing progress: carry each NEW book's download state over
+/// from the OLD list when a book with the same (title, author) existed —
+/// candidates/jobs/status/selected/seq/dismissed. A still-`Done` book is left
+/// settled (goal Idle, so it isn't re-verified or re-downloaded); anything else,
+/// and any brand-new book, is set to `Complete` so the re-import behaves like Start.
+fn carry_over_progress(
+    new: &mut libgen_core::model::DownloadList,
+    old: &libgen_core::model::DownloadList,
+) {
+    use libgen_core::model::{BookRequest, Group};
+    use std::collections::HashMap;
+    fn collect<'a>(groups: &'a [Group], map: &mut HashMap<String, &'a BookRequest>) {
+        for g in groups {
+            for b in &g.books {
+                map.entry(merge_key(b)).or_insert(b);
+            }
+            collect(&g.subgroups, map);
+        }
+    }
+    let mut old_books: HashMap<String, &BookRequest> = HashMap::new();
+    collect(&old.groups, &mut old_books);
+    fn apply(groups: &mut [Group], map: &HashMap<String, &BookRequest>) {
+        use libgen_core::model::{Goal, RequestStatus};
+        for g in groups.iter_mut() {
+            for b in g.books.iter_mut() {
+                match map.get(&merge_key(b)) {
+                    Some(ob) => {
+                        b.candidates = ob.candidates.clone();
+                        b.status = ob.status.clone();
+                        b.selected = ob.selected.clone();
+                        b.seq = ob.seq;
+                        b.dismissed = ob.dismissed.clone();
+                        b.goal = if matches!(b.status, RequestStatus::Done) {
+                            Goal::Idle
+                        } else {
+                            Goal::Complete
+                        };
+                    }
+                    None => b.goal = Goal::Complete,
+                }
+            }
+            apply(&mut g.subgroups, map);
+        }
+    }
+    apply(&mut new.groups, &old_books);
+}
+
 #[tauri::command]
 pub async fn load_list(
     state: State<'_, AppState>,
     text: String,
     is_json: bool,
 ) -> Result<ViewLibrary, String> {
-    let list = parse::parse_auto(&text, is_json).map_err(err)?;
+    let mut list = parse::parse_auto(&text, is_json).map_err(err)?;
     let cfg = state.config.lock().expect("config mutex poisoned").clone();
 
     // Persist into the shared on-disk store so the list survives a relaunch.
-    // De-dupe by TITLE: re-importing a list with the same title REPLACES the
-    // existing one (reusing its store id) instead of creating a duplicate.
+    // De-dupe by TITLE: re-importing a same-titled list UPDATES the existing one
+    // (reusing its store id) — and PRESERVES download progress via carry_over_progress
+    // rather than wiping it (which forced a full, mirror-dependent re-query).
     let mut store = open_store(&cfg)?;
     let search = build_search(&cfg)?;
-    let store_id = match store.list_id_by_title(&list.title).map_err(err)? {
+    let existing = store.list_id_by_title(&list.title).map_err(err)?;
+    let is_update = existing.is_some();
+    let store_id = match existing {
         Some(existing) => {
+            if let Ok(Some(old)) = store.load_list(existing) {
+                carry_over_progress(&mut list, &old);
+            }
             store.upsert_list(existing, &list).map_err(err)?;
             existing
         }
@@ -159,8 +226,13 @@ pub async fn load_list(
         lib.current = id.clone();
         lib.lists.push(LoadedList::new(id.clone(), orch));
     }
-    // Import = implicit Start (goal=Complete): kick discovery + downloads.
-    set_goal_for(&state, &id, Goal::Complete).await?;
+    // NEW list → implicit Start (goal=Complete for all). RE-IMPORT → the merge above
+    // already set per-book goals (Done stays settled; everything else Complete), so
+    // do NOT blanket-raise — that would re-verify every already-done book.
+    if !is_update {
+        set_goal_for(&state, &id, Goal::Complete).await?;
+    }
+    tracing::info!(list = %id, updated_existing = is_update, "list imported");
     state.wake_engine();
     refresh_library(&state).await
 }
