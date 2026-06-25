@@ -407,6 +407,21 @@ check("variation manager: a non-done copy (cancelled/available/failed) can be re
     throw new Error("available variation has no Remove control");
 });
 
+check("variation manager: a downloading variation shows its .part path + Reveal", () => {
+  const part = "/Users/x/Downloads/Manual/01 - A - T - aaaaaa.epub";
+  const bk = { id: "bk0", list: "L1", bid: "bk0", title: "T", author: "A", seq: 1,
+    priority: false, discovery: "matched", review: false, recommended_md5: null,
+    versions: [{ md5: "a".repeat(32), fmt: "epub", state: "downloading", progress: 40, size: 5,
+      title: "T", author: "A", publisher: "", output_path: part }] };
+  const html = ctx.renderVariationManager(bk);
+  if (!html.includes(part + ".part")) throw new Error("downloading variation must show its .part path: " + html);
+  if (!html.includes('data-reveal="' + part + '.part"')) throw new Error("no Reveal .part affordance");
+  // A done variation shows no .part line (the row's output_path is the final file).
+  const done = JSON.parse(JSON.stringify(bk));
+  done.versions[0].state = "done"; done.versions[0].progress = 100;
+  if (/partpath/.test(ctx.renderVariationManager(done))) throw new Error("a done variation must not show a .part path");
+});
+
 check("cover preload: throttled to COVER_CONCURRENCY, rest queued", () => {
   // Reset cover state.
   ctx.COVER_CACHE = {}; ctx.COVER_INFLIGHT = {}; ctx.COVER_FAILS = {};
