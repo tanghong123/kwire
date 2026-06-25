@@ -8,8 +8,14 @@
 //!   120 ms redraw tick.
 //! - `AppState::on_input` is pure; the event loop dispatches its `Intent`.
 //! - Stage 4: live engine mount, replaces fixture/stub bootstrap.
+//!
+//! § CLI subcommands (see `cli/`):
+//! - `kwire search <query…>` — one-shot mirror search, printed to stdout.
+//! - `kwire get <arg…>` — download by MD5 or title search.
+//! - Bare `kwire` — launches the TUI as today.
 
 mod app;
+mod cli;
 mod guard;
 mod intent;
 #[cfg(test)]
@@ -22,6 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use clap::Parser;
 use crossterm::{
     event::{EnableMouseCapture, EventStream},
     execute,
@@ -47,6 +54,20 @@ use tracing_subscriber::{fmt, EnvFilter};
 use crate::app::{AppState, Modal};
 use crate::guard::TerminalGuard;
 use crate::intent::Intent;
+
+// ---------------------------------------------------------------------------
+// CLI top-level parser
+// ---------------------------------------------------------------------------
+
+/// kwire — libgen TUI and one-shot downloader.
+///
+/// Run without a subcommand to launch the interactive TUI.
+#[derive(Parser)]
+#[command(name = "kwire", version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<cli::Commands>,
+}
 
 // ---------------------------------------------------------------------------
 // Logging setup
@@ -121,6 +142,16 @@ impl EngineEmitter for TuiEmitter {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse args first so --help / --version work before any terminal setup.
+    let cli = Cli::parse();
+
+    // If a subcommand was given, run it as a plain CLI (no TUI).
+    if let Some(cmd) = cli.command {
+        return cli::run(cmd).await;
+    }
+
+    // No subcommand → fall through to the TUI.
+
     // (1) Logging — file only; must be set up BEFORE we enter the alternate screen.
     let _log_guard = setup_logging().unwrap_or_else(|e| {
         // If we can't open the log file, swallow the error so the TUI still
