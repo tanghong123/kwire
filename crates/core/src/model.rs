@@ -298,7 +298,27 @@ fn backfill_source(req: &BookRequest) -> Option<&Candidate> {
 /// no pages slot) — purely a derived display value.
 pub fn effective_pages(req: &BookRequest) -> Option<u32> {
     let c = backfill_source(req)?;
-    c.job.as_ref().and_then(|j| j.page_count).or(c.pages)
+    // A PDF's `page_count` is real PAGES (lopdf). An epub's is spine SECTIONS, not
+    // pages — never surface that as a page count. PDF → actual counted (else the
+    // mirror's reported); any other format → only the mirror's reported pages.
+    if matches!(c.extension, Some(Format::Pdf)) {
+        c.job.as_ref().and_then(|j| j.page_count).or(c.pages)
+    } else {
+        c.pages
+    }
+}
+
+/// The book's effective publication year for display: the user-typed / back-filled
+/// `input.year` if set, else a representative candidate's year — the acquiring copy
+/// first, else any candidate that reports one. Derived (not persisted), so the year
+/// shows even for copies downloaded before the back-fill existed — no migration.
+pub fn effective_year(req: &BookRequest) -> Option<u16> {
+    if let Some(y) = req.input.year {
+        return Some(y);
+    }
+    backfill_source(req)
+        .and_then(|c| c.year)
+        .or_else(|| req.candidates.iter().find_map(|c| c.year))
 }
 
 /// Back-fill a book's EMPTY [`BookInput`] metadata from its acquiring copy's
@@ -866,15 +886,49 @@ mod tests {
             Some(118),
             Some(JobState::Done),
         )];
+        // A PDF: the actual counted pages win when present…
+        req.candidates[0].extension = Some(Format::Pdf);
         assert_eq!(effective_pages(&req), Some(118));
-
-        // …else the candidate's mirror-reported `pages`.
+        // …else the mirror-reported `pages`.
         req.candidates[0].job.as_mut().unwrap().page_count = None;
         assert_eq!(effective_pages(&req), Some(120));
+
+        // An EPUB: `page_count` is spine SECTIONS, not pages → NEVER surfaced; only
+        // the mirror-reported pages count.
+        req.candidates[0].extension = Some(Format::Epub);
+        req.candidates[0].job.as_mut().unwrap().page_count = Some(22);
+        assert_eq!(effective_pages(&req), Some(120)); // mirror, not the 22 spine
+        req.candidates[0].pages = None;
+        assert_eq!(effective_pages(&req), None); // epub + no mirror pages → nothing
 
         // None when no copy is acquiring.
         req.candidates[0].job = None;
         assert_eq!(effective_pages(&req), None);
+    }
+
+    #[test]
+    fn effective_year_uses_input_first_then_a_candidate() {
+        let mut req = BookRequest::new(BookInput {
+            title: "Wanted".into(),
+            ..Default::default()
+        });
+        req.candidates = vec![meta_cand(
+            "m1",
+            &["A"],
+            Some(2015),
+            None,
+            None,
+            Some(JobState::Done),
+        )];
+        // input.year empty → derived from the candidate (no migration needed).
+        assert_eq!(effective_year(&req), Some(2015));
+        // A user-typed / back-filled input.year wins (only derive when input is empty).
+        req.input.year = Some(1999);
+        assert_eq!(effective_year(&req), Some(1999));
+        // Neither input nor any candidate has a year → None.
+        req.input.year = None;
+        req.candidates[0].year = None;
+        assert_eq!(effective_year(&req), None);
     }
 
     #[test]

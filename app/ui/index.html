@@ -1650,15 +1650,14 @@ function rowAction(bk) {
   return '<span></span>';
 }
 
-/* The book's meta line: author · year · pages. Auto-filled author/year (back-filled
-   from the downloaded copy, not user-entered) are subtly marked with a dotted
-   underline + tooltip. */
+/* The book's list meta line: author · year (page count is detail-only — space is
+   tight here and the year is what readers scan for). Auto-filled author/year
+   (back-filled from the downloaded copy, not user-entered) are subtly marked. */
 function autoMark(s) { return '<span class="bf" title="Auto-filled from the downloaded copy — edit to override">' + s + '</span>'; }
 function bookMetaLine(bk) {
   var bf = bk.backfilled || [], parts = [];
   if (bk.author) parts.push(bf.indexOf("authors") >= 0 ? autoMark(esc(bk.author)) : esc(bk.author));
   if (bk.year != null) parts.push(bf.indexOf("year") >= 0 ? autoMark(String(bk.year)) : String(bk.year));
-  if (bk.pages != null) parts.push(String(bk.pages) + "p");
   return parts.join(" · ") || esc(bk.author || "");
 }
 function bookRow(bk) {

@@ -574,11 +574,12 @@ check("book row: not-found cover is neutral + a low_pages variation flags ⚠", 
   if (!/vwarn/.test(vh) || !/3p/.test(vh)) throw new Error("low_pages should show ⚠ Np: " + vh);
 });
 
-check("book row: meta line shows year/pages + marks back-filled author/year (not user fields)", () => {
+check("book row: meta line shows author · year (no pages), marks back-filled author/year", () => {
   const bk = { id: "m0", bid: "m0", list: "L1", title: "T", author: "A. Author", seq: 1,
     discovery: "matched", review: false, year: 2011, pages: 320, backfilled: ["authors", "year"], versions: [] };
   const html = ctx.bookRow(bk);
-  if (!/2011/.test(html) || !/320p/.test(html)) throw new Error("meta line missing year/pages: " + html);
+  if (!/2011/.test(html)) throw new Error("meta line missing year: " + html);
+  if (/320p/.test(html)) throw new Error("page count must NOT appear in the list meta line (detail-only): " + html);
   if ((html.match(/class="bf"/g) || []).length !== 2) throw new Error("author+year should be marked back-filled: " + html);
   // User-provided fields (nothing in backfilled) must NOT be marked.
   const bk2 = Object.assign({}, bk, { backfilled: [] });

@@ -480,7 +480,7 @@ fn build_book(req: &BookRequest, flat_index: usize, seq: usize) -> ViewBook {
         id: format!("bk{flat_index}"),
         title: req.input.title.clone(),
         author: req.input.authors.join(", "),
-        year: req.input.year,
+        year: libgen_core::model::effective_year(req),
         pages: libgen_core::model::effective_pages(req),
         backfilled: req.backfilled.clone(),
         seq,
