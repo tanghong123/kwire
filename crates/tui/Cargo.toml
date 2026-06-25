@@ -1,0 +1,30 @@
+[package]
+name = "libgen-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "libgen-tui"
+path = "src/main.rs"
+
+[dependencies]
+libgen-engine = { path = "../engine" }
+libgen-core = { path = "../core" }
+
+# TUI
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# Async
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# Path resolution
+directories = "5"
+
+# Error handling / logging
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
