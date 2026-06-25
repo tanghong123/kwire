@@ -723,7 +723,7 @@ var FMT_GLYPH = { done: "✓", downloading: "⏳", queued: "⏳", failed: "⚠" 
 
 /* Distinct color per file format so the format labels are scannable at a glance. */
 var FMT_COLORS = {
-  epub: "#2e9e5b", pdf: "#d2453f", mobi: "#e07b1a", azw3: "#8a5cd1", azw: "#8a5cd1",
+  epub: "#2e9e5b", pdf: "#3b7dd8", mobi: "#e07b1a", azw3: "#8a5cd1", azw: "#8a5cd1",
   cbz: "#0e9aa7", cbr: "#0e9aa7", djvu: "#7a6a55", txt: "#5b7083", fb2: "#c2569b"
 };
 function fmtColor(f) { return FMT_COLORS[(f || "").toLowerCase()] || "var(--text-faint)"; }
@@ -980,6 +980,9 @@ var COVER_INFLIGHT = {};       // path -> true while a fetch is in flight
 var COVER_FAILS = {};          // path -> consecutive failed attempts
 var COVER_QUEUE = [];          // paths waiting for a slot
 var COVER_ACTIVE = 0;          // in-flight count
+var COVER_SHOWN = {};          // bookKey -> cover url currently displayed (for the disappear log)
+var LAST_COVER = {};           // bookKey -> last LOADABLE cover url shown (sticky); survives a
+                               // cover_url change so a re-localize never flashes the placeholder
 var COVER_CONCURRENCY = 6;     // max simultaneous backend cover fetches
 var COVER_MAX_FAILS = 3;       // give up on a path after this many failures
 
@@ -995,7 +998,9 @@ function hydrateCovers() {
   if (!hasTauri()) return;
   var queued = 0;
   everyBook().forEach(function (b) {
-    var u = bookCover(b);
+    // Fetch the PREFERRED cover (the target), not just the currently-displayed one —
+    // so a newly-localized cover loads in the background and bookCover can swap to it.
+    var u = preferredCover(b);
     if (coverNeedsFetch(u)) { COVER_QUEUE.push(u); queued++; }
   });
   if (queued) { try { console.log("covers: queued " + queued + " (" + COVER_QUEUE.length + " pending)"); } catch (e) {} }
@@ -1315,18 +1320,15 @@ function renderSidebar() {
   html += '<button class="side-item' + (CURRENT === "__all__" ? " active" : "") + '" data-list="__all__">' +
     '<span class="ic">🗂</span><span class="lbl">All downloads</span>' +
     statusBadge(everyBook()) +
-    (g.needs + g.review + g.cantdl ? '<span class="dot" style="background:var(--amber)"></span>' : '') +
     '<span class="ct">' + g.done + "/" + g.all + '</span></button>';
   // One entry per list, with a live status badge (active/paused), attention dot,
   // and done/total.
   LISTS.forEach(function (l) {
     var books = listBooks(l);
     var c = countsOf(books);
-    var attn = c.needs + c.cantdl;
     html += '<button class="side-item' + (CURRENT === l.id ? " active" : "") + '" data-list="' + l.id + '">' +
-      '<span class="ic">📕</span><span class="lbl">' + esc(l.title) + '</span>' +
+      '<span class="ic">' + (l.is_manual ? "✍️" : "📕") + '</span><span class="lbl">' + esc(l.title) + '</span>' +
       statusBadge(books) +
-      (attn ? '<span class="dot" style="background:var(--amber)" title="' + c.needs + ' need you, ' + c.cantdl + ' cannot download"></span>' : '') +
       '<span class="ct">' + c.done + "/" + c.all + '</span></button>';
   });
   el.innerHTML = html;
@@ -1482,12 +1484,29 @@ function bookSize(bk) {
 }
 
 /* Cover image URL for the book: downloaded copy → recommended → any with a cover. */
+/* The cover the book SHOULD show for its current state (done → recommended → any). */
+function preferredCover(bk) {
+  var vs = (bk.versions || []).filter(function (x) { return x.cover_url; });
+  if (!vs.length) return "";
+  return (vs.filter(function (x) { return x.state === "done"; })[0]
+    || vs.filter(function (x) { return x.md5 === bk.recommended_md5; })[0]
+    || vs[0]).cover_url;
+}
+/* The cover URL to DISPLAY right now — "load in background, swap when ready". Show the
+   PREFERRED cover only once it's loadable; until then keep showing the last cover we
+   actually displayed for this book (sticky in LAST_COVER + the never-evicted
+   COVER_CACHE, so it survives a cover_url re-localize) — never flashing a placeholder.
+   hydrateCovers fetches the preferred in the background; once cached, the next render
+   swaps to it. This is the "cover disappears while downloading" fix. */
 function bookCover(bk) {
-  var vs = bk.versions || [];
-  var v = vs.filter(function (x) { return x.state === "done" && x.cover_url; })[0]
-    || vs.filter(function (x) { return x.md5 === bk.recommended_md5 && x.cover_url; })[0]
-    || vs.filter(function (x) { return x.cover_url; })[0];
-  return (v && v.cover_url) ? v.cover_url : "";
+  var key = bk.id || bk.bid;
+  var pref = preferredCover(bk);
+  if (coverSrc(pref)) { if (key) LAST_COVER[key] = pref; return pref; }
+  var last = key ? LAST_COVER[key] : "";
+  if (last && coverSrc(last)) return last;
+  var alt = (bk.versions || []).filter(function (x) { return x.cover_url && coverSrc(x.cover_url); })[0];
+  if (alt) { if (key) LAST_COVER[key] = alt.cover_url; return alt.cover_url; }
+  return pref; // nothing loadable yet → placeholder until the background fetch lands
 }
 /* A cover <img> (lazy; swaps to a format-colored placeholder on 404), or the
    placeholder directly when no cover URL is known. `cls` = "cv-sm" | "cv-lg". */
@@ -1495,7 +1514,22 @@ function coverImg(bk, cls) {
   var fmts = uniqueFormats(bk.versions), f = fmts[0] || "";
   var ph = '<span class="cover ' + cls + ' cover-ph" style="background:' + fmtColor(f) +
     '22;color:' + fmtColor(f) + '">' + esc((f || "?").toUpperCase().slice(0, 4)) + '</span>';
-  var url = coverSrc(bookCover(bk));
+  var raw = bookCover(bk);
+  var url = coverSrc(raw);
+  // OBSERVABILITY: log the exact moment a book that WAS showing a cover drops to the
+  // placeholder, with enough state to decide the cause from one line — did the
+  // cover_url change (was!=now), is the new path a cache MISS (cached:false), or did
+  // it permanently fail to fetch (fails>=max)? If was==now, cached:true, fails:0, the
+  // cause is render/lazy-decode, not the data. (Reported: tail-end, long-ago downloads.)
+  var ckey = bk.id || bk.bid;
+  if (url) { if (ckey) COVER_SHOWN[ckey] = raw; }
+  else if (ckey && COVER_SHOWN[ckey]) {
+    try {
+      console.warn("cover→placeholder", { book: bk.title, was: COVER_SHOWN[ckey], now: raw || null,
+        cached: raw ? (COVER_CACHE[raw] !== undefined) : null, fails: raw ? (COVER_FAILS[raw] || 0) : 0 });
+    } catch (e) {}
+    delete COVER_SHOWN[ckey];
+  }
   if (!url) return ph;
   // loading="lazy" + decoding="async": a long list re-rendered during downloads must
   // NOT synchronously decode every off-screen cover data-URL (that clogs the decode
