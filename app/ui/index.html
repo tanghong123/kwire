@@ -223,6 +223,7 @@
   .book .meta { min-width: 0; }
   .book .t { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .book .a { color: var(--text-dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .book .a .bf { border-bottom: 1px dotted var(--text-faint); }
   .fmt { font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
     color: var(--text-dim); background: var(--panel-2); border: 1px solid var(--border);
     padding: 2px 6px; border-radius: 5px; }
@@ -1647,11 +1648,22 @@ function rowAction(bk) {
   return '<span></span>';
 }
 
+/* The book's meta line: author · year · pages. Auto-filled author/year (back-filled
+   from the downloaded copy, not user-entered) are subtly marked with a dotted
+   underline + tooltip. */
+function autoMark(s) { return '<span class="bf" title="Auto-filled from the downloaded copy — edit to override">' + s + '</span>'; }
+function bookMetaLine(bk) {
+  var bf = bk.backfilled || [], parts = [];
+  if (bk.author) parts.push(bf.indexOf("authors") >= 0 ? autoMark(esc(bk.author)) : esc(bk.author));
+  if (bk.year != null) parts.push(bf.indexOf("year") >= 0 ? autoMark(String(bk.year)) : String(bk.year));
+  if (bk.pages != null) parts.push(String(bk.pages) + "p");
+  return parts.join(" · ") || esc(bk.author || "");
+}
 function bookRow(bk) {
   return '<div class="book' + (SELECTED === bk.id ? " sel" : "") + '" data-open="' + bk.id + '">' +
     '<span class="seq">' + bk.seq + '</span>' +
     coverImg(bk, "cv-sm") +
-    '<span class="meta"><div class="t">' + esc(bk.title) + '</div><div class="a">' + esc(bk.author) + '</div></span>' +
+    '<span class="meta"><div class="t">' + esc(bk.title) + '</div><div class="a">' + bookMetaLine(bk) + '</div></span>' +
     variationLines(bk) + rowAction(bk) + '</div>';
 }
 
@@ -2750,6 +2762,8 @@ function vmToList(vm) {
             id: (vm.id || "loaded") + "/" + bk.id, bid: bk.id,
             list: vm.id || "loaded", title: bk.title, author: bk.author,
             seq: bk.seq, priority: false, discovery: bk.discovery,
+            year: (bk.year != null ? bk.year : null), pages: (bk.pages != null ? bk.pages : null),
+            backfilled: bk.backfilled || [],
             review: !!bk.review, recommended_md5: bk.recommended_md5 || null,
             history: bk.history || [],
             versions: (bk.versions || []).map(function (v) {

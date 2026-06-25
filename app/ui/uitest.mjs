@@ -546,6 +546,17 @@ check("book row: not-found cover is neutral + a low_pages variation flags ⚠", 
   if (!/vwarn/.test(vh) || !/3p/.test(vh)) throw new Error("low_pages should show ⚠ Np: " + vh);
 });
 
+check("book row: meta line shows year/pages + marks back-filled author/year (not user fields)", () => {
+  const bk = { id: "m0", bid: "m0", list: "L1", title: "T", author: "A. Author", seq: 1,
+    discovery: "matched", review: false, year: 2011, pages: 320, backfilled: ["authors", "year"], versions: [] };
+  const html = ctx.bookRow(bk);
+  if (!/2011/.test(html) || !/320p/.test(html)) throw new Error("meta line missing year/pages: " + html);
+  if ((html.match(/class="bf"/g) || []).length !== 2) throw new Error("author+year should be marked back-filled: " + html);
+  // User-provided fields (nothing in backfilled) must NOT be marked.
+  const bk2 = Object.assign({}, bk, { backfilled: [] });
+  if (/class="bf"/.test(ctx.bookRow(bk2))) throw new Error("user-provided fields must not carry the auto marker");
+});
+
 check("render() with a selected DONE (non-review) book also hydrates covers", () => {
   const b = reviewBook(); b.review = false; b.discovery = "matched";
   ctx.LISTS = [listOf(b)]; ctx.SELECTED = "bk0";
