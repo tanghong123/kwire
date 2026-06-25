@@ -22,6 +22,7 @@ use crate::theme::{
     self, style_dim, style_header, style_hint, style_normal, style_selected, style_title, C_DIM,
     C_FAINT, C_NEEDS_YOU, C_TEXT,
 };
+use crate::theme::{C_BRIGHT, C_DONE};
 
 const ACTIVITY_EXPANDED_H: u16 = 5;
 const ACTIVITY_COLLAPSED_H: u16 = 1;
@@ -85,23 +86,171 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
 fn render_empty(frame: &mut Frame, app: &mut AppState) {
     let area = frame.area();
 
-    let chunks = Layout::vertical([
-        Constraint::Min(0),    // spacer + content
-        Constraint::Length(1), // hint bar
+    // Reserve 3 lines at the bottom: 1 for the command-input box border top,
+    // 1 for the command-input content, 1 for the command-input border bottom.
+    // We actually use a bordered 3-line block at the very bottom.
+    let outer = Layout::vertical([
+        Constraint::Min(0),    // content area
+        Constraint::Length(3), // command-input box
     ])
     .split(area);
 
-    app.last_rects.hint_bar = chunks[1];
+    app.last_rects.hint_bar = outer[1];
 
-    let text = "Welcome to kwire\n\nNo reading list loaded.\n\nPress : and type 'import <file.md>' to get started.\n\nPress ? for help.";
+    // Vertically center the content block.
+    // Content lines:
+    //   1 — logo box (3-line box: border + content + border)
+    //   1 — blank
+    //   1 — wordmark
+    //   3 — tagline (3 lines)
+    //   1 — blank
+    //   1 — NO READING LISTS YET
+    //   1 — blank
+    //   4 — command hints
+    // Total = 3 + 1 + 1 + 3 + 1 + 1 + 1 + 4 = 15 lines
+    let content_h: u16 = 15;
+    let top_pad = outer[0].height.saturating_sub(content_h) / 2;
+
+    let content_area = Layout::vertical([
+        Constraint::Length(top_pad),   // top padding
+        Constraint::Length(content_h), // content
+        Constraint::Min(0),            // bottom padding
+    ])
+    .split(outer[0])[1];
+
+    // Split content_area into its pieces.
+    let parts = Layout::vertical([
+        Constraint::Length(3), // logo box (bordered)
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // wordmark
+        Constraint::Length(3), // tagline
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // NO READING LISTS YET
+        Constraint::Length(1), // blank
+        Constraint::Length(4), // command hints
+    ])
+    .split(content_area);
+
+    // 1. Logo glyph — a bordered box containing "· · ·"
+    let logo_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(style_dim());
+    // Make the logo box small (~9 wide), centered
+    let logo_inner_w: u16 = 7;
+    let logo_box_w: u16 = logo_inner_w + 2; // +2 for borders
+    let logo_area = centered_rect(logo_box_w, 3, parts[0]);
     frame.render_widget(
-        Paragraph::new(text)
+        Paragraph::new("· · ·")
             .alignment(Alignment::Center)
-            .style(style_dim()),
-        chunks[0],
+            .style(style_dim())
+            .block(logo_block),
+        logo_area,
     );
 
-    render_hint_bar(frame, app, chunks[1]);
+    // 2. Wordmark — bold, bright, centered
+    frame.render_widget(
+        Paragraph::new("kwire")
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(C_BRIGHT).add_modifier(Modifier::BOLD)),
+        parts[2],
+    );
+
+    // 3. Tagline — 3 lines, "quire" emphasized
+    //    "A quire gathers folded sheets into one section"
+    //    "of a book — kwire gathers a scattered reading"
+    //    "list into one tidy, downloaded collection."
+    let line1 = Line::from(vec![
+        Span::styled("A ", style_dim()),
+        Span::styled(
+            "quire",
+            Style::default().fg(C_DONE).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" gathers folded sheets into one section", style_dim()),
+    ]);
+    let line2 = Line::from(Span::styled(
+        "of a book \u{2014} kwire gathers a scattered reading",
+        style_dim(),
+    ));
+    let line3 = Line::from(Span::styled(
+        "list into one tidy, downloaded collection.",
+        style_dim(),
+    ));
+    frame.render_widget(
+        Paragraph::new(vec![line1, line2, line3]).alignment(Alignment::Center),
+        parts[3],
+    );
+
+    // 4. NO READING LISTS YET — dim, centered
+    frame.render_widget(
+        Paragraph::new("NO READING LISTS YET")
+            .alignment(Alignment::Center)
+            .style(style_dim()),
+        parts[5],
+    );
+
+    // 5. Command hints — left-aligned group, group centered
+    //    Each row: accent command + dim description
+    let hint_rows: &[(&str, &str)] = &[
+        (": import ~/list.md", "add a Markdown or JSON reading list"),
+        (": add", "add a single book by hand"),
+        (": open <name>", "switch between lists"),
+        ("?", "all keys & commands"),
+    ];
+
+    // Calculate column widths: max command width, fixed gap, description.
+    let cmd_col_w = hint_rows
+        .iter()
+        .map(|(cmd, _)| cmd.len())
+        .max()
+        .unwrap_or(0);
+
+    let hint_lines: Vec<Line> = hint_rows
+        .iter()
+        .map(|(cmd, desc)| {
+            Line::from(vec![
+                Span::styled(
+                    format!("{:<width$}", cmd, width = cmd_col_w),
+                    Style::default().fg(C_DONE),
+                ),
+                Span::styled("  ", style_dim()),
+                Span::styled(*desc, style_dim()),
+            ])
+        })
+        .collect();
+
+    // Center the block: find total width of a hint row
+    let hint_row_w =
+        (cmd_col_w + 2 + hint_rows.iter().map(|(_, d)| d.len()).max().unwrap_or(0)) as u16;
+    let hint_area = centered_rect(hint_row_w.min(area.width), 4, parts[7]);
+    frame.render_widget(Paragraph::new(hint_lines), hint_area);
+
+    // 6. Bordered command-input box at the bottom
+    let (cmd_content, show_cursor) = if let Some(ref buf) = app.command_buf {
+        (format!(":{}", buf), true)
+    } else {
+        (String::new(), false)
+    };
+
+    let cmd_spans = if show_cursor {
+        vec![
+            Span::styled(&cmd_content, style_hint()),
+            Span::styled("\u{2588}", Style::default().fg(C_TEXT)), // block cursor
+        ]
+    } else {
+        vec![Span::styled(&cmd_content, style_hint())]
+    };
+
+    let cmd_border_style = style_dim();
+    frame.render_widget(
+        Paragraph::new(Line::from(cmd_spans))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(cmd_border_style),
+            )
+            .style(style_hint()),
+        outer[1],
+    );
 
     // Overlay modal (e.g. Help opened from empty state).
     if let Some(modal) = app.modal.clone() {
@@ -119,22 +268,33 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
 
 fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
     let counts = app.status_counts();
-    let done = counts.done;
-    let total = counts.total;
 
-    let (title, roll_up) = if let Some(v) = &app.view {
-        let t = format!(" kwire — {}  ★ {} ", v.title, v.title);
-        let r = format!(" {}/{} done ", done, total);
-        (t, r)
+    if let Some(v) = &app.view {
+        // Format: "All N/M  ★ Active List N/M  Other List N/M  ..."
+        // Since we only have one list at a time in the model, show:
+        //   "All {total}/{total}  ★ {title} {done}/{total}"
+        let all_label = format!(" All {}/{}", counts.total, counts.total);
+        let active_label = format!("  \u{2605} {} {}/{}", v.title, counts.done, counts.total);
+
+        let mut spans = vec![
+            Span::styled(all_label, style_dim()),
+            Span::styled(active_label, style_title()),
+        ];
+
+        // Navigation hint at right edge
+        let nav = "  \u{2190} \u{2192}";
+        spans.push(Span::styled(nav, style_dim()));
+
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).style(style_normal()),
+            area,
+        );
     } else {
-        (" kwire ".to_string(), String::new())
-    };
-
-    let line = Line::from(vec![
-        Span::styled(title, style_title()),
-        Span::styled(roll_up, style_dim()),
-    ]);
-    frame.render_widget(Paragraph::new(line).style(style_normal()), area);
+        frame.render_widget(
+            Paragraph::new(Span::styled(" kwire", style_title())).style(style_normal()),
+            area,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,12 +433,17 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
         let (display_fmt, display_size, display_state, display_progress) =
             if book.versions.is_empty() {
                 let disc = match book.discovery.as_str() {
-                    "not_found" => "✗ not found",
-                    "needs_selection" => "● choose",
-                    "queuing" | "querying" => "⠋ querying",
+                    "not_found" => "\u{2717} not found",
+                    "needs_selection" => "\u{25cf} choose",
+                    "queuing" | "querying" => "\u{280b} querying",
                     _ => "queued",
                 };
-                ("???".to_string(), "—".to_string(), disc.to_string(), 0u32)
+                (
+                    "???".to_string(),
+                    "\u{2014}".to_string(),
+                    disc.to_string(),
+                    0u32,
+                )
             } else {
                 // Pick the "best" variation to display: prefer an active one,
                 // else the first done, else the first kept.
@@ -291,18 +456,18 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                     .unwrap();
 
                 let state_label = match best.state.as_str() {
-                    "done" => "✓ done".to_string(),
+                    "done" => "\u{2713} done".to_string(),
                     "downloading" => format!("{} {}%", theme::spinner(app.tick), best.progress),
-                    "failed" | "cancelled" => "✗ failed".to_string(),
-                    "queued" => "· queued".to_string(),
-                    "paused" => "⏸ paused".to_string(),
+                    "failed" | "cancelled" => "\u{2717} failed".to_string(),
+                    "queued" => "\u{00b7} queued".to_string(),
+                    "paused" => "\u{23f8} paused".to_string(),
                     _ => best.state.clone(),
                 };
 
                 let size_label = if best.size > 0 {
                     format!("{} MB", best.size)
                 } else {
-                    "—".to_string()
+                    "\u{2014}".to_string()
                 };
 
                 (best.fmt.clone(), size_label, state_label, best.progress)
@@ -421,12 +586,12 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
 
     let summary = if app.activity_expanded {
         format!(
-            "▾ ACTIVITY  {} downloading · {} connecting · {} queued   tab to focus",
+            "\u{25be} ACTIVITY  {} downloading \u{00b7} {} connecting \u{00b7} {} queued   tab to focus",
             downloading_count, connecting_count, queued_count
         )
     } else {
         format!(
-            "▸ ACTIVITY  {} downloading · {} queued   tab to expand",
+            "\u{25b8} ACTIVITY  {} downloading \u{00b7} {} queued   tab to expand",
             downloading_count, queued_count
         )
     };
@@ -460,7 +625,10 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                     Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
                     Span::styled(fb.book.title.clone(), style_normal()),
                     Span::styled(
-                        format!("  {} · {}  {}%  {}{}", v.fmt, host, v.progress, bar, eta),
+                        format!(
+                            "  {} \u{00b7} {}  {}%  {}{}",
+                            v.fmt, host, v.progress, bar, eta
+                        ),
                         style_dim(),
                     ),
                 ])
@@ -505,7 +673,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                         Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
                         Span::styled(title, style_normal()),
                         Span::styled(
-                            format!("  {} · {}%  {}{}{}", t.host, pct, bar, speed, eta),
+                            format!("  {} \u{00b7} {}%  {}{}{}", t.host, pct, bar, speed, eta),
                             style_dim(),
                         ),
                     ])
@@ -536,14 +704,14 @@ fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
         Line::from(vec![
             Span::styled(":", style_hint()),
             Span::styled(buf.as_str(), style_hint()),
-            Span::styled("█", Style::default().fg(C_TEXT)), // cursor
+            Span::styled("\u{2588}", Style::default().fg(C_TEXT)), // cursor
         ])
     } else {
         let hint = match app.focus {
             Focus::List => {
-                "↑↓ move  Enter open  d detail  r retry  p pause  c cancel  o open  R reveal  ? help  : cmd  q quit"
+                "\u{2191}\u{2193} move  \u{2190}\u{2192} list  \u{23ce} open  d detail  / filter  : command  tab downloads  ? help  q"
             }
-            Focus::Activity => "↑↓ scroll  tab list  q quit",
+            Focus::Activity => "\u{2191}\u{2193} scroll  tab list  q quit",
         };
         Line::from(Span::styled(hint, style_hint()))
     };
@@ -563,7 +731,7 @@ fn centered_rect(width: u16, height: u16, parent: Rect) -> Rect {
 }
 
 // ---------------------------------------------------------------------------
-// 4a  Picker modal
+// 4a  Picker modal ("choose a copy")
 // ---------------------------------------------------------------------------
 
 fn render_picker_modal(
@@ -572,30 +740,60 @@ fn render_picker_modal(
     book_flat_index: usize,
     picker_selected: usize,
 ) {
-    let area = centered_rect(80, 20, frame.area());
+    let area = centered_rect(88, 22, frame.area());
     frame.render_widget(Clear, area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Choose a copy ")
-        .style(style_normal());
-
     let Some(fb) = app.flat.get(book_flat_index) else {
-        frame.render_widget(block, area);
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Choose a copy ")
+                .style(style_normal()),
+            area,
+        );
         return;
     };
 
-    let inner = block.inner(area);
+    // Count versions for the subheader.
+    let n_candidates = fb.book.versions.len();
+    let threshold = if let Some(v) = &app.view {
+        v.settings.auto_threshold
+    } else {
+        0.85
+    };
 
-    // Table columns: Fmt | Title | Author | Size | Year | Pages | Score
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} \u{2014} choose a copy ", fb.book.title))
+        .style(style_normal());
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Layout: subheader (1) + column header row (1) + table rows + hint (1)
+    let split = Layout::vertical([
+        Constraint::Length(1), // subheader
+        Constraint::Min(1),    // table (header + rows)
+        Constraint::Length(1), // hint
+    ])
+    .split(inner);
+
+    // Subheader line
+    let subhead = format!(
+        "{} candidates \u{00b7} auto-download needs a single copy \u{2265} {:.2} confidence",
+        n_candidates, threshold
+    );
+    frame.render_widget(Paragraph::new(Span::styled(subhead, style_dim())), split[0]);
+
+    // Table columns: FMT · TITLE · AUTHOR | SIZE | YEAR | PAGES | MATCH
+    // The "·" separators in the header labels are decorative (like the mock)
     let header = Row::new([
-        Cell::from("Fmt").style(style_header()),
-        Cell::from("Title").style(style_header()),
-        Cell::from("Author").style(style_header()),
-        Cell::from("Size").style(style_header()),
-        Cell::from("Year").style(style_header()),
-        Cell::from("Pages").style(style_header()),
-        Cell::from("Score").style(style_header()),
+        Cell::from("FMT").style(style_header()),
+        Cell::from("TITLE \u{00b7} AUTHOR").style(style_header()),
+        Cell::from("SIZE").style(style_header()),
+        Cell::from("YEAR").style(style_header()),
+        Cell::from("PAGES").style(style_header()),
+        Cell::from("MATCH").style(style_header()),
     ])
     .height(1)
     .style(style_header());
@@ -607,33 +805,52 @@ fn render_picker_modal(
         .enumerate()
         .map(|(i, v)| {
             let is_sel = i == picker_selected;
-            let style = if is_sel {
+            let sel_indicator = if is_sel { "\u{25b6} " } else { "  " };
+            let fmt_cell = format!("{}{}", sel_indicator, v.fmt);
+            // Title · Author combined
+            let title_author = format!("{} {}", v.title, v.author);
+            let style_row = if is_sel {
                 style_selected()
             } else {
                 style_normal()
             };
             Row::new([
-                Cell::from(v.fmt.clone()).style(style_dim()),
-                Cell::from(v.title.clone()).style(if is_sel {
+                Cell::from(fmt_cell).style(if is_sel {
+                    style_selected()
+                } else {
+                    style_dim()
+                }),
+                Cell::from(title_author).style(if is_sel {
                     style_selected()
                 } else {
                     style_title()
                 }),
-                Cell::from(v.author.clone()).style(style),
                 Cell::from(if v.size > 0 {
                     format!("{} MB", v.size)
                 } else {
-                    "—".into()
+                    "\u{2014}".into()
                 })
                 .style(style_dim()),
-                Cell::from(v.year.map(|y| y.to_string()).unwrap_or_else(|| "—".into()))
-                    .style(style_dim()),
-                Cell::from(v.pages.map(|p| p.to_string()).unwrap_or_else(|| "—".into()))
-                    .style(style_dim()),
-                Cell::from(format!("{:.2}", v.score)).style(style_dim()),
+                Cell::from(
+                    v.year
+                        .map(|y| y.to_string())
+                        .unwrap_or_else(|| "\u{2014}".into()),
+                )
+                .style(style_dim()),
+                Cell::from(
+                    v.pages
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "\u{2014}".into()),
+                )
+                .style(style_dim()),
+                Cell::from(format!("{:.2}", v.score)).style(if is_sel {
+                    style_selected()
+                } else {
+                    Style::default().fg(C_DONE)
+                }),
             ])
             .height(1)
-            .style(style)
+            .style(style_row)
         })
         .collect();
 
@@ -645,31 +862,31 @@ fn render_picker_modal(
     let table = Table::new(
         rows,
         [
-            Constraint::Length(5), // Fmt
-            Constraint::Min(16),   // Title
-            Constraint::Min(12),   // Author
-            Constraint::Length(8), // Size
-            Constraint::Length(6), // Year
-            Constraint::Length(6), // Pages
-            Constraint::Length(6), // Score
+            Constraint::Length(7), // FMT (with indicator)
+            Constraint::Min(24),   // TITLE · AUTHOR
+            Constraint::Length(8), // SIZE
+            Constraint::Length(6), // YEAR
+            Constraint::Length(6), // PAGES
+            Constraint::Length(6), // MATCH
         ],
     )
     .header(header)
-    .block(block)
     .row_highlight_style(style_selected());
 
-    frame.render_stateful_widget(table, area, &mut table_state);
+    frame.render_stateful_widget(table, split[1], &mut table_state);
 
-    // Hint bar at bottom of modal.
-    let hint_area = Rect::new(
-        inner.x,
-        inner.y + inner.height.saturating_sub(1),
-        inner.width,
-        1,
-    );
+    // Hint bar at bottom
     frame.render_widget(
-        Paragraph::new("⏎ download  a all preferred  esc cancel").style(style_hint()),
-        hint_area,
+        Paragraph::new(Line::from(vec![
+            Span::styled("\u{2191}\u{2193} pick", style_hint()),
+            Span::styled("  space mark  ", style_hint()),
+            Span::styled("\u{23ce} download", Style::default().fg(C_DONE)),
+            Span::styled(
+                "  a all preferred formats  v metadata  esc cancel",
+                style_hint(),
+            ),
+        ])),
+        split[2],
     );
 }
 
@@ -678,36 +895,135 @@ fn render_picker_modal(
 // ---------------------------------------------------------------------------
 
 fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize) {
-    let area = centered_rect(90, 22, frame.area());
+    let area = centered_rect(90, 24, frame.area());
     frame.render_widget(Clear, area);
+
+    let Some(fb) = app.flat.get(book_flat_index) else {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Book detail ")
+            .style(style_normal());
+        frame.render_widget(block, area);
+        return;
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Book detail ")
         .style(style_normal());
 
-    let Some(fb) = app.flat.get(book_flat_index) else {
-        frame.render_widget(block, area);
-        return;
-    };
-
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Split inner into top (variations table) and bottom (history list).
+    // Inner layout:
+    //   title line (1)
+    //   subtitle/breadcrumb line (1)
+    //   blank (1)
+    //   VARIATIONS section header (1)
+    //   variation rows (one per version, min 1)
+    //   blank (1)
+    //   HISTORY section header (1)
+    //   history rows (rest)
+    //   hint (1)
+
+    let n_versions = fb.book.versions.len();
+    let var_rows_h = (n_versions.max(1) + 1) as u16; // +1 for header row
+    let history_h = inner
+        .height
+        .saturating_sub(1 + 1 + 1 + 1 + var_rows_h + 1 + 1 + 1); // = available for history
+
     let split = Layout::vertical([
-        Constraint::Min(5),    // variations
-        Constraint::Min(4),    // history
-        Constraint::Length(1), // hint
+        Constraint::Length(1),          // title line
+        Constraint::Length(1),          // subtitle line
+        Constraint::Length(1),          // blank
+        Constraint::Length(1),          // VARIATIONS label
+        Constraint::Length(var_rows_h), // variation rows
+        Constraint::Length(1),          // blank
+        Constraint::Length(1),          // HISTORY label
+        Constraint::Min(history_h),     // history rows
+        Constraint::Length(1),          // hint
     ])
     .split(inner);
 
-    // Variations table.
+    // Title line: bold title + dim author + right-aligned year · pages
+    let book = &fb.book;
+    let year_pages = book
+        .versions
+        .first()
+        .map(|v| {
+            let y = v.year.map(|y| y.to_string()).unwrap_or_else(|| "?".into());
+            let p = v.pages.map(|p| format!("{} pages", p)).unwrap_or_default();
+            if p.is_empty() {
+                y
+            } else {
+                format!("{} \u{00b7} {}", y, p)
+            }
+        })
+        .unwrap_or_default();
+
+    let title_line = Line::from(vec![
+        Span::styled(book.title.clone(), style_title()),
+        Span::styled("  ", style_dim()),
+        Span::styled(book.author.clone(), style_dim()),
+    ]);
+    frame.render_widget(Paragraph::new(title_line), split[0]);
+
+    // Right-align year · pages
+    if !year_pages.is_empty() {
+        let yp_w = year_pages.len() as u16;
+        let yp_area = Rect::new(
+            split[0].x + split[0].width.saturating_sub(yp_w),
+            split[0].y,
+            yp_w,
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(year_pages, style_dim())),
+            yp_area,
+        );
+    }
+
+    // Subtitle line: breadcrumb-style
+    let n_requested = fb.book.versions.len();
+    let n_done = fb
+        .book
+        .versions
+        .iter()
+        .filter(|v| v.state == "done")
+        .count();
+    let n_active = fb
+        .book
+        .versions
+        .iter()
+        .filter(|v| v.state == "downloading")
+        .count();
+    let subtitle = format!(
+        "{} \u{00b7} {}.  \u{25cf} {} requested \u{00b7} {} done \u{00b7} {} active",
+        fb.group_name, book.seq, n_requested, n_done, n_active
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(subtitle, style_dim())),
+        split[1],
+    );
+
+    // VARIATIONS header
+    let var_summary = format!(
+        "\u{25be} VARIATIONS  {} requested \u{00b7} {} done \u{00b7} {} active",
+        n_requested, n_done, n_active
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(var_summary, style_dim())),
+        split[3],
+    );
+
+    // Variation rows as a table (no outer border — inline with block)
     let var_header = Row::new([
+        Cell::from("").style(style_header()), // checkmark col
         Cell::from("Fmt").style(style_header()),
+        Cell::from("Size").style(style_header()),
+        Cell::from("Source").style(style_header()),
         Cell::from("State").style(style_header()),
         Cell::from("Progress").style(style_header()),
-        Cell::from("Path").style(style_header()),
     ])
     .height(1)
     .style(style_header());
@@ -717,12 +1033,41 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
         .versions
         .iter()
         .map(|v| {
+            let check = if v.state == "done" {
+                "\u{2713}"
+            } else if v.state == "downloading" {
+                theme::spinner(app.tick)
+            } else {
+                " "
+            };
             let bar = theme::progress_bar(v.progress, 8);
+            let state_cell = match v.state.as_str() {
+                "done" => {
+                    let md5_short = v.md5.chars().take(3).collect::<String>();
+                    format!("done \u{00b7} {} \u{00b7} \u{2713}", md5_short)
+                }
+                "downloading" => {
+                    let spd = v
+                        .eta_secs
+                        .map(|s| format!(" \u{00b7} eta {}s", s))
+                        .unwrap_or_default();
+                    format!("downloading {}%{}", v.progress, spd)
+                }
+                other => other.to_string(),
+            };
+            let host = v.host.as_deref().unwrap_or("\u{2014}");
             Row::new([
+                Cell::from(check).style(theme::style_for_state(&v.state)),
                 Cell::from(v.fmt.clone()).style(style_dim()),
-                Cell::from(v.state.clone()).style(theme::style_for_state(&v.state)),
-                Cell::from(format!("{}  {}", v.progress, bar)).style(style_dim()),
-                Cell::from(v.output_path.clone().unwrap_or_else(|| "—".into())).style(style_dim()),
+                Cell::from(if v.size > 0 {
+                    format!("{} MB", v.size)
+                } else {
+                    "\u{2014}".into()
+                })
+                .style(style_dim()),
+                Cell::from(host.to_string()).style(style_dim()),
+                Cell::from(state_cell).style(theme::style_for_state(&v.state)),
+                Cell::from(bar).style(theme::style_for_state(&v.state)),
             ])
             .height(1)
         })
@@ -731,46 +1076,64 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
     let var_table = Table::new(
         var_rows,
         [
-            Constraint::Length(5),
+            Constraint::Length(2),
+            Constraint::Length(6),
+            Constraint::Length(9),
             Constraint::Length(12),
-            Constraint::Length(14),
             Constraint::Min(20),
+            Constraint::Length(10),
         ],
     )
-    .header(var_header)
-    .block(
-        Block::default()
-            .borders(Borders::BOTTOM)
-            .title(" Variations "),
+    .header(var_header);
+
+    frame.render_widget(var_table, split[4]);
+
+    // Output path for done variations shown below (if any)
+    // HISTORY header
+    frame.render_widget(
+        Paragraph::new(Span::styled("\u{25be} HISTORY", style_dim())),
+        split[6],
     );
 
-    frame.render_widget(var_table, split[0]);
-
-    // History list.
-    let history_items: Vec<ListItem> = fb
+    // History list — rows: time · kind · detail
+    let history_items: Vec<Line> = fb
         .book
         .history
         .iter()
         .rev()
-        .take(split[1].height.saturating_sub(2) as usize)
+        .take(split[7].height as usize)
         .map(|e| {
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("{:>12}ms  ", e.at_ms), style_dim()),
-                Span::styled(format!("{:<12}  ", e.kind), style_normal()),
+            // Format time as HH:MM:SS from ms timestamp
+            let secs = e.at_ms / 1000;
+            let time_str = format!(
+                "{:02}:{:02}:{:02}",
+                (secs / 3600) % 24,
+                (secs / 60) % 60,
+                secs % 60
+            );
+            Line::from(vec![
+                Span::styled(format!("{:<10}  ", time_str), style_dim()),
+                Span::styled(
+                    format!("{:<14}  ", e.kind),
+                    Style::default().fg(C_DONE).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(e.detail.clone(), style_dim()),
-            ]))
+            ])
         })
         .collect();
 
-    let history_list =
-        List::new(history_items).block(Block::default().borders(Borders::NONE).title(" History "));
+    frame.render_widget(List::new(history_items), split[7]);
 
-    frame.render_widget(history_list, split[1]);
-
-    // Hint.
+    // Hint
     frame.render_widget(
-        Paragraph::new("o open  R reveal  r retry  esc back").style(style_hint()),
-        split[2],
+        Paragraph::new(Line::from(vec![
+            Span::styled("\u{2191}\u{2193} variation", style_hint()),
+            Span::styled(
+                "  o open file  R reveal  r re-download  esc back",
+                style_hint(),
+            ),
+        ])),
+        split[8],
     );
 }
 
@@ -779,57 +1142,150 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
 // ---------------------------------------------------------------------------
 
 fn render_settings_modal(frame: &mut Frame, app: &AppState) {
-    let area = centered_rect(70, 18, frame.area());
+    let area = centered_rect(72, 22, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Settings ")
+        .title(if let Some(v) = &app.view {
+            format!(" settings \u{00b7} {} ", v.title)
+        } else {
+            " settings ".to_string()
+        })
         .style(style_normal());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let settings_data: Vec<(&str, String)> = if let Some(v) = &app.view {
-        let s = &v.settings;
-        vec![
-            ("format_pref", s.format_pref.join(", ")),
-            ("language", s.language.clone()),
-            ("naming_template", s.naming_template.clone()),
-            ("auto_threshold", format!("{:.2}", s.auto_threshold)),
-            ("near_threshold", format!("{:.2}", s.near_threshold)),
-            ("seq_per_group", s.seq_per_group.to_string()),
-            ("keep_top", s.keep_top.to_string()),
-        ]
-    } else {
-        vec![("(no list loaded)", String::new())]
-    };
-
     let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
 
-    let items: Vec<ListItem> = settings_data
+    // Structured settings sections matching the mock:
+    // FORMATS, MATCHING, FILES, DOWNLOADS & MIRRORS
+    #[derive(Clone)]
+    enum SettingsRow {
+        SectionHeader(&'static str),
+        Field {
+            label: &'static str,
+            value: String,
+            index: usize,
+        },
+    }
+
+    let (
+        fmt_pref,
+        language,
+        auto_thresh,
+        near_thresh,
+        keep_top,
+        naming,
+        sub_group,
+        max_conc,
+        per_host,
+        hedged,
+        search_mirrors,
+        dl_sites,
+    ) = if let Some(v) = &app.view {
+        let s = &v.settings;
+        (
+            s.format_pref.join(", "),
+            s.language.clone(),
+            format!("{:.2}", s.auto_threshold),
+            format!("{:.2}", s.near_threshold),
+            s.keep_top.to_string(),
+            s.naming_template.clone(),
+            "on".to_string(),
+            "8".to_string(),
+            "4".to_string(),
+            "off".to_string(),
+            "libgen.li  libgen.is  libgen.rs".to_string(),
+            "libgen.li  libgen.pw  ipfs".to_string(),
+        )
+    } else {
+        (
+            "epub, pdf".into(),
+            "any".into(),
+            "0.85".into(),
+            "0.40".into(),
+            "3".into(),
+            "{seq:02} - {authors} - {title}.{ext}".into(),
+            "on".into(),
+            "8".into(),
+            "4".into(),
+            "off".into(),
+            "libgen.li  libgen.is  libgen.rs".into(),
+            "libgen.li  libgen.pw  ipfs".into(),
+        )
+    };
+
+    let mut field_index = 0usize;
+    let mut make_field = |label: &'static str, value: String| -> SettingsRow {
+        let row = SettingsRow::Field {
+            label,
+            value,
+            index: field_index,
+        };
+        field_index += 1;
+        row
+    };
+
+    let rows: Vec<SettingsRow> = vec![
+        SettingsRow::SectionHeader("FORMATS"),
+        make_field("Preferred formats", fmt_pref),
+        make_field("Language", language),
+        SettingsRow::SectionHeader("MATCHING"),
+        make_field("Auto-download at \u{2265}", auto_thresh),
+        make_field("Treat as not-found below", near_thresh),
+        make_field("Keep top copies", keep_top),
+        SettingsRow::SectionHeader("FILES"),
+        make_field("Download folder", "~/Books/Kwire".into()),
+        make_field("Naming template", naming),
+        make_field("Sub-grouping", sub_group),
+        SettingsRow::SectionHeader("DOWNLOADS & MIRRORS"),
+        make_field(
+            "Max concurrent",
+            format!(
+                "{} per-host attempts {}  hedged {}",
+                max_conc, per_host, hedged
+            ),
+        ),
+        make_field("Search mirrors", search_mirrors),
+        make_field("Download sites", dl_sites),
+    ];
+
+    let items: Vec<ListItem> = rows
         .iter()
-        .enumerate()
-        .map(|(i, (key, val))| {
-            let is_sel = i == app.settings_selected;
-            let style = if is_sel {
-                style_selected()
-            } else {
-                style_normal()
-            };
-            let value_display = if is_sel {
-                if let Some(ref edit) = app.settings_edit {
-                    format!("{}", edit)
+        .map(|row| match row {
+            SettingsRow::SectionHeader(title) => ListItem::new(Line::from(vec![
+                Span::styled("\n", style_dim()),
+                Span::styled(*title, style_header()),
+            ])),
+            SettingsRow::Field {
+                label,
+                value,
+                index,
+            } => {
+                let is_sel = *index == app.settings_selected;
+                let value_display = if is_sel {
+                    if let Some(ref edit) = app.settings_edit {
+                        edit.clone()
+                    } else {
+                        value.clone()
+                    }
                 } else {
-                    val.clone()
-                }
-            } else {
-                val.clone()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("  {:<20}  ", key), style_dim()),
-                Span::styled(value_display, style),
-            ]))
+                    value.clone()
+                };
+                let row_style = if is_sel {
+                    style_selected()
+                } else {
+                    style_normal()
+                };
+                let edit_indicator = if is_sel { "  edit |" } else { "" };
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("  {:<26}", label), style_dim()),
+                    Span::styled(value_display, row_style),
+                    Span::styled(edit_indicator.to_string(), style_dim()),
+                ]))
+            }
         })
         .collect();
 
@@ -837,7 +1293,13 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
     frame.render_widget(list, split[0]);
 
     frame.render_widget(
-        Paragraph::new("⏎ commit  esc close").style(style_hint()),
+        Paragraph::new(Line::from(vec![
+            Span::styled("\u{2191}\u{2193} field", style_hint()),
+            Span::styled(
+                "  \u{23ce} edit  space toggle  esc save & close",
+                style_hint(),
+            ),
+        ])),
         split[1],
     );
 }
@@ -847,57 +1309,77 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
 // ---------------------------------------------------------------------------
 
 fn render_help_modal(frame: &mut Frame, parent: Rect) {
-    let area = centered_rect(72, 24, parent);
+    let area = centered_rect(82, 26, parent);
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Help — Kwire ")
+        .title(" Keys & Commands ")
         .style(style_normal());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let keymap: &[(&str, &str)] = &[
-        ("↑ / k", "Move selection up"),
-        ("↓ / j", "Move selection down"),
-        ("Enter", "Open detail / choose copy"),
-        ("d", "Open book detail"),
-        ("r", "Retry failed/not-found book"),
-        ("p", "Pause download"),
-        ("c", "Cancel download"),
-        ("o", "Open file with system app"),
-        ("R", "Reveal file in Finder"),
-        ("a", "Request all preferred formats"),
-        ("Tab", "Toggle focus List ↔ Activity"),
-        ("/", "Cycle filter"),
-        ("1–6", "Set filter directly"),
-        (":", "Enter command mode"),
-        ("?", "Toggle this help screen"),
-        ("Esc", "Close modal / cancel command"),
-        ("q", "Quit"),
-        ("Ctrl-C", "Quit (unconditional)"),
+    // Two-column layout matching the mock:
+    // Left: NAVIGATE + FILTER sections
+    // Right: ACT ON SELECTION + COMMAND LINE sections
+    let cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
+
+    let split_left = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(cols[0]);
+
+    // Left column
+    let left_lines: Vec<Line> = vec![
+        Line::from(Span::styled("NAVIGATE", style_header())),
+        make_key_line("\u{2191} \u{2193}", "move selection"),
+        make_key_line("\u{2190} \u{2192}", "switch reading list"),
+        make_key_line("\u{23ce}", "open \u{00b7} choose a copy"),
+        make_key_line("d", "book detail & history"),
+        make_key_line("tab", "focus the downloads pane"),
+        make_key_line("esc \u{00b7} q", "back \u{00b7} quit"),
+        Line::from(""),
+        Line::from(Span::styled("FILTER", style_header())),
+        make_key_line("/", "cycle status filter"),
+        make_key_line(
+            "1\u{2013}6",
+            "all \u{00b7} needs \u{00b7} check \u{00b7} cannot \u{00b7} progress \u{00b7} done",
+        ),
     ];
 
-    let split_h = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let left_list: Vec<ListItem> = left_lines.into_iter().map(|l| ListItem::new(l)).collect();
+    frame.render_widget(List::new(left_list), split_left[0]);
 
-    // Two-column table.
-    let col_rows: Vec<Row> = keymap
-        .iter()
-        .map(|(key, action)| {
-            Row::new([
-                Cell::from(*key).style(style_title()),
-                Cell::from(*action).style(style_normal()),
-            ])
-            .height(1)
-        })
-        .collect();
+    // Right column
+    let right_lines: Vec<Line> = vec![
+        Line::from(Span::styled("ACT ON SELECTION", style_header())),
+        make_key_line("space", "mark a copy"),
+        make_key_line("a", "fetch all preferred formats"),
+        make_key_line("r", "retry \u{00b7} re-download"),
+        make_key_line("p \u{00b7} c", "pause \u{00b7} cancel"),
+        make_key_line("o \u{00b7} R", "open file \u{00b7} reveal in Finder"),
+        Line::from(""),
+        Line::from(Span::styled("COMMAND LINE  (press :)", style_header())),
+        make_key_line(":import <file>", "add a list"),
+        make_key_line(":add", "add one book"),
+        make_key_line(":open <list>", "switch list"),
+        make_key_line(":requery", "re-search & re-verify"),
+        make_key_line(":settings", "open settings"),
+        make_key_line(":pause-all", "pause every download"),
+    ];
 
-    let help_table = Table::new(col_rows, [Constraint::Length(12), Constraint::Min(30)]);
-    frame.render_widget(help_table, split_h[0]);
+    let right_list: Vec<ListItem> = right_lines.into_iter().map(|l| ListItem::new(l)).collect();
+    frame.render_widget(List::new(right_list), cols[1]);
 
+    // Bottom hint
     frame.render_widget(
-        Paragraph::new("? or esc  close").style(style_hint()),
-        split_h[1],
+        Paragraph::new(Span::styled("? or esc  to close", style_hint())),
+        split_left[1],
     );
+}
+
+fn make_key_line<'a>(key: &'a str, action: &'a str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(format!("{:<10}", key), Style::default().fg(C_DONE)),
+        Span::styled(action, style_normal()),
+    ])
 }
