@@ -1,9 +1,6 @@
 # Stuck-download reconciliation — keeping `downloading` honest
 
-Status: **accepted, implemented** (option B). Owners: download/engine.
-
-This doc records why a download could appear stuck forever, the principle that fixes
-it, the design we shipped, and the alternative we considered and rejected.
+Status: **accepted, implemented** (design B below). Owners: download/engine.
 
 ## 1. The bug
 
@@ -30,74 +27,76 @@ outside the TTL's reach.
 
 **`downloading` must imply a live session, and the engine is the sole authority on
 liveness.** Don't infer "is it alive" from disk or timers — the engine owns both job
-dispatch and the live transports, so it *knows*. Anything persisted `downloading`
-that the engine isn't actually running is drift to be reconciled.
+dispatch and the live transports, so it *knows*. Anything persisted in-flight that
+the engine isn't actually running is drift to reconcile. The reconciliation verdict
+is the same in any design:
 
-## 3. Design shipped (option B)
+- variation has a **live session** (its md5 is in the engine's `inflight` set) → **leave it** (even if quiet — no false-killing a slow-but-alive transfer);
+- **no live session**, final file present + full size + **md5 verifies** → **`Done`**;
+- **no live session**, file partial/absent, `attempts < 3` → **re-queue** (`Pending`, keep the `.part`/`resume_offset`, `attempts += 1`) so the engine resumes it;
+- **no live session**, `attempts ≥ 3` → **`Failed`** (stop thrashing a dead source).
 
-A single reconciliation judgement, **gated by the engine's live-md5 set**, invoked
-from two triggers.
+The two designs below differ only in **where that verdict is computed and how it's
+triggered** — not in the verdict itself.
 
-- **Liveness authority:** the engine's `inflight: HashSet<BookKey>`; a download
-  `BookKey` is `(list, group_path, book_index, Some(md5))`. The live set is every
-  such `Some(md5)`. A variation whose md5 is in the set is **never touched** (a
-  slow-but-alive transfer is safe).
-- **Per sessionless in-flight variation** (`Pending`/`Resolving`/`Downloading`/
-  `Verifying`, not in the live set):
-  - final file present **+ full size + md5 verifies** → **`Done`**
-    (`promote_variation`: `md5_verified`, `bytes_done = total`, keep `output_path`);
-  - file **partial/absent** and `attempts < RECONCILE_MAX_ATTEMPTS (3)` → **re-queue**
-    (`requeue_variation`: `state → Pending`, `attempts += 1`, **keep** the `.part`/
-    `resume_offset`). The normal drive loop re-dispatches it and resumes;
-  - `attempts ≥ 3` → **`Failed`** (`fail_inflight_variation`) — stop thrashing a dead
-    source; becomes a visible, user-retryable state.
-- **Triggers:**
-  1. **Startup** — the background integrity scan calls it with an *empty* live set
-     (nothing is dispatched yet), so every persisted zombie qualifies.
-     `resume_on_launch` has already rewound in-flight → `Pending`, and the engine
-     launches paused (goals `Idle`), so reconciliation runs *before* anything could
-     re-download a complete file.
-  2. **In-session** — `run_engine` sweeps every `RECONCILE_CADENCE` (30 s) after a
-     `tick()`, passing the live set; it emits `library://refresh` when something
-     changed, so a fixed job leaves the downloading view **without a relaunch**.
-- **Cheap when idle:** a settled list yields an empty worklist and hashes nothing; a
-  file is hashed only when a sessionless in-flight job's `output_path` is present at
-  full size.
+## 3. The two designs we weighed
 
-**Observability (root-cause visibility):** in `apply_progress`, a `Progress::Done`
-that matched no current variation now emits a `warn!` ("Done received for md5 … but
-no matching variation — completion dropped; likely an edit/re-query race"), so the
-next occurrence of the underlying race is a log lookup, not a guess.
+### Design A — engine *dispatch guard*
+Split the work across the normal download path:
+- a periodic engine sweep does **one** thing — reset any sessionless in-flight job to
+  `Pending`;
+- the completeness verdict lives **inside `begin_download`**: when the engine goes to
+  (re)dispatch a `Pending` variation, it first checks "does my own final file already
+  exist + verify?" → if yes, mark `Done` and skip the fetch; otherwise resume from the
+  `.part`.
+- Startup needs no separate scan: `resume_on_launch` already rewinds in-flight →
+  `Pending`, so the first dispatch reconciles everything.
 
-### Code map
+Appeal: one reconciliation point, sitting on the path the download already takes.
+
+### Design B — standalone reconcile function  ✅ shipped
+A single function makes the **whole** verdict and is invoked from two triggers:
+- `reconcile_completed_inflight(orch, live_md5s, ctx)` — for one list, walks every
+  persisted in-flight variation, applies the §2 verdict, and persists. `begin_download`
+  is untouched.
+- **Triggers:** the **startup** integrity scan calls it with an *empty* `live_md5s`
+  (nothing is dispatched yet, so every zombie qualifies); the **running engine** calls
+  it every 30 s (`RECONCILE_CADENCE`) after a `tick()`, passing the live set, and emits
+  `library://refresh` when anything changed (the view clears without a relaunch).
+
+Appeal: the verdict lives in exactly one place; nothing is added to the hot dispatch
+path.
+
+## 4. Why we shipped B (and rejected A)
+
+Both designs are **engine-authoritative on liveness** — both key off the engine's
+`inflight: HashSet<BookKey>` (a download key is `(list, group_path, book_index,
+Some(md5))`; the live set is those `md5`s). So A's headline appeal — "single source of
+truth for liveness" — is *already* true of B; it's not a differentiator.
+
+A's other appeal was "no completeness check living outside `begin_download`." But
+`begin_download` only does **cross-list** md5 dedup — it never checks whether a
+variation's *own* output is already complete. So B's check isn't a duplicate of
+anything; it's already single-location. A would have *added* that logic into the hot
+dispatch path for **no behavioral gain**.
+
+That leaves the only real difference as **placement** — a sweep-called helper (B) vs a
+dispatch guard (A) — which is aesthetic, not behavioral. B was already built and
+tested, so we shipped B.
+
+## 5. Observability
+
+Independent of the reconciliation: in `apply_progress`, a `Progress::Done` that
+matches no current variation now emits a `warn!` ("Done received for md5 … but no
+matching variation — completion dropped; likely an edit/re-query race"), so the next
+occurrence of the **root-cause race** is a log lookup rather than a re-investigation.
+
+## 6. Code map (design B)
 - `crates/core/src/orchestrator.rs` — `InflightVariation`, `inflight_variations()`,
   `promote_variation` / `requeue_variation` / `fail_inflight_variation`, the
   `apply_progress` warn.
-- `app/src-tauri/src/commands.rs` — `reconcile_completed_inflight(orch, live_md5s,
-  ctx)` (the shared judgement; off-lock hashing), `RECONCILE_MAX_ATTEMPTS`, the
-  startup-scan call.
-- `app/src-tauri/src/engine.rs` — `RECONCILE_CADENCE`, the sweep + `emit_refresh`.
+- `app/src-tauri/src/commands.rs` — `reconcile_completed_inflight` (the §2 verdict;
+  off-lock hashing), `RECONCILE_MAX_ATTEMPTS = 3`, the startup-scan call.
+- `app/src-tauri/src/engine.rs` — `RECONCILE_CADENCE` (30 s), the sweep, `emit_refresh`.
 - `app/src-tauri/tests/reconcile_inflight.rs` — complete→Done, partial→requeue+attempts,
   over-cap→Failed, live-session→untouched.
-
-## 4. Alternative considered — option A (engine-owned dispatch guard), rejected
-
-A had the **sweep do nothing but re-queue** any sessionless in-flight job to
-`Pending`, and folded the completeness decision into **`begin_download`**: before
-fetching, if the variation's own `output_path` already exists + verifies → mark
-`Done` and skip; else resume/fetch. Startup would fall out via `resume_on_launch`
-without any scan.
-
-It was attractive for "one reconciliation point on the normal download path." We
-**did not pursue it** because, once B keys liveness off the engine's `inflight` set,
-A's two selling points evaporate:
-
-- **Engine-authoritative liveness** — A's main appeal — B *already* has (the
-  `inflight` set), so A isn't more correct.
-- **No duplication** — A worried about a completeness check living outside
-  `begin_download`; but `begin_download` only does *cross-list* md5 dedup, never a
-  *self*-completeness check, so B's check is already single-location. A would have
-  added that logic to the hot dispatch path for no behavioral gain.
-
-So the only remaining difference is placement (a sweep-called helper vs. a dispatch
-guard) — aesthetic, not behavioral — and B was already built and tested. We shipped B.
