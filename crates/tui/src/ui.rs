@@ -82,7 +82,10 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
                 book_flat_index,
                 selected,
             } => render_picker_modal(frame, app, book_flat_index, selected),
-            Modal::Detail { book_flat_index } => render_detail_modal(frame, app, book_flat_index),
+            Modal::Detail {
+                book_flat_index,
+                selected,
+            } => render_detail_modal(frame, app, book_flat_index, selected),
             Modal::Settings => render_settings_modal(frame, app),
             Modal::Help => render_help_modal(frame, frame.area()),
         }
@@ -298,36 +301,136 @@ fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
     let all_done: usize = app.all_lists.iter().map(|l| l.done).sum();
     let all_total: usize = app.all_lists.iter().map(|l| l.total).sum();
 
-    let mut spans: Vec<Span> = Vec::new();
-    spans.push(Span::styled(
-        format!(" All {}/{}", all_done, all_total),
-        style_dim(),
-    ));
+    // Build each segment as (text, style).  Track the column offset of each
+    // list so we can compute a horizontal scroll that keeps the active list
+    // always fully visible.
+    struct Seg {
+        text: String,
+        style: ratatui::style::Style,
+    }
+    let mut segs: Vec<Seg> = Vec::new();
+
+    let prefix = format!(" All {}/{}", all_done, all_total);
+    let mut cumulative: usize = prefix.chars().count();
+    segs.push(Seg {
+        text: prefix,
+        style: style_dim(),
+    });
+
+    // Store the [start, end) column range of each list segment (excluding
+    // the "All" prefix and trailing nav hint).
+    let mut list_col_ranges: Vec<(usize, usize)> = Vec::new();
 
     for (i, list) in app.all_lists.iter().enumerate() {
         let is_active = i == app.active_list_idx;
-        if is_active {
-            // Active list: star prefix, bold/bright
-            spans.push(Span::styled(
-                format!("   \u{2605} {} {}/{}", list.title, list.done, list.total),
-                style_title(),
-            ));
+        let text = if is_active {
+            format!("   \u{2605} {} {}/{}", list.title, list.done, list.total)
         } else {
-            // Inactive lists: dim, no star
-            spans.push(Span::styled(
-                format!("   {} {}/{}", list.title, list.done, list.total),
-                style_dim(),
-            ));
-        }
+            format!("   {} {}/{}", list.title, list.done, list.total)
+        };
+        let start = cumulative;
+        let end = start + text.chars().count();
+        list_col_ranges.push((start, end));
+        cumulative = end;
+        let style = if is_active {
+            style_title()
+        } else {
+            style_dim()
+        };
+        segs.push(Seg { text, style });
     }
 
-    // Right-edge navigation hint
-    spans.push(Span::styled("   \u{2190} \u{2192}", style_dim()));
+    let nav = "   \u{2190} \u{2192}";
+    let nav_len = nav.chars().count();
+    let total_width = cumulative + nav_len;
+    segs.push(Seg {
+        text: nav.into(),
+        style: style_dim(),
+    });
+
+    let area_w = area.width as usize;
+
+    // Compute scroll_x so the active list is fully visible.
+    let (active_start, active_end) = list_col_ranges
+        .get(app.active_list_idx)
+        .copied()
+        .unwrap_or((0, 0));
+
+    let scroll_x: usize = if total_width <= area_w {
+        0 // everything fits — no scroll
+    } else {
+        // We want [scroll_x, scroll_x + area_w) to contain [active_start, active_end).
+        // Try scrolling just far enough to show the start of the active list.
+        let want_start = active_start.saturating_sub(1);
+        // Clamp so we never show blank space at the right.
+        let max_scroll = total_width.saturating_sub(area_w);
+        let mut sx = want_start.min(max_scroll);
+        // Ensure the end of the active list is also visible (scroll right if needed).
+        if sx + area_w < active_end {
+            sx = active_end.saturating_sub(area_w).min(max_scroll);
+        }
+        sx
+    };
+
+    let has_left = scroll_x > 0;
+    let has_right = scroll_x + area_w < total_width;
+
+    // Build visible spans by slicing each segment to the visible column window
+    // [scroll_x, scroll_x + area_w).
+    let mut spans: Vec<Span> = Vec::new();
+    let mut pos: usize = 0;
+
+    for seg in &segs {
+        let seg_len = seg.text.chars().count();
+        let seg_end = pos + seg_len;
+
+        if seg_end <= scroll_x {
+            // Entirely before the visible window — skip.
+            pos = seg_end;
+            continue;
+        }
+        if pos >= scroll_x + area_w {
+            // Entirely after the visible window — stop.
+            break;
+        }
+
+        // Clip to the visible window.
+        let char_skip = scroll_x.saturating_sub(pos);
+        let chars_available = area_w.saturating_sub(pos.saturating_sub(scroll_x));
+        let visible_chars = seg_len.saturating_sub(char_skip).min(chars_available);
+        if visible_chars > 0 {
+            let visible: String = seg
+                .text
+                .chars()
+                .skip(char_skip)
+                .take(visible_chars)
+                .collect();
+            if !visible.is_empty() {
+                spans.push(Span::styled(visible, seg.style));
+            }
+        }
+
+        pos = seg_end;
+    }
 
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(style_normal()),
         area,
     );
+
+    // Overlay ‹ / › affordances on top of the rendered line.
+    if has_left && area.width >= 1 {
+        frame.render_widget(
+            Paragraph::new(Span::styled("\u{2039}", style_dim())),
+            Rect::new(area.x, area.y, 1, 1),
+        );
+    }
+    if has_right && area.width >= 2 {
+        frame.render_widget(
+            Paragraph::new(Span::styled("\u{203a}", style_dim())),
+            Rect::new(area.x + area.width - 1, area.y, 1, 1),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1029,7 +1132,12 @@ fn render_picker_modal(
 // 4b  Detail modal
 // ---------------------------------------------------------------------------
 
-fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize) {
+fn render_detail_modal(
+    frame: &mut Frame,
+    app: &AppState,
+    book_flat_index: usize,
+    detail_selected: usize,
+) {
     let area = centered_rect(92, 30, frame.area());
     frame.render_widget(Clear, area);
 
@@ -1176,8 +1284,13 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
         .book
         .versions
         .iter()
-        .map(|v| {
-            let check = if v.state == "done" {
+        .enumerate()
+        .map(|(i, v)| {
+            let is_sel = i == detail_selected;
+            // ▶ for the selected variation; ✓ for done; spinner for downloading.
+            let check = if is_sel {
+                "\u{25b6}" // ▶ selected marker
+            } else if v.state == "done" {
                 "\u{2713}"
             } else if v.state == "downloading" {
                 theme::spinner(app.tick)
@@ -1200,22 +1313,57 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
                 other => other.to_string(),
             };
             let host = v.host.as_deref().unwrap_or("\u{2014}");
+            let row_style = if is_sel {
+                style_selected()
+            } else {
+                style_normal()
+            };
             Row::new([
-                Cell::from(check).style(theme::style_for_state(&v.state)),
-                Cell::from(v.fmt.clone()).style(style_dim()),
+                Cell::from(check).style(if is_sel {
+                    style_selected()
+                } else {
+                    theme::style_for_state(&v.state)
+                }),
+                Cell::from(v.fmt.clone()).style(if is_sel {
+                    style_selected()
+                } else {
+                    style_dim()
+                }),
                 Cell::from(if v.size > 0 {
                     format!("{} MB", v.size)
                 } else {
                     "\u{2014}".into()
                 })
-                .style(style_dim()),
-                Cell::from(host.to_string()).style(style_dim()),
-                Cell::from(state_cell).style(theme::style_for_state(&v.state)),
-                Cell::from(bar).style(theme::style_for_state(&v.state)),
+                .style(if is_sel {
+                    style_selected()
+                } else {
+                    style_dim()
+                }),
+                Cell::from(host.to_string()).style(if is_sel {
+                    style_selected()
+                } else {
+                    style_dim()
+                }),
+                Cell::from(state_cell).style(if is_sel {
+                    style_selected()
+                } else {
+                    theme::style_for_state(&v.state)
+                }),
+                Cell::from(bar).style(if is_sel {
+                    style_selected()
+                } else {
+                    theme::style_for_state(&v.state)
+                }),
             ])
             .height(1)
+            .style(row_style)
         })
         .collect();
+
+    let mut var_table_state = TableState::default();
+    if !fb.book.versions.is_empty() {
+        var_table_state.select(Some(detail_selected));
+    }
 
     let var_table = Table::new(
         var_rows,
@@ -1228,9 +1376,10 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
             Constraint::Length(10),
         ],
     )
-    .header(var_header);
+    .header(var_header)
+    .row_highlight_style(style_selected());
 
-    frame.render_widget(var_table, split[4]);
+    frame.render_stateful_widget(var_table, split[4], &mut var_table_state);
 
     // Output path for done variations shown below (if any)
     // HISTORY header

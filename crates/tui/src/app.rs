@@ -90,7 +90,11 @@ pub enum Modal {
         selected: usize,
     },
     /// Book detail + history.
-    Detail { book_flat_index: usize },
+    Detail {
+        book_flat_index: usize,
+        /// Which variation row is currently highlighted (↑/↓ in the detail modal).
+        selected: usize,
+    },
     /// Settings key-value editor.
     Settings,
     /// Full help screen.
@@ -363,17 +367,57 @@ impl AppState {
                 }
                 match code {
                     KeyCode::Char('q') | KeyCode::Esc => Intent::Quit,
-                    KeyCode::Down | KeyCode::Char('j') => {
+                    KeyCode::Down => {
+                        if modifiers.contains(KeyModifiers::SHIFT) {
+                            if self.focus == Focus::List {
+                                self.move_selection_page_down();
+                            }
+                        } else {
+                            match self.focus {
+                                Focus::List => self.move_selection(1),
+                                Focus::Activity => self.scroll_activity(1),
+                            }
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Char('j') => {
                         match self.focus {
                             Focus::List => self.move_selection(1),
                             Focus::Activity => self.scroll_activity(1),
                         }
                         Intent::Redraw
                     }
-                    KeyCode::Up | KeyCode::Char('k') => {
+                    // Shift-J = page down in the book list.
+                    KeyCode::Char('J') => {
+                        if self.focus == Focus::List {
+                            self.move_selection_page_down();
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Up => {
+                        if modifiers.contains(KeyModifiers::SHIFT) {
+                            if self.focus == Focus::List {
+                                self.move_selection_page_up();
+                            }
+                        } else {
+                            match self.focus {
+                                Focus::List => self.move_selection_up(),
+                                Focus::Activity => self.scroll_activity_up(),
+                            }
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Char('k') => {
                         match self.focus {
                             Focus::List => self.move_selection_up(),
                             Focus::Activity => self.scroll_activity_up(),
+                        }
+                        Intent::Redraw
+                    }
+                    // Shift-K = page up in the book list.
+                    KeyCode::Char('K') => {
+                        if self.focus == Focus::List {
+                            self.move_selection_page_up();
                         }
                         Intent::Redraw
                     }
@@ -660,12 +704,37 @@ impl AppState {
                 }
             }
 
-            Modal::Detail { book_flat_index } => {
+            Modal::Detail {
+                book_flat_index,
+                selected,
+            } => {
                 let flat_index = *book_flat_index;
+                let sel = *selected;
                 match ev {
                     Event::Key(KeyEvent { code, .. }) => match code {
                         KeyCode::Esc => {
                             self.modal = None;
+                            Intent::Redraw
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            let max = self
+                                .flat
+                                .get(flat_index)
+                                .map(|fb| fb.book.versions.len().saturating_sub(1))
+                                .unwrap_or(0);
+                            let new_sel = (sel + 1).min(max);
+                            self.modal = Some(Modal::Detail {
+                                book_flat_index: flat_index,
+                                selected: new_sel,
+                            });
+                            Intent::Redraw
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            let new_sel = sel.saturating_sub(1);
+                            self.modal = Some(Modal::Detail {
+                                book_flat_index: flat_index,
+                                selected: new_sel,
+                            });
                             Intent::Redraw
                         }
                         KeyCode::Char('o') => {
@@ -764,6 +833,22 @@ impl AppState {
         if self.selected > 0 {
             self.selected -= 1;
         }
+    }
+
+    /// Move down by one viewport height (Shift-Down / Shift-J).
+    fn move_selection_page_down(&mut self) {
+        if self.flat.is_empty() {
+            return;
+        }
+        // Use the book-table height from the last render as the page size.
+        let page = self.last_rects.book_table.height.max(1) as usize;
+        self.selected = (self.selected + page).min(self.flat.len() - 1);
+    }
+
+    /// Move up by one viewport height (Shift-Up / Shift-K).
+    fn move_selection_page_up(&mut self) {
+        let page = self.last_rects.book_table.height.max(1) as usize;
+        self.selected = self.selected.saturating_sub(page);
     }
 
     /// Number of in-flight transfer rows the Activity pane can scroll through.
