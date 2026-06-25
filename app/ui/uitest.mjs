@@ -464,6 +464,19 @@ check("detail: edit form renders + onEditBook invokes edit_book with trimmed val
   if (ctx.EDIT_BOOK !== null) throw new Error("EDIT_BOOK should clear after save");
 });
 
+check("detail: an auto re-render does NOT rebuild the OPEN edit form (preserves typing/focus)", () => {
+  const bk = { id: "bk0", bid: "bk0", list: "L1", title: "T", author: "A", discovery: "not_found", review: false, versions: [] };
+  ctx.LISTS = [listOf(bk)]; ctx.SELECTED = "bk0"; ctx.CURRENT = "L1"; ctx.DETAIL_COLLAPSED = false;
+  ctx.EDIT_BOOK = null; ctx.renderDetail();              // baseline (form closed)
+  ctx.EDIT_BOOK = "bk0"; ctx.renderDetail();             // open the form (signature changed → rendered)
+  if (!els["dBody"].innerHTML.includes('id="editTitle"')) throw new Error("edit form should be open");
+  els["dBody"].innerHTML += "<!--typed-->";             // stand in for the user's in-progress edit
+  ctx.renderDetail();                                    // auto re-render: same EDIT_BOOK/SELECTED/collapse → must SKIP
+  if (!els["dBody"].innerHTML.includes("<!--typed-->")) throw new Error("auto re-render wiped the open edit form");
+  ctx.EDIT_BOOK = null; ctx.renderDetail();              // cancel → re-renders normally
+  if (els["dBody"].innerHTML.includes("<!--typed-->")) throw new Error("clearing EDIT_BOOK should re-render the detail");
+});
+
 check("detail: Remove-from-list shows ONLY for a Manual-list book (is_manual gate)", () => {
   const bk = { id: "bk0", bid: "bk0", list: "L1", title: "Some Book", author: "A",
     discovery: "not_found", review: false, versions: [] };

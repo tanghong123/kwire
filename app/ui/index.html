@@ -2039,7 +2039,17 @@ function closeHistory() {
   document.getElementById("histScrim").classList.remove("open");
   document.getElementById("histSheet").classList.remove("open");
 }
+var _detailSig = null; // (EDIT_BOOK|SELECTED|collapse) — skip rebuilding the open edit form on auto-renders
 function renderDetail() {
+  // While the inline edit form is OPEN, an AUTOMATIC re-render (a progress tick via
+  // renderLive, a cover load / done event via render(), a query stage) must NOT
+  // rebuild the detail — that wipes the user's in-progress typing + focus. Skip the
+  // rebuild when editing AND nothing the user controls changed (which book is
+  // selected, the edit target, the collapse state). User actions (open/save/cancel
+  // edit, collapse, select another book) DO change the signature → normal re-render.
+  var _sig = EDIT_BOOK + "|" + SELECTED + "|" + DETAIL_COLLAPSED;
+  if (EDIT_BOOK && _sig === _detailSig) return;
+  _detailSig = _sig;
   var d = document.getElementById("detail");
   var bk = SELECTED ? bookById(SELECTED) : null;
   var show = bk && !DETAIL_COLLAPSED;
