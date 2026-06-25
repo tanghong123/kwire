@@ -108,6 +108,19 @@ pub struct LastRects {
 // AppState
 // ---------------------------------------------------------------------------
 
+/// Live in-flight transfer telemetry, updated from Progress events.
+#[derive(Debug, Clone, Default)]
+pub struct ActiveTransfer {
+    pub md5: String,
+    pub host: String,
+    pub bytes_done: u64,
+    pub total_bytes: Option<u64>,
+    pub speed_bps: Option<u64>,
+    pub eta_secs: Option<u64>,
+    /// Derived from the most-recent ViewBook that has this md5.
+    pub title: String,
+}
+
 /// Full TUI application state.  Only plain data — no I/O handles.
 pub struct AppState {
     /// The projected library snapshot the UI renders from.
@@ -149,6 +162,9 @@ pub struct AppState {
 
     /// Inline edit buffer for the Settings modal.
     pub settings_edit: Option<String>,
+
+    /// Live scheduler telemetry keyed by md5. Updated by Progress events from the engine.
+    pub transfers: std::collections::HashMap<String, ActiveTransfer>,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -179,6 +195,62 @@ impl AppState {
             last_rects: LastRects::default(),
             settings_selected: 0,
             settings_edit: None,
+            transfers: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Apply a raw engine Progress event into the live transfer map.
+    pub fn apply_progress(&mut self, p: &libgen_core::queue::Progress) {
+        use libgen_core::queue::Progress::*;
+        match p {
+            Resolved {
+                md5,
+                host,
+                total_bytes,
+                ..
+            } => {
+                let t = self.transfers.entry(md5.clone()).or_default();
+                t.md5 = md5.clone();
+                t.host = host.clone();
+                t.total_bytes = *total_bytes;
+            }
+            Bytes {
+                md5,
+                host,
+                bytes_done,
+                total_bytes,
+                speed_bps,
+                eta_secs,
+                ..
+            } => {
+                let t = self.transfers.entry(md5.clone()).or_default();
+                t.md5 = md5.clone();
+                t.host = host.clone();
+                t.bytes_done = *bytes_done;
+                t.total_bytes = *total_bytes;
+                t.speed_bps = *speed_bps;
+                t.eta_secs = *eta_secs;
+                // Populate title from current ViewModel if we can find it.
+                if t.title.is_empty() {
+                    if let Some(vm) = &self.view {
+                        'outer: for g in &vm.groups {
+                            for b in &g.books {
+                                if b.versions.iter().any(|v| v.md5 == *md5) {
+                                    t.title = b.title.clone();
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Done { md5, .. } => {
+                self.transfers.remove(md5);
+            }
+            Cancelled { md5, .. } | Failed { md5, .. } => {
+                self.transfers.remove(md5);
+            }
+            _ => {}
         }
     }
 

@@ -476,6 +476,88 @@ mod tests {
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
     }
 
+    // -----------------------------------------------------------------------
+    // Stage 4: engine wiring tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_progress_bytes_populates_transfer() {
+        use libgen_core::queue::Progress;
+        let mut app = AppState::new();
+        app.apply_progress(&Progress::Bytes {
+            md5: "a".repeat(32),
+            leg_id: 0,
+            is_hedge: false,
+            host: "libgen.li".into(),
+            bytes_done: 1024,
+            total_bytes: Some(2048),
+            speed_bps: Some(512),
+            eta_secs: Some(2),
+        });
+        let t = app
+            .transfers
+            .get(&"a".repeat(32))
+            .expect("transfer should be present");
+        assert_eq!(t.host, "libgen.li");
+        assert_eq!(t.bytes_done, 1024);
+        assert_eq!(t.eta_secs, Some(2));
+    }
+
+    #[test]
+    fn apply_progress_done_removes_transfer() {
+        use libgen_core::queue::Progress;
+        let mut app = AppState::new();
+        let md5 = "b".repeat(32);
+        app.apply_progress(&Progress::Bytes {
+            md5: md5.clone(),
+            leg_id: 0,
+            is_hedge: false,
+            host: "host".into(),
+            bytes_done: 100,
+            total_bytes: None,
+            speed_bps: None,
+            eta_secs: None,
+        });
+        assert!(app.transfers.contains_key(&md5));
+        app.apply_progress(&Progress::Done {
+            md5: md5.clone(),
+            host: "host".into(),
+            path: std::path::PathBuf::from("/tmp/test.epub"),
+            bytes_written: 100,
+        });
+        assert!(
+            !app.transfers.contains_key(&md5),
+            "Done should remove transfer"
+        );
+    }
+
+    #[test]
+    fn engine_wiring_select_intent_from_picker() {
+        // Verify that the Picker modal produces a Select intent when Enter is pressed.
+        use crossterm::event::{
+            Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
+        };
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        // Open the picker.
+        app.modal = Some(Modal::Picker {
+            book_flat_index: 0,
+            selected: 0,
+        });
+        let intent = app.on_input(Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }));
+        // Should produce Select with the first variation's md5.
+        assert!(
+            matches!(intent, Intent::Select { .. }),
+            "Enter in picker should produce Select intent, got: {:?}",
+            intent
+        );
+    }
+
     #[test]
     fn mouse_click_selects_book_row() {
         let backend = TestBackend::new(120, 30);

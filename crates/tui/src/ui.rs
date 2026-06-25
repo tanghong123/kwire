@@ -467,13 +467,55 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
             })
             .collect();
 
-        let content = if in_progress.is_empty() {
+        // If no flat-based data, fall back to live telemetry from app.transfers.
+        let content = if !in_progress.is_empty() {
+            in_progress
+        } else if !app.transfers.is_empty() {
+            app.transfers
+                .values()
+                .take(3)
+                .map(|t| {
+                    let pct = match (t.bytes_done, t.total_bytes) {
+                        (done, Some(total)) if total > 0 => {
+                            ((done as f64 / total as f64) * 100.0) as u8
+                        }
+                        _ => 0,
+                    };
+                    let bar = theme::progress_bar(pct.into(), 6);
+                    let eta = t
+                        .eta_secs
+                        .map(|s| format!(" ETA {}s", s))
+                        .unwrap_or_default();
+                    let speed = t
+                        .speed_bps
+                        .map(|bps| {
+                            if bps >= 1_000_000 {
+                                format!(" {:.1}MB/s", bps as f64 / 1_000_000.0)
+                            } else {
+                                format!(" {}KB/s", bps / 1_000)
+                            }
+                        })
+                        .unwrap_or_default();
+                    let title = if t.title.is_empty() {
+                        t.md5.chars().take(8).collect::<String>()
+                    } else {
+                        t.title.clone()
+                    };
+                    Line::from(vec![
+                        Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
+                        Span::styled(title, style_normal()),
+                        Span::styled(
+                            format!("  {} · {}%  {}{}{}", t.host, pct, bar, speed, eta),
+                            style_dim(),
+                        ),
+                    ])
+                })
+                .collect()
+        } else {
             vec![Line::from(Span::styled(
                 "  No active transfers.",
                 style_dim(),
             ))]
-        } else {
-            in_progress
         };
 
         frame.render_widget(
