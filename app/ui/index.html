@@ -2201,9 +2201,9 @@ document.addEventListener("click", function (e) {
     onAddManual(t.dataset.manualgo, val, errEl);
     return;
   }
-  if (t.dataset.requery) { // "Search again": re-query this book's list
+  if (t.dataset.requery) { // "Search again": re-query JUST this book (not the whole list)
     var rqbk = bookById(t.dataset.requery);
-    if (rqbk && hasTauri()) onRequery(rqbk.list);
+    if (rqbk) onSearchAgain(rqbk);
     return;
   }
   if (t.dataset.editbook) { EDIT_BOOK = t.dataset.editbook; render(); return; }
@@ -3077,6 +3077,14 @@ function onEditBook(bk, title, author) {
     .catch(function (err) { toast("Couldn't update: " + (errText(err) || "unknown error")); });
 }
 
+/* "Search again" on a single book: re-query JUST that book (the per-book `retry`
+   command — reset to Queued + re-arm goal). NOT the per-list re-query, which would
+   re-discover every not-found book in the list. */
+function onSearchAgain(bk) {
+  if (!bk || !hasTauri()) return;
+  invoke("retry", { listId: listArg(bk.list), bookId: bk.bid }).then(applyLibrary)
+    .catch(function (err) { toast("Search again failed: " + (errText(err) || "unknown error")); });
+}
 function onRequery(listId) {
   listId = listId || CURRENT;
   if (!listId || listId === "__all__") { alert("Select a specific list to re-query."); return; }

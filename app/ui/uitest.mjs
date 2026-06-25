@@ -557,6 +557,15 @@ check("book row: a not-found book shows a single book-status line (no variation 
   if (!/Not found/.test(html)) throw new Error("not-found status missing: " + html.slice(0, 200));
 });
 
+check("'Search again' re-queries ONLY that book (per-book retry), not the whole list", () => {
+  invokeLog.length = 0;
+  ctx.onSearchAgain({ id: "L1/B7", bid: "B7", list: "L1", title: "Gone", author: "X", discovery: "not_found" });
+  const call = invokeLog.find((c) => c.cmd === "retry");
+  if (!call) throw new Error("'Search again' must invoke the per-book 'retry'");
+  if (call.args.bookId !== "B7") throw new Error("retry must target THIS book: " + JSON.stringify(call.args));
+  if (invokeLog.some((c) => c.cmd === "requery")) throw new Error("'Search again' must NOT trigger the per-list 'requery'");
+});
+
 check("book row: not-found cover is neutral + a low_pages variation flags ⚠", () => {
   // A not-found book that still carries a removed/wrong pdf variation must show a
   // NEUTRAL cover, never a PDF-colored placeholder.
