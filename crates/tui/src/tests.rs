@@ -448,6 +448,13 @@ mod tests {
 
         let mut app = AppState::new();
         app.set_view(fixture_vm());
+        // The list strip renders from all_lists; populate it (mirrors startup).
+        app.all_lists.push(crate::app::ListSummary {
+            id: "L1".into(),
+            title: "Test List".into(),
+            done: 1,
+            total: 2,
+        });
 
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
 

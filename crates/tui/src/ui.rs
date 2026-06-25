@@ -9,11 +9,15 @@
 //! Length(1)       — key-hint bar / command line
 //! ```
 
+use std::collections::BTreeMap;
+
 use ratatui::{
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState},
+    widgets::{
+        Block, BorderType, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState,
+    },
     Frame,
 };
 
@@ -278,34 +282,49 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
 // ---------------------------------------------------------------------------
 
 fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
-    let counts = app.status_counts();
-
-    if let Some(v) = &app.view {
-        // Format: "All N/M  ★ Active List N/M  Other List N/M  ..."
-        // Since we only have one list at a time in the model, show:
-        //   "All {total}/{total}  ★ {title} {done}/{total}"
-        let all_label = format!(" All {}/{}", counts.total, counts.total);
-        let active_label = format!("  \u{2605} {} {}/{}", v.title, counts.done, counts.total);
-
-        let mut spans = vec![
-            Span::styled(all_label, style_dim()),
-            Span::styled(active_label, style_title()),
-        ];
-
-        // Navigation hint at right edge
-        let nav = "  \u{2190} \u{2192}";
-        spans.push(Span::styled(nav, style_dim()));
-
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)).style(style_normal()),
-            area,
-        );
-    } else {
+    // When no lists are loaded fall back to the bare wordmark.
+    if app.all_lists.is_empty() {
         frame.render_widget(
             Paragraph::new(Span::styled(" kwire", style_title())).style(style_normal()),
             area,
         );
+        return;
     }
+
+    // Compute "All" aggregate across every list.
+    let all_done: usize = app.all_lists.iter().map(|l| l.done).sum();
+    let all_total: usize = app.all_lists.iter().map(|l| l.total).sum();
+
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::styled(
+        format!(" All {}/{}", all_done, all_total),
+        style_dim(),
+    ));
+
+    for (i, list) in app.all_lists.iter().enumerate() {
+        let is_active = i == app.active_list_idx;
+        if is_active {
+            // Active list: star prefix, bold/bright
+            spans.push(Span::styled(
+                format!("   \u{2605} {} {}/{}", list.title, list.done, list.total),
+                style_title(),
+            ));
+        } else {
+            // Inactive lists: dim, no star
+            spans.push(Span::styled(
+                format!("   {} {}/{}", list.title, list.done, list.total),
+                style_dim(),
+            ));
+        }
+    }
+
+    // Right-edge navigation hint
+    spans.push(Span::styled("   \u{2190} \u{2192}", style_dim()));
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(style_normal()),
+        area,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -369,23 +388,10 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
 
     if app.view.is_none() {
         let para = Paragraph::new("No list loaded. Press : and type 'import <file>' to load.")
-            .style(style_dim())
-            .block(Block::default().borders(Borders::ALL).title(" Books "));
+            .style(style_dim());
         frame.render_widget(para, area);
         return;
     }
-
-    let header = Row::new([
-        Cell::from("#").style(style_header()),
-        Cell::from("Title").style(style_header()),
-        Cell::from("Author").style(style_header()),
-        Cell::from("Fmt").style(style_header()),
-        Cell::from("Size").style(style_header()),
-        Cell::from("State").style(style_header()),
-        Cell::from("Progress").style(style_header()),
-    ])
-    .height(1)
-    .style(style_header());
 
     let mut rows: Vec<Row> = Vec::new();
     // Visual row index within the table body (group headers + book rows), used
@@ -532,9 +538,8 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
         .style(row_style);
         rows.push(row);
 
-        // Store book row rect: border(1) + header(1) = offset 2 from area.y, then
-        // the visual row index (group headers shift book rows down).
-        let row_rect = Rect::new(area.x, area.y + 2 + visual_row, area.width, 1);
+        // Store book row rect: no border, no header — offset is just visual_row.
+        let row_rect = Rect::new(area.x, area.y + visual_row, area.width, 1);
         app.last_rects.book_rows.push((row_rect, i));
         visual_row += 1;
     }
@@ -556,25 +561,16 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             Constraint::Length(12), // Progress bar
         ],
     )
-    .header(header)
-    .block(Block::default().borders(Borders::ALL).title(" Books "))
     .row_highlight_style(style_selected());
 
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
 // ---------------------------------------------------------------------------
-// 3  Docked Activity pane
+// 3  Docked Activity pane  (BORDERLESS — plain line rendering)
 // ---------------------------------------------------------------------------
 
 fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
-    let focused = app.focus == Focus::Activity;
-    let border_style = if focused {
-        Style::default().fg(C_TEXT)
-    } else {
-        Style::default().fg(C_FAINT)
-    };
-
     // Count download states.
     let downloading_count = app
         .flat
@@ -588,161 +584,218 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
         .flat_map(|fb| fb.book.versions.iter())
         .filter(|v| v.state == "queued")
         .count();
-    let connecting_count = queued_count;
+    let connecting_count = app
+        .transfers
+        .values()
+        .filter(|t| {
+            // transfers that are resolving (no bytes yet)
+            t.bytes_done == 0
+        })
+        .count();
 
-    let summary = if app.activity_expanded {
-        format!(
-            "\u{25be} ACTIVITY  {} downloading \u{00b7} {} connecting \u{00b7} {} queued   tab to focus",
-            downloading_count, connecting_count, queued_count
-        )
+    // Aggregate speed across all live transfers
+    let total_speed_bps: u64 = app.transfers.values().filter_map(|t| t.speed_bps).sum();
+    let speed_str = if total_speed_bps >= 1_000_000 {
+        format!(" \u{2193} {:.1}MB/s ", total_speed_bps as f64 / 1_000_000.0)
+    } else if total_speed_bps >= 1_000 {
+        format!(" \u{2193} {}KB/s ", total_speed_bps / 1_000)
     } else {
-        format!(
-            "\u{25b8} ACTIVITY  {} downloading \u{00b7} {} queued   tab to expand",
-            downloading_count, queued_count
-        )
+        String::new()
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(summary)
-        .border_style(border_style);
+    // Build header line
+    let arrow = if app.activity_expanded {
+        "\u{25be}"
+    } else {
+        "\u{25b8}"
+    };
+    let header_text = if app.activity_expanded {
+        format!(
+            "{} ACTIVITY  {} downloading \u{00b7} {} connecting \u{00b7} {} queued{}  tab to focus",
+            arrow, downloading_count, connecting_count, queued_count, speed_str
+        )
+    } else {
+        format!(
+            "{} ACTIVITY  {} downloading \u{00b7} {} queued{}  tab to expand",
+            arrow, downloading_count, queued_count, speed_str
+        )
+    };
+    let header_style = if app.focus == Focus::Activity {
+        style_normal()
+    } else {
+        style_dim()
+    };
+    let header_line = Line::from(Span::styled(header_text, header_style));
 
-    if app.activity_expanded {
-        // Build all transfer lines without any hard cap.
-        let all_lines: Vec<Line> = {
-            let flat_lines: Vec<Line> = app
-                .flat
-                .iter()
-                .filter(|fb| fb.book.versions.iter().any(|v| v.state == "downloading"))
-                .map(|fb| {
-                    let v = fb
-                        .book
-                        .versions
-                        .iter()
-                        .find(|v| v.state == "downloading")
-                        .unwrap();
-                    let bar = theme::progress_bar(v.progress, 6);
-                    let host = v.host.as_deref().unwrap_or("unknown");
-                    let eta = v
-                        .eta_secs
-                        .map(|s| format!(" ETA {}s", s))
-                        .unwrap_or_default();
-                    Line::from(vec![
-                        Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
-                        Span::styled(fb.book.title.clone(), style_normal()),
-                        Span::styled(
-                            format!(
-                                "  {} \u{00b7} {}  {}%  {}{}",
-                                v.fmt, host, v.progress, bar, eta
-                            ),
-                            style_dim(),
-                        ),
-                    ])
-                })
-                .collect();
+    if !app.activity_expanded {
+        frame.render_widget(Paragraph::new(header_line).style(style_normal()), area);
+        return;
+    }
 
-            if !flat_lines.is_empty() {
-                flat_lines
-            } else {
-                // Fallback: live telemetry transfers (no hard cap).
-                app.transfers
-                    .values()
-                    .map(|t| {
-                        let pct = match (t.bytes_done, t.total_bytes) {
-                            (done, Some(total)) if total > 0 => {
-                                ((done as f64 / total as f64) * 100.0) as u8
-                            }
-                            _ => 0,
-                        };
-                        let bar = theme::progress_bar(pct.into(), 6);
-                        let eta = t
-                            .eta_secs
-                            .map(|s| format!(" ETA {}s", s))
-                            .unwrap_or_default();
-                        let speed = t
-                            .speed_bps
-                            .map(|bps| {
-                                if bps >= 1_000_000 {
-                                    format!(" {:.1}MB/s", bps as f64 / 1_000_000.0)
-                                } else {
-                                    format!(" {}KB/s", bps / 1_000)
-                                }
-                            })
-                            .unwrap_or_default();
-                        let title = if t.title.is_empty() {
-                            t.md5.chars().take(8).collect::<String>()
-                        } else {
-                            t.title.clone()
-                        };
-                        Line::from(vec![
-                            Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
-                            Span::styled(title, style_normal()),
-                            Span::styled(
-                                format!("  {} \u{00b7} {}%  {}{}{}", t.host, pct, bar, speed, eta),
-                                style_dim(),
-                            ),
-                        ])
-                    })
-                    .collect()
+    // Build per-host transfer lines by grouping downloading versions by host.
+    // 1. Collect from flat ViewModel (has progress / fmt info from engine).
+    let mut host_groups: BTreeMap<String, Vec<(String, u32, String, Option<u64>)>> =
+        BTreeMap::new();
+    for fb in &app.flat {
+        for v in &fb.book.versions {
+            if v.state == "downloading" {
+                let host = v.host.as_deref().unwrap_or("unknown").to_string();
+                host_groups.entry(host).or_default().push((
+                    fb.book.title.clone(),
+                    v.progress,
+                    v.fmt.clone(),
+                    v.eta_secs,
+                ));
             }
-        };
+        }
+    }
 
-        // Visible row capacity = inner height (border top + bottom = 2).
-        let capacity = area.height.saturating_sub(2) as usize;
-        let n = all_lines.len();
+    // 2. Fallback to live telemetry if ViewModel has nothing.
+    let use_telemetry = host_groups.is_empty() && !app.transfers.is_empty();
+    let mut telemetry_groups: BTreeMap<String, Vec<(String, u8, u64)>> = BTreeMap::new();
+    if use_telemetry {
+        for t in app.transfers.values() {
+            let pct = match (t.bytes_done, t.total_bytes) {
+                (done, Some(total)) if total > 0 => {
+                    ((done as f64 / total as f64) * 100.0).min(100.0) as u8
+                }
+                _ => 0,
+            };
+            let title = if t.title.is_empty() {
+                t.md5.chars().take(8).collect::<String>()
+            } else {
+                t.title.clone()
+            };
+            let speed = t.speed_bps.unwrap_or(0);
+            telemetry_groups
+                .entry(t.host.clone())
+                .or_default()
+                .push((title, pct, speed));
+        }
+    }
 
-        let content: Vec<Line> = if n == 0 {
-            // Nothing active.
-            vec![Line::from(Span::styled(
+    // capacity: area.height - 1 (header) lines available for transfer rows.
+    let capacity = area.height.saturating_sub(1) as usize;
+
+    // Build content lines (to be windowed by scroll offset).
+    let mut all_content: Vec<Line> = Vec::new();
+
+    if !use_telemetry {
+        if host_groups.is_empty() {
+            all_content.push(Line::from(Span::styled(
                 "  No active transfers.",
                 style_dim(),
-            ))]
-        } else if n <= capacity {
-            // FIT: all rows visible; no scroll affordance, no selection highlight.
-            all_lines
+            )));
         } else {
-            // OVERFLOW: windowed with scroll offset and edge indicators.
-            let offset = app.activity_selected.min(n.saturating_sub(1));
-            let has_above = offset > 0;
-            let above_slots = if has_above { 1usize } else { 0 };
+            for (host, versions) in &host_groups {
+                // Per-host aggregate speed
+                let host_speed: u64 = app
+                    .transfers
+                    .values()
+                    .filter(|t| &t.host == host)
+                    .filter_map(|t| t.speed_bps)
+                    .sum();
+                let host_speed_str = if host_speed >= 1_000_000 {
+                    format!("{:.1}MB/s", host_speed as f64 / 1_000_000.0)
+                } else if host_speed >= 1_000 {
+                    format!("{}KB/s", host_speed / 1_000)
+                } else {
+                    String::new()
+                };
+                let host_line = format!(
+                    "\u{25cf} {}{}",
+                    host,
+                    if host_speed_str.is_empty() {
+                        String::new()
+                    } else {
+                        format!("   {}↓ \u{00b7} {}", versions.len(), host_speed_str)
+                    }
+                );
+                all_content.push(Line::from(Span::styled(host_line, style_normal())));
 
-            // Tentatively reserve one slot for the below indicator.
-            let mut tfer_slots = capacity.saturating_sub(above_slots + 1).max(1);
-            let end = (offset + tfer_slots).min(n);
-            let has_below = end < n;
-
-            // Recover the below slot if there is nothing below.
-            if !has_below {
-                tfer_slots = capacity.saturating_sub(above_slots).max(1);
+                for (title, pct, fmt, eta_secs) in versions {
+                    let bar = theme::progress_bar((*pct).into(), 6);
+                    let eta = eta_secs.map(|s| format!("  {}s", s)).unwrap_or_default();
+                    all_content.push(Line::from(vec![
+                        Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
+                        Span::styled(title.clone(), style_normal()),
+                        Span::styled(format!("  {}  {}%  {}{}", fmt, pct, bar, eta), style_dim()),
+                    ]));
+                }
             }
-            let end = (offset + tfer_slots).min(n);
-
-            let mut display: Vec<Line> = Vec::with_capacity(capacity);
-            if has_above {
-                display.push(Line::from(Span::styled(
-                    format!("  \u{25b4} {} above", offset),
-                    style_dim(),
-                )));
-            }
-            for line in &all_lines[offset..end] {
-                display.push(line.clone());
-            }
-            if has_below {
-                display.push(Line::from(Span::styled(
-                    format!("  \u{25be} {} more", n - end),
-                    style_dim(),
-                )));
-            }
-            display
-        };
-
-        frame.render_widget(
-            Paragraph::new(content).block(block).style(style_normal()),
-            area,
-        );
+        }
     } else {
-        frame.render_widget(Paragraph::new("").block(block), area);
+        for (host, transfers) in &telemetry_groups {
+            let host_speed: u64 = transfers.iter().map(|(_, _, s)| s).sum();
+            let speed_s = if host_speed >= 1_000_000 {
+                format!("{:.1}MB/s", host_speed as f64 / 1_000_000.0)
+            } else if host_speed >= 1_000 {
+                format!("{}KB/s", host_speed / 1_000)
+            } else {
+                String::new()
+            };
+            let host_line = format!(
+                "\u{25cf} {}   {}↓{}",
+                host,
+                transfers.len(),
+                if speed_s.is_empty() {
+                    String::new()
+                } else {
+                    format!(" \u{00b7} {}", speed_s)
+                }
+            );
+            all_content.push(Line::from(Span::styled(host_line, style_normal())));
+            for (title, pct, _) in transfers {
+                let bar = theme::progress_bar((*pct).into(), 6);
+                all_content.push(Line::from(vec![
+                    Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
+                    Span::styled(title.clone(), style_normal()),
+                    Span::styled(format!("  {}%  {}", pct, bar), style_dim()),
+                ]));
+            }
+        }
     }
+
+    // Apply scroll windowing to content lines.
+    let n = all_content.len();
+    let windowed: Vec<Line> = if n == 0 || n <= capacity {
+        all_content
+    } else {
+        let offset = app.activity_selected.min(n.saturating_sub(1));
+        let has_above = offset > 0;
+        let above_slots = usize::from(has_above);
+        let mut tfer_slots = capacity.saturating_sub(above_slots + 1).max(1);
+        let end = (offset + tfer_slots).min(n);
+        let has_below = end < n;
+        if !has_below {
+            tfer_slots = capacity.saturating_sub(above_slots).max(1);
+        }
+        let end = (offset + tfer_slots).min(n);
+        let mut display: Vec<Line> = Vec::with_capacity(capacity);
+        if has_above {
+            display.push(Line::from(Span::styled(
+                format!("  \u{25b4} {} above", offset),
+                style_dim(),
+            )));
+        }
+        for line in &all_content[offset..end] {
+            display.push(line.clone());
+        }
+        if has_below {
+            display.push(Line::from(Span::styled(
+                format!("  \u{25be} {} more", n - end),
+                style_dim(),
+            )));
+        }
+        display
+    };
+
+    // Combine header + windowed content and render as a plain Paragraph.
+    let mut all_lines: Vec<Line> = Vec::with_capacity(1 + windowed.len());
+    all_lines.push(header_line);
+    all_lines.extend(windowed);
+
+    frame.render_widget(Paragraph::new(all_lines).style(style_normal()), area);
 }
 
 // ---------------------------------------------------------------------------

@@ -51,7 +51,7 @@ use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::app::{AppState, Modal};
+use crate::app::{AppState, ListSummary, Modal};
 use crate::guard::TerminalGuard;
 use crate::intent::Intent;
 
@@ -234,6 +234,49 @@ async fn main() -> Result<()> {
         }
     }
 
+    // (5b-extra) Populate all-list summaries so the list strip shows every list.
+    {
+        let lib = engine_state.library.lock().await;
+        let current_id = lib.current.clone();
+        let pairs: Vec<(String, _)> = lib
+            .lists
+            .iter()
+            .filter_map(|ll| lib.arc_for(&ll.id).map(|a| (ll.id.clone(), a)))
+            .collect();
+        drop(lib);
+        let mut summaries: Vec<ListSummary> = Vec::new();
+        for (id, orch_arc) in pairs {
+            let guard = orch_arc.lock().await;
+            if let Ok(snap) = guard.snapshot() {
+                let vm = build_with_id(id.clone(), &snap);
+                let total: usize = vm.groups.iter().map(|g| g.books.len()).sum();
+                let done: usize = vm
+                    .groups
+                    .iter()
+                    .flat_map(|g| g.books.iter())
+                    .filter(|b| {
+                        b.acquisition
+                            .as_ref()
+                            .map(|a| a.done >= 1 && a.active == 0)
+                            .unwrap_or(false)
+                    })
+                    .count();
+                summaries.push(ListSummary {
+                    id,
+                    title: vm.title,
+                    done,
+                    total,
+                });
+            }
+        }
+        let active_idx = summaries
+            .iter()
+            .position(|s| s.id == current_id)
+            .unwrap_or(0);
+        app.all_lists = summaries;
+        app.active_list_idx = active_idx;
+    }
+
     // (5b) Spawn the engine.
     let engine_handles = engine_state.engine_handles();
     let (eng_tx, eng_rx) = mpsc::unbounded_channel::<EngineEvent>();
@@ -352,6 +395,10 @@ async fn dispatch_intent(
         }
         Intent::OpenHelp => {
             app.modal = Some(Modal::Help);
+        }
+        Intent::SwitchList { id } => {
+            open_list(app, handles, &id).await;
+            refresh_all_list_summaries(app, handles).await;
         }
         Intent::OpenFile(path) => {
             let _ = std::process::Command::new("open").arg(&path).spawn();
@@ -488,6 +535,54 @@ async fn refresh_active_view(app: &mut AppState, handles: &EngineHandles) {
             app.set_view(vm);
         }
     }
+    refresh_all_list_summaries(app, handles).await;
+}
+
+/// Recompute summaries for ALL loaded lists and update `app.all_lists`.
+async fn refresh_all_list_summaries(app: &mut AppState, handles: &EngineHandles) {
+    let (current_id, pairs) = {
+        let lib = handles.library.lock().await;
+        let current = lib.current.clone();
+        let p: Vec<(String, _)> = lib
+            .lists
+            .iter()
+            .filter_map(|ll| lib.arc_for(&ll.id).map(|a| (ll.id.clone(), a)))
+            .collect();
+        (current, p)
+    };
+
+    let mut summaries: Vec<ListSummary> = Vec::new();
+    for (id, orch_arc) in pairs {
+        let guard = orch_arc.lock().await;
+        if let Ok(snap) = guard.snapshot() {
+            let vm = build_with_id(id.clone(), &snap);
+            let total: usize = vm.groups.iter().map(|g| g.books.len()).sum();
+            let done: usize = vm
+                .groups
+                .iter()
+                .flat_map(|g| g.books.iter())
+                .filter(|b| {
+                    b.acquisition
+                        .as_ref()
+                        .map(|a| a.done >= 1 && a.active == 0)
+                        .unwrap_or(false)
+                })
+                .count();
+            summaries.push(ListSummary {
+                id,
+                title: vm.title,
+                done,
+                total,
+            });
+        }
+    }
+
+    let active_idx = summaries
+        .iter()
+        .position(|s| s.id == current_id)
+        .unwrap_or(0);
+    app.all_lists = summaries;
+    app.active_list_idx = active_idx;
 }
 
 async fn select_candidate(
