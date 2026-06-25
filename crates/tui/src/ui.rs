@@ -23,8 +23,9 @@ use ratatui::{
 
 use crate::app::{AppState, Focus, Modal, StatusFilter};
 use crate::theme::{
-    self, style_dim, style_header, style_hint, style_normal, style_selected, style_title, C_BG,
-    C_BRIGHT, C_DIM, C_DONE, C_FAINT, C_NEEDS_YOU, C_PANEL, C_TEXT,
+    self, history_kind_color, score_color, style_dim, style_header, style_hint, style_normal,
+    style_selected, style_title, C_BACKDROP, C_BG, C_BRIGHT, C_DIM, C_DONE, C_FAINT, C_NEEDS_YOU,
+    C_PANEL, C_SELECTED, C_TEXT,
 };
 
 const ACTIVITY_EXPANDED_H: u16 = 5;
@@ -75,6 +76,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
 
     // Overlay modal if one is open.
     if let Some(modal) = app.modal.clone() {
+        render_backdrop(frame);
         match modal {
             Modal::Picker {
                 book_flat_index,
@@ -269,6 +271,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
 
     // Overlay modal (e.g. Help opened from empty state).
     if let Some(modal) = app.modal.clone() {
+        render_backdrop(frame);
         match modal {
             Modal::Help => render_help_modal(frame, area),
             Modal::Settings => render_settings_modal(frame, app),
@@ -513,12 +516,17 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             style_normal()
         };
 
-        let seq_label = format!("{:>3}", book.seq);
+        // Left accent cell: ▶ in accent green on selected bg; seq number otherwise.
+        let seq_cell = if is_selected {
+            Cell::from("\u{25b6}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
+        } else {
+            Cell::from(format!("{:>3}", book.seq)).style(style_dim())
+        };
         let title_label = book.title.clone();
         let author_label = book.author.clone();
 
         let row = Row::new([
-            Cell::from(seq_label).style(row_style),
+            seq_cell,
             Cell::from(title_label).style(if is_selected {
                 style_selected()
             } else {
@@ -836,6 +844,15 @@ fn centered_rect(width: u16, height: u16, parent: Rect) -> Rect {
     Rect::new(x, y, width.min(parent.width), height.min(parent.height))
 }
 
+/// Render a full-frame dimming overlay so the active modal pops visually.
+/// Must be called before `Clear`+modal rendering.
+fn render_backdrop(frame: &mut Frame) {
+    frame.render_widget(
+        Block::default().style(Style::default().bg(C_BACKDROP).add_modifier(Modifier::DIM)),
+        frame.area(),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 4a  Picker modal ("choose a copy")
 // ---------------------------------------------------------------------------
@@ -846,14 +863,16 @@ fn render_picker_modal(
     book_flat_index: usize,
     picker_selected: usize,
 ) {
-    let area = centered_rect(88, 22, frame.area());
+    let area = centered_rect(96, 26, frame.area());
     frame.render_widget(Clear, area);
 
     let Some(fb) = app.flat.get(book_flat_index) else {
         frame.render_widget(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Choose a copy ")
+                .border_type(BorderType::Rounded)
+                .border_style(style_dim())
+                .title(Span::styled(" choose a copy ", style_dim()))
                 .style(style_normal()),
             area,
         );
@@ -870,11 +889,21 @@ fn render_picker_modal(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {} \u{2014} choose a copy ", fb.book.title))
+        .border_type(BorderType::Rounded)
+        .border_style(style_dim())
+        .title(Span::styled(
+            format!(" {} \u{2014} choose a copy ", fb.book.title),
+            style_dim(),
+        ))
         .style(style_normal());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // Internal gutter: 2-cell horizontal padding, 1-cell vertical padding.
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
 
     // Layout: subheader (1) + column header row (1) + table rows + hint (1)
     let split = Layout::vertical([
@@ -882,7 +911,7 @@ fn render_picker_modal(
         Constraint::Min(1),    // table (header + rows)
         Constraint::Length(1), // hint
     ])
-    .split(inner);
+    .split(padded);
 
     // Subheader line
     let subhead = format!(
@@ -952,7 +981,7 @@ fn render_picker_modal(
                 Cell::from(format!("{:.2}", v.score)).style(if is_sel {
                     style_selected()
                 } else {
-                    Style::default().fg(C_DONE)
+                    Style::default().fg(score_color(v.score.into()))
                 }),
             ])
             .height(1)
@@ -1001,13 +1030,15 @@ fn render_picker_modal(
 // ---------------------------------------------------------------------------
 
 fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize) {
-    let area = centered_rect(90, 24, frame.area());
+    let area = centered_rect(92, 30, frame.area());
     frame.render_widget(Clear, area);
 
     let Some(fb) = app.flat.get(book_flat_index) else {
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Book detail ")
+            .border_type(BorderType::Rounded)
+            .border_style(style_dim())
+            .title(Span::styled(" book detail ", style_dim()))
             .style(style_normal());
         frame.render_widget(block, area);
         return;
@@ -1015,11 +1046,18 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Book detail ")
+        .border_type(BorderType::Rounded)
+        .border_style(style_dim())
+        .title(Span::styled(" book detail ", style_dim()))
         .style(style_normal());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // Internal gutter: 2-cell horizontal padding, 1-cell vertical padding.
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
 
     // Inner layout:
     //   title line (1)
@@ -1034,7 +1072,7 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
 
     let n_versions = fb.book.versions.len();
     let var_rows_h = (n_versions.max(1) + 1) as u16; // +1 for header row
-    let history_h = inner
+    let history_h = padded
         .height
         .saturating_sub(1 + 1 + 1 + 1 + var_rows_h + 1 + 1 + 1); // = available for history
 
@@ -1049,7 +1087,7 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
         Constraint::Min(history_h),     // history rows
         Constraint::Length(1),          // hint
     ])
-    .split(inner);
+    .split(padded);
 
     // Title line: bold title + dim author + right-aligned year · pages
     let book = &fb.book;
@@ -1217,11 +1255,12 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
                 (secs / 60) % 60,
                 secs % 60
             );
+            let kind_color = history_kind_color(&e.kind);
             Line::from(vec![
                 Span::styled(format!("{:<10}  ", time_str), style_dim()),
                 Span::styled(
                     format!("{:<14}  ", e.kind),
-                    Style::default().fg(C_DONE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(kind_color).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(e.detail.clone(), style_dim()),
             ])
@@ -1248,22 +1287,32 @@ fn render_detail_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize
 // ---------------------------------------------------------------------------
 
 fn render_settings_modal(frame: &mut Frame, app: &AppState) {
-    let area = centered_rect(72, 22, frame.area());
+    let area = centered_rect(80, 30, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(if let Some(v) = &app.view {
-            format!(" settings \u{00b7} {} ", v.title)
-        } else {
-            " settings ".to_string()
-        })
+        .border_type(BorderType::Rounded)
+        .border_style(style_dim())
+        .title(Span::styled(
+            if let Some(v) = &app.view {
+                format!(" settings \u{00b7} {} ", v.title)
+            } else {
+                " settings ".to_string()
+            },
+            style_dim(),
+        ))
         .style(style_normal());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // Internal gutter: 2-cell horizontal padding, 1-cell vertical padding.
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
 
-    let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(padded);
 
     // Structured settings sections matching the mock:
     // FORMATS, MATCHING, FILES, DOWNLOADS & MIRRORS
@@ -1380,15 +1429,15 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
                 } else {
                     value.clone()
                 };
-                let row_style = if is_sel {
+                let value_style = if is_sel {
                     style_selected()
                 } else {
-                    style_normal()
+                    Style::default().fg(C_NEEDS_YOU) // amber accent for field values
                 };
                 let edit_indicator = if is_sel { "  edit |" } else { "" };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("  {:<26}", label), style_dim()),
-                    Span::styled(value_display, row_style),
+                    Span::styled(value_display, value_style),
                     Span::styled(edit_indicator.to_string(), style_dim()),
                 ]))
             }
@@ -1415,22 +1464,29 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
 // ---------------------------------------------------------------------------
 
 fn render_help_modal(frame: &mut Frame, parent: Rect) {
-    let area = centered_rect(82, 26, parent);
+    let area = centered_rect(88, 30, parent);
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Keys & Commands ")
+        .border_type(BorderType::Rounded)
+        .border_style(style_dim())
+        .title(Span::styled(" keys & commands ", style_dim()))
         .style(style_normal());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // Internal gutter: 2-cell horizontal padding, 1-cell vertical padding.
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
 
     // Two-column layout matching the mock:
     // Left: NAVIGATE + FILTER sections
     // Right: ACT ON SELECTION + COMMAND LINE sections
     let cols =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(padded);
 
     let split_left = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(cols[0]);
 
