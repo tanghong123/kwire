@@ -15,8 +15,8 @@ pub const C_TEXT: Color = Color::Rgb(0xd6, 0xd3, 0xcc); // normal text
 pub const C_BRIGHT: Color = Color::Rgb(0xf0, 0xec, 0xe4); // bright / title
 pub const C_DIM: Color = Color::Rgb(0x8a, 0x85, 0x7c); // dim metadata
 pub const C_FAINT: Color = Color::Rgb(0x5c, 0x57, 0x50); // faint / separators
-pub const C_BG: Color = Color::Rgb(0x0f, 0x0f, 0x0d); // background
-pub const C_PANEL: Color = Color::Rgb(0x15, 0x14, 0x0f); // panel background
+pub const C_BG: Color = Color::Reset; // background (terminal default)
+pub const C_PANEL: Color = Color::Reset; // panel background (terminal default)
 pub const C_SELECTED: Color = Color::Rgb(0x1b, 0x1a, 0x14); // selected row
 
 // ---------------------------------------------------------------------------

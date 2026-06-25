@@ -231,6 +231,8 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     // 6. Bordered command-input box at the bottom
     let (cmd_content, show_cursor) = if let Some(ref buf) = app.command_buf {
         (format!(":{}", buf), true)
+    } else if let Some(ref msg) = app.status_msg {
+        (msg.clone(), false)
     } else {
         (String::new(), false)
     };
@@ -754,6 +756,9 @@ fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
             Span::styled(buf.as_str(), style_hint()),
             Span::styled("\u{2588}", Style::default().fg(C_TEXT)), // cursor
         ])
+    } else if let Some(ref msg) = app.status_msg {
+        // Transient status message — shown until the next keypress.
+        Line::from(Span::styled(msg.as_str(), Style::default().fg(C_BRIGHT)))
     } else {
         let hint = match app.focus {
             Focus::List => {
