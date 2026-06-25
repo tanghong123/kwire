@@ -29,7 +29,7 @@ Total terms: **262**.
 | Key | English | 中文 |
 |---|---|---|
 | `book.being_queried` | Being queried… | 正在查询… |
-| `book.check_download` | Check download | 请检查 |
+| `book.check_download` | Check download | 检查已下载版本 |
 | `book.choose_copy` | Choose a copy | 选择版本 |
 | `book.failed` | Failed | 失败 |
 | `book.next_up` | ⤴ Next up | ⤴ 即将下载 |
@@ -50,7 +50,7 @@ Total terms: **262**.
 |---|---|---|
 | `ctx.pause_downloads` | ❚❚ Pause downloads | ❚❚ 暂停下载 |
 | `ctx.remove_list` | 🗑 Remove list | 🗑 移除书单 |
-| `ctx.requery` | ↻ Re-query this list | ↻ 重新查询此书单 |
+| `ctx.requery` | ↻ Re-query this list | ↻ 重新查询 |
 | `ctx.start_downloads` | ▶ Start downloads | ▶ 开始下载 |
 
 ## detail
@@ -86,8 +86,8 @@ Total terms: **262**.
 | `detail.mark_not_found` | ✗ Mark as not found | ✗ 标记为未找到 |
 | `detail.marknf_title` | None of these are right — move to Cannot download | 以上均不匹配 — 标记为无法下载 |
 | `detail.move_top` | ⤒ Move to top of queue | ⤒ 移至队列顶部 |
-| `detail.needs_chip` | Needs you | 待确认 |
-| `detail.needs_why` | No single match cleared the auto-download threshold — choose which variation(s) to download. | 无版本的置信度达到自动下载阈值 — 请手动选择要下载的版本。 |
+| `detail.needs_chip` | Needs you | 确认版本 |
+| `detail.needs_why` | No single match cleared the auto-download threshold — choose which variation(s) to download. | 未找到匹配版本自动下载 — 请手动选择要下载的版本。 |
 | `detail.next_up_chip` | Next up | 即将下载 |
 | `detail.notfound_chip` | Not found | 未找到 |
 | `detail.notfound_why` | No mirror returned a match. | 所有镜像站均未返回匹配结果。 |
