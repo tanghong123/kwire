@@ -10,6 +10,18 @@ use ratatui::layout::Rect;
 
 use crate::intent::Intent;
 
+/// Commands supported in `:` command-line mode (used for Tab-completion).
+const COMMANDS: &[&str] = &[
+    "import",
+    "add",
+    "open",
+    "requery",
+    "settings",
+    "pause-all",
+    "quit",
+    "help",
+];
+
 // ---------------------------------------------------------------------------
 // Focus
 // ---------------------------------------------------------------------------
@@ -165,6 +177,13 @@ pub struct AppState {
 
     /// Live scheduler telemetry keyed by md5. Updated by Progress events from the engine.
     pub transfers: std::collections::HashMap<String, ActiveTransfer>,
+
+    /// Tab-completion candidates for the `:` command line.
+    /// Non-empty while the wildmenu is visible.
+    pub completion_candidates: Vec<String>,
+
+    /// Index of the highlighted candidate within `completion_candidates`.
+    pub completion_index: usize,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -196,6 +215,8 @@ impl AppState {
             settings_selected: 0,
             settings_edit: None,
             transfers: std::collections::HashMap::new(),
+            completion_candidates: Vec::new(),
+            completion_index: 0,
         }
     }
 
@@ -676,14 +697,21 @@ impl AppState {
         }
     }
 
-    /// Number of in-flight (downloading) variations across the filtered list —
-    /// the rows the Activity pane scrolls through.
+    /// Number of in-flight transfer rows the Activity pane can scroll through.
+    /// Counts BOOKS that have at least one downloading version (matching the
+    /// one-row-per-book display in `render_activity`), with a fallback to the
+    /// live-telemetry transfer count.
     fn activity_row_count(&self) -> usize {
-        self.flat
+        let flat_count = self
+            .flat
             .iter()
-            .flat_map(|fb| fb.book.versions.iter())
-            .filter(|v| v.state == "downloading")
-            .count()
+            .filter(|fb| fb.book.versions.iter().any(|v| v.state == "downloading"))
+            .count();
+        if flat_count > 0 {
+            flat_count
+        } else {
+            self.transfers.len()
+        }
     }
 
     fn scroll_activity(&mut self, delta: usize) {
@@ -705,21 +733,60 @@ impl AppState {
     fn handle_command_input(&mut self, ev: Event) -> Intent {
         match ev {
             Event::Key(KeyEvent { code, .. }) => match code {
-                KeyCode::Enter => {
-                    let line = self.command_buf.take().unwrap_or_default();
-                    Intent::Command(line)
-                }
-                KeyCode::Esc => {
-                    self.command_buf = None;
+                // ── Completion navigation ──────────────────────────────────
+                KeyCode::Tab => {
+                    self.handle_completion_tab(false);
                     Intent::Redraw
                 }
+                KeyCode::BackTab => {
+                    self.handle_completion_tab(true);
+                    Intent::Redraw
+                }
+
+                // ── Submit / accept ────────────────────────────────────────
+                KeyCode::Enter => {
+                    if !self.completion_candidates.is_empty() {
+                        // Wildmenu open: accept selection, don't submit yet.
+                        let candidate = self.completion_candidates[self.completion_index].clone();
+                        self.accept_completion(&candidate);
+                        Intent::Redraw
+                    } else {
+                        let line = self.command_buf.take().unwrap_or_default();
+                        Intent::Command(line)
+                    }
+                }
+
+                // ── Cancel / close ─────────────────────────────────────────
+                KeyCode::Esc => {
+                    if !self.completion_candidates.is_empty() {
+                        // Close the wildmenu but keep the buffer (vim behaviour).
+                        self.completion_candidates.clear();
+                        self.completion_index = 0;
+                    } else {
+                        self.command_buf = None;
+                    }
+                    Intent::Redraw
+                }
+
+                // ── Character input ────────────────────────────────────────
                 KeyCode::Char(c) => {
-                    if let Some(ref mut b) = self.command_buf {
-                        b.push(c);
+                    if c == ' ' && !self.completion_candidates.is_empty() {
+                        // Space while wildmenu open: accept current candidate.
+                        let candidate = self.completion_candidates[self.completion_index].clone();
+                        self.accept_completion(&candidate);
+                    } else {
+                        // Any other char: clear completions and append.
+                        self.completion_candidates.clear();
+                        self.completion_index = 0;
+                        if let Some(ref mut b) = self.command_buf {
+                            b.push(c);
+                        }
                     }
                     Intent::Redraw
                 }
                 KeyCode::Backspace => {
+                    self.completion_candidates.clear();
+                    self.completion_index = 0;
                     if let Some(ref mut b) = self.command_buf {
                         b.pop();
                     }
@@ -728,6 +795,89 @@ impl AppState {
                 _ => Intent::Redraw,
             },
             _ => Intent::Redraw,
+        }
+    }
+
+    /// Compute or cycle Tab-completions.
+    /// `reverse = true` → Shift-Tab (cycle backward).
+    fn handle_completion_tab(&mut self, reverse: bool) {
+        if !self.completion_candidates.is_empty() {
+            // Cycle within the existing wildmenu.
+            let n = self.completion_candidates.len();
+            self.completion_index = if reverse {
+                self.completion_index.checked_sub(1).unwrap_or(n - 1)
+            } else {
+                (self.completion_index + 1) % n
+            };
+        } else {
+            // Compute fresh candidates from the current buffer.
+            let buf = self.command_buf.clone().unwrap_or_default();
+            let candidates = self.compute_completions(&buf);
+            match candidates.len() {
+                0 => {} // No matches — do nothing.
+                1 => {
+                    // Exactly one match: fill directly, no wildmenu.
+                    let filled = Self::completed_buf(&buf, &candidates[0]);
+                    if let Some(ref mut b) = self.command_buf {
+                        *b = filled;
+                    }
+                }
+                _ => {
+                    // Multiple matches: open the wildmenu at index 0.
+                    self.completion_candidates = candidates;
+                    self.completion_index = 0;
+                }
+            }
+        }
+    }
+
+    /// Accept `candidate` into the command buffer and close the wildmenu.
+    fn accept_completion(&mut self, candidate: &str) {
+        let buf = self.command_buf.clone().unwrap_or_default();
+        let filled = Self::completed_buf(&buf, candidate);
+        if let Some(ref mut b) = self.command_buf {
+            *b = filled;
+        }
+        self.completion_candidates.clear();
+        self.completion_index = 0;
+    }
+
+    /// Build the completed buffer string from the current raw buffer and a
+    /// candidate: replaces only the token being completed (command name or
+    /// the last argument after the first space).
+    fn completed_buf(buf: &str, candidate: &str) -> String {
+        if let Some(space_pos) = buf.find(' ') {
+            // Completing an argument — keep the command, replace the argument.
+            format!("{} {}", &buf[..space_pos], candidate)
+        } else {
+            // Completing the command name itself.
+            candidate.to_string()
+        }
+    }
+
+    /// Return Tab-completion candidates for the given raw buffer text.
+    fn compute_completions(&self, buf: &str) -> Vec<String> {
+        let trimmed = buf.trim_start();
+        if let Some(space_pos) = trimmed.find(' ') {
+            // Buffer already has a command word; complete the argument.
+            let cmd = &trimmed[..space_pos];
+            let arg = trimmed[space_pos + 1..].trim_start();
+            if cmd == "open" {
+                if let Some(vm) = &self.view {
+                    let lp = arg.to_lowercase();
+                    return std::iter::once(vm.title.clone())
+                        .filter(|name| name.to_lowercase().starts_with(&lp))
+                        .collect();
+                }
+            }
+            vec![]
+        } else {
+            // Completing the command name by prefix.
+            COMMANDS
+                .iter()
+                .filter(|cmd| cmd.starts_with(trimmed))
+                .map(|s| s.to_string())
+                .collect()
         }
     }
 

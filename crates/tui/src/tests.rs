@@ -12,9 +12,10 @@ mod tests {
     };
     use libgen_core::model::{BookInput, BookRequest, DownloadList, Group};
     use libgen_engine::viewmodel::build_with_id;
+    use libgen_engine::{ViewBook, ViewVariation};
     use ratatui::{backend::TestBackend, Terminal};
 
-    use crate::app::{AppState, Focus, Modal, StatusFilter};
+    use crate::app::{AppState, FlatBook, Focus, Modal, StatusFilter};
     use crate::intent::Intent;
     use crate::ui;
 
@@ -107,6 +108,65 @@ mod tests {
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         })
+    }
+
+    /// Build a `FlatBook` with one downloading version, for Activity-pane tests.
+    fn make_downloading_flat_book(title: &str, group_index: usize, bi: usize) -> FlatBook {
+        FlatBook {
+            group_name: "Test Group".into(),
+            group_index,
+            book_index_in_group: bi,
+            book: ViewBook {
+                id: format!("id-{}", bi),
+                title: title.into(),
+                author: "Author".into(),
+                year: None,
+                pages: None,
+                backfilled: vec![],
+                seq: bi + 1,
+                discovery: "matched".into(),
+                versions: vec![ViewVariation {
+                    md5: "a".repeat(32),
+                    title: title.into(),
+                    author: "Author".into(),
+                    fmt: "epub".into(),
+                    size: 1,
+                    size_bytes: None,
+                    year: None,
+                    publisher: String::new(),
+                    language: String::new(),
+                    pages: None,
+                    counted_pages: None,
+                    low_pages: false,
+                    host: Some("libgen.li".into()),
+                    state: "downloading".into(),
+                    progress: 50,
+                    downloaded_bytes: None,
+                    total_bytes: None,
+                    speed_bps: None,
+                    eta_secs: None,
+                    output_path: None,
+                    score: 0.9,
+                    cover_url: None,
+                    last_error: None,
+                }],
+                acquisition: None,
+                review: false,
+                recommended_md5: None,
+                history: vec![],
+            },
+        }
+    }
+
+    /// Collect the terminal buffer into a single string (one long line).
+    fn buffer_string(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect()
     }
 
     fn mouse_left_click(column: u16, row: u16) -> Event {
@@ -571,6 +631,315 @@ mod tests {
         assert!(
             !app.transfers.contains_key(&md5),
             "Done should remove transfer"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Feature A: Command-line autocomplete (Tab / wildmenu)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn tab_on_partial_prefix_fills_single_match() {
+        // ":im" + Tab → buffer "import" (only one command starts with "im").
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':'))); // enter command mode
+        app.on_input(key(KeyCode::Char('i')));
+        app.on_input(key(KeyCode::Char('m')));
+        app.on_input(key(KeyCode::Tab));
+        assert_eq!(
+            app.command_buf.as_deref(),
+            Some("import"),
+            "single match should fill buffer directly"
+        );
+        assert!(
+            app.completion_candidates.is_empty(),
+            "single match must not open the wildmenu"
+        );
+    }
+
+    #[test]
+    fn tab_on_empty_buf_opens_wildmenu_with_all_commands() {
+        // ":" + Tab → wildmenu shows all 8 commands.
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':'))); // buf = ""
+        app.on_input(key(KeyCode::Tab));
+        assert!(
+            !app.completion_candidates.is_empty(),
+            "Tab on empty prefix should open wildmenu"
+        );
+        assert!(
+            app.completion_candidates.len() >= 2,
+            "expected multiple candidates"
+        );
+        // All known commands should be present.
+        for cmd in &[
+            "import",
+            "add",
+            "open",
+            "requery",
+            "settings",
+            "pause-all",
+            "quit",
+            "help",
+        ] {
+            assert!(
+                app.completion_candidates.iter().any(|c| c == cmd),
+                "candidate '{}' missing",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn tab_cycles_wildmenu_forward() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':'))); // buf = ""
+        app.on_input(key(KeyCode::Tab)); // open wildmenu, index = 0
+        assert!(!app.completion_candidates.is_empty());
+        let first_index = app.completion_index;
+        app.on_input(key(KeyCode::Tab)); // cycle forward
+        assert_ne!(
+            app.completion_index, first_index,
+            "Tab should advance the wildmenu index"
+        );
+    }
+
+    #[test]
+    fn backtab_cycles_wildmenu_backward() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':'))); // buf = ""
+        app.on_input(key(KeyCode::Tab)); // open wildmenu, index = 0
+        let n = app.completion_candidates.len();
+        app.on_input(key(KeyCode::BackTab)); // should wrap to n-1
+        assert_eq!(
+            app.completion_index,
+            n - 1,
+            "Shift-Tab from index 0 should wrap to last candidate"
+        );
+    }
+
+    #[test]
+    fn enter_while_wildmenu_open_accepts_not_submits() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':'))); // buf = ""
+        app.on_input(key(KeyCode::Tab)); // open wildmenu, index = 0
+        assert!(!app.completion_candidates.is_empty());
+        let selected = app.completion_candidates[app.completion_index].clone();
+
+        let intent = app.on_input(key(KeyCode::Enter));
+
+        assert_eq!(
+            intent,
+            Intent::Redraw,
+            "Enter while wildmenu open must not submit (returns Redraw)"
+        );
+        assert_eq!(
+            app.command_buf.as_deref(),
+            Some(selected.as_str()),
+            "buffer should hold the accepted candidate"
+        );
+        assert!(
+            app.completion_candidates.is_empty(),
+            "wildmenu should close after accept"
+        );
+        // A second Enter now submits.
+        let intent2 = app.on_input(key(KeyCode::Enter));
+        assert_eq!(
+            intent2,
+            Intent::Command(selected.clone()),
+            "second Enter should submit the command"
+        );
+    }
+
+    #[test]
+    fn space_while_wildmenu_open_accepts_candidate() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':'))); // buf = ""
+        app.on_input(key(KeyCode::Tab)); // open wildmenu
+        let selected = app.completion_candidates[app.completion_index].clone();
+        let intent = app.on_input(key(KeyCode::Char(' ')));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(app.command_buf.as_deref(), Some(selected.as_str()));
+        assert!(app.completion_candidates.is_empty());
+    }
+
+    #[test]
+    fn esc_closes_wildmenu_but_keeps_buffer() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':'))); // buf = ""
+        app.on_input(key(KeyCode::Char('i'))); // buf = "i"
+        app.on_input(key(KeyCode::Tab)); // single match → fills "import"
+                                         // Now open wildmenu by Tab on empty-ish buffer.
+        app.on_input(key(KeyCode::Backspace)); // buf = "impor" (or just re-open)
+                                               // Let's just test Esc closing a wildmenu.
+                                               // Open it fresh from scratch.
+        let mut app2 = AppState::new();
+        app2.on_input(key(KeyCode::Char(':'))); // buf = ""
+        app2.on_input(key(KeyCode::Tab)); // open wildmenu
+        assert!(!app2.completion_candidates.is_empty());
+        let intent = app2.on_input(key(KeyCode::Esc)); // close wildmenu, keep buf
+        assert_eq!(intent, Intent::Redraw);
+        assert!(
+            app2.completion_candidates.is_empty(),
+            "Esc must close wildmenu"
+        );
+        assert!(
+            app2.command_buf.is_some(),
+            "Esc must keep the command buffer when wildmenu was open"
+        );
+    }
+
+    #[test]
+    fn typing_char_closes_wildmenu() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':'))); // buf = ""
+        app.on_input(key(KeyCode::Tab)); // open wildmenu
+        assert!(!app.completion_candidates.is_empty());
+        app.on_input(key(KeyCode::Char('q'))); // type 'q'
+        assert!(
+            app.completion_candidates.is_empty(),
+            "typing a char must close the wildmenu"
+        );
+        assert_eq!(
+            app.command_buf.as_deref(),
+            Some("q"),
+            "typed char appended to buffer"
+        );
+    }
+
+    #[test]
+    fn wildmenu_render_contains_candidates() {
+        // When the wildmenu is open the rendered buffer must show candidate text.
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        // Manually activate the wildmenu.
+        app.command_buf = Some(String::new());
+        app.completion_candidates = vec!["import".into(), "add".into(), "open".into()];
+        app.completion_index = 0;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(content.contains("import"), "wildmenu must show 'import'");
+        assert!(content.contains("add"), "wildmenu must show 'add'");
+        assert!(content.contains("open"), "wildmenu must show 'open'");
+    }
+
+    // -----------------------------------------------------------------------
+    // Feature B: Activity-pane conditional scroll
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn activity_fit_shows_all_rows_no_indicator() {
+        // N = 2, capacity = ACTIVITY_EXPANDED_H(5) - 2 borders = 3.
+        // All rows visible, no ▾/▴ indicator.
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = vec![
+            make_downloading_flat_book("Alpha Book", 0, 0),
+            make_downloading_flat_book("Beta Book", 0, 1),
+        ];
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains("Alpha Book"),
+            "Alpha Book must be visible in FIT mode"
+        );
+        assert!(
+            content.contains("Beta Book"),
+            "Beta Book must be visible in FIT mode"
+        );
+        assert!(
+            !content.contains("more"),
+            "FIT mode must not show 'more' indicator"
+        );
+        assert!(
+            !content.contains("above"),
+            "FIT mode must not show 'above' indicator"
+        );
+    }
+
+    #[test]
+    fn activity_overflow_shows_below_indicator() {
+        // N = 5, capacity = 3 → OVERFLOW: "▾ N more" indicator appears.
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = (0..5)
+            .map(|i| make_downloading_flat_book(&format!("Book {}", i), 0, i))
+            .collect();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains("more"),
+            "OVERFLOW must show 'more' indicator"
+        );
+    }
+
+    #[test]
+    fn activity_overflow_scrolled_shows_above_indicator() {
+        // Scrolled down: "▴ N above" indicator appears.
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = (0..5)
+            .map(|i| make_downloading_flat_book(&format!("Book {}", i), 0, i))
+            .collect();
+        app.activity_selected = 2; // scrolled past beginning
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains("above"),
+            "scrolled OVERFLOW must show 'above' indicator"
+        );
+    }
+
+    #[test]
+    fn activity_scroll_keys_advance_offset() {
+        // ↓/j while Focus::Activity increments activity_selected.
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = (0..5)
+            .map(|i| make_downloading_flat_book(&format!("Book {}", i), 0, i))
+            .collect();
+        app.focus = Focus::Activity;
+        assert_eq!(app.activity_selected, 0);
+
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(
+            app.activity_selected, 1,
+            "Down should advance scroll offset"
+        );
+
+        app.on_input(key(KeyCode::Char('j')));
+        assert_eq!(app.activity_selected, 2, "'j' should advance scroll offset");
+
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(app.activity_selected, 1, "Up should retreat scroll offset");
+
+        app.on_input(key(KeyCode::Char('k')));
+        assert_eq!(app.activity_selected, 0, "'k' should retreat scroll offset");
+    }
+
+    #[test]
+    fn activity_scroll_does_not_affect_book_selection() {
+        // While Activity is focused, j/k must not move app.selected.
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = (0..5)
+            .map(|i| make_downloading_flat_book(&format!("Book {}", i), 0, i))
+            .collect();
+        app.focus = Focus::Activity;
+        let book_sel_before = app.selected;
+        app.on_input(key(KeyCode::Down));
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(
+            app.selected, book_sel_before,
+            "book selection unchanged while Activity focused"
         );
     }
 

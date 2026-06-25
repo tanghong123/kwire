@@ -19,10 +19,9 @@ use ratatui::{
 
 use crate::app::{AppState, Focus, Modal, StatusFilter};
 use crate::theme::{
-    self, style_dim, style_header, style_hint, style_normal, style_selected, style_title, C_DIM,
-    C_FAINT, C_NEEDS_YOU, C_TEXT,
+    self, style_dim, style_header, style_hint, style_normal, style_selected, style_title, C_BG,
+    C_BRIGHT, C_DIM, C_DONE, C_FAINT, C_NEEDS_YOU, C_PANEL, C_TEXT,
 };
-use crate::theme::{C_BRIGHT, C_DONE};
 
 const ACTIVITY_EXPANDED_H: u16 = 5;
 const ACTIVITY_COLLAPSED_H: u16 = 1;
@@ -64,6 +63,11 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
     render_book_table(frame, app, chunks[2]);
     render_activity(frame, app, chunks[3]);
     render_hint_bar(frame, app, chunks[4]);
+
+    // Wildmenu: one line directly above the command-line hint bar.
+    if !app.completion_candidates.is_empty() && chunks[4].y > 0 {
+        render_wildmenu(frame, app, chunks[4]);
+    }
 
     // Overlay modal if one is open.
     if let Some(modal) = app.modal.clone() {
@@ -251,6 +255,11 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
             .style(style_hint()),
         outer[1],
     );
+
+    // Wildmenu: one line above the command-input box.
+    if !app.completion_candidates.is_empty() && outer[1].y > 0 {
+        render_wildmenu(frame, app, outer[1]);
+    }
 
     // Overlay modal (e.g. Help opened from empty state).
     if let Some(modal) = app.modal.clone() {
@@ -577,12 +586,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
         .flat_map(|fb| fb.book.versions.iter())
         .filter(|v| v.state == "queued")
         .count();
-    let connecting_count = app
-        .flat
-        .iter()
-        .flat_map(|fb| fb.book.versions.iter())
-        .filter(|v| v.state == "queued")
-        .count();
+    let connecting_count = queued_count;
 
     let summary = if app.activity_expanded {
         format!(
@@ -602,88 +606,132 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
         .border_style(border_style);
 
     if app.activity_expanded {
-        // Group in-progress variations by host, show up to 3 active transfers.
-        let in_progress: Vec<Line> = app
-            .flat
-            .iter()
-            .filter(|fb| fb.book.versions.iter().any(|v| v.state == "downloading"))
-            .take(3)
-            .map(|fb| {
-                let v = fb
-                    .book
-                    .versions
-                    .iter()
-                    .find(|v| v.state == "downloading")
-                    .unwrap();
-                let bar = theme::progress_bar(v.progress, 6);
-                let host = v.host.as_deref().unwrap_or("unknown");
-                let eta = v
-                    .eta_secs
-                    .map(|s| format!(" ETA {}s", s))
-                    .unwrap_or_default();
-                Line::from(vec![
-                    Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
-                    Span::styled(fb.book.title.clone(), style_normal()),
-                    Span::styled(
-                        format!(
-                            "  {} \u{00b7} {}  {}%  {}{}",
-                            v.fmt, host, v.progress, bar, eta
-                        ),
-                        style_dim(),
-                    ),
-                ])
-            })
-            .collect();
-
-        // If no flat-based data, fall back to live telemetry from app.transfers.
-        let content = if !in_progress.is_empty() {
-            in_progress
-        } else if !app.transfers.is_empty() {
-            app.transfers
-                .values()
-                .take(3)
-                .map(|t| {
-                    let pct = match (t.bytes_done, t.total_bytes) {
-                        (done, Some(total)) if total > 0 => {
-                            ((done as f64 / total as f64) * 100.0) as u8
-                        }
-                        _ => 0,
-                    };
-                    let bar = theme::progress_bar(pct.into(), 6);
-                    let eta = t
+        // Build all transfer lines without any hard cap.
+        let all_lines: Vec<Line> = {
+            let flat_lines: Vec<Line> = app
+                .flat
+                .iter()
+                .filter(|fb| fb.book.versions.iter().any(|v| v.state == "downloading"))
+                .map(|fb| {
+                    let v = fb
+                        .book
+                        .versions
+                        .iter()
+                        .find(|v| v.state == "downloading")
+                        .unwrap();
+                    let bar = theme::progress_bar(v.progress, 6);
+                    let host = v.host.as_deref().unwrap_or("unknown");
+                    let eta = v
                         .eta_secs
                         .map(|s| format!(" ETA {}s", s))
                         .unwrap_or_default();
-                    let speed = t
-                        .speed_bps
-                        .map(|bps| {
-                            if bps >= 1_000_000 {
-                                format!(" {:.1}MB/s", bps as f64 / 1_000_000.0)
-                            } else {
-                                format!(" {}KB/s", bps / 1_000)
-                            }
-                        })
-                        .unwrap_or_default();
-                    let title = if t.title.is_empty() {
-                        t.md5.chars().take(8).collect::<String>()
-                    } else {
-                        t.title.clone()
-                    };
                     Line::from(vec![
                         Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
-                        Span::styled(title, style_normal()),
+                        Span::styled(fb.book.title.clone(), style_normal()),
                         Span::styled(
-                            format!("  {} \u{00b7} {}%  {}{}{}", t.host, pct, bar, speed, eta),
+                            format!(
+                                "  {} \u{00b7} {}  {}%  {}{}",
+                                v.fmt, host, v.progress, bar, eta
+                            ),
                             style_dim(),
                         ),
                     ])
                 })
-                .collect()
-        } else {
+                .collect();
+
+            if !flat_lines.is_empty() {
+                flat_lines
+            } else {
+                // Fallback: live telemetry transfers (no hard cap).
+                app.transfers
+                    .values()
+                    .map(|t| {
+                        let pct = match (t.bytes_done, t.total_bytes) {
+                            (done, Some(total)) if total > 0 => {
+                                ((done as f64 / total as f64) * 100.0) as u8
+                            }
+                            _ => 0,
+                        };
+                        let bar = theme::progress_bar(pct.into(), 6);
+                        let eta = t
+                            .eta_secs
+                            .map(|s| format!(" ETA {}s", s))
+                            .unwrap_or_default();
+                        let speed = t
+                            .speed_bps
+                            .map(|bps| {
+                                if bps >= 1_000_000 {
+                                    format!(" {:.1}MB/s", bps as f64 / 1_000_000.0)
+                                } else {
+                                    format!(" {}KB/s", bps / 1_000)
+                                }
+                            })
+                            .unwrap_or_default();
+                        let title = if t.title.is_empty() {
+                            t.md5.chars().take(8).collect::<String>()
+                        } else {
+                            t.title.clone()
+                        };
+                        Line::from(vec![
+                            Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
+                            Span::styled(title, style_normal()),
+                            Span::styled(
+                                format!("  {} \u{00b7} {}%  {}{}{}", t.host, pct, bar, speed, eta),
+                                style_dim(),
+                            ),
+                        ])
+                    })
+                    .collect()
+            }
+        };
+
+        // Visible row capacity = inner height (border top + bottom = 2).
+        let capacity = area.height.saturating_sub(2) as usize;
+        let n = all_lines.len();
+
+        let content: Vec<Line> = if n == 0 {
+            // Nothing active.
             vec![Line::from(Span::styled(
                 "  No active transfers.",
                 style_dim(),
             ))]
+        } else if n <= capacity {
+            // FIT: all rows visible; no scroll affordance, no selection highlight.
+            all_lines
+        } else {
+            // OVERFLOW: windowed with scroll offset and edge indicators.
+            let offset = app.activity_selected.min(n.saturating_sub(1));
+            let has_above = offset > 0;
+            let above_slots = if has_above { 1usize } else { 0 };
+
+            // Tentatively reserve one slot for the below indicator.
+            let mut tfer_slots = capacity.saturating_sub(above_slots + 1).max(1);
+            let end = (offset + tfer_slots).min(n);
+            let has_below = end < n;
+
+            // Recover the below slot if there is nothing below.
+            if !has_below {
+                tfer_slots = capacity.saturating_sub(above_slots).max(1);
+            }
+            let end = (offset + tfer_slots).min(n);
+
+            let mut display: Vec<Line> = Vec::with_capacity(capacity);
+            if has_above {
+                display.push(Line::from(Span::styled(
+                    format!("  \u{25b4} {} above", offset),
+                    style_dim(),
+                )));
+            }
+            for line in &all_lines[offset..end] {
+                display.push(line.clone());
+            }
+            if has_below {
+                display.push(Line::from(Span::styled(
+                    format!("  \u{25be} {} more", n - end),
+                    style_dim(),
+                )));
+            }
+            display
         };
 
         frame.render_widget(
@@ -1374,6 +1422,43 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
     frame.render_widget(
         Paragraph::new(Span::styled("? or esc  to close", style_hint())),
         split_left[1],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Wildmenu — Tab-completion strip shown above the command line
+// ---------------------------------------------------------------------------
+
+/// Render the Tab-completion wildmenu as a single line directly above
+/// `hint_rect` (i.e. at `hint_rect.y - 1`).  The currently highlighted
+/// candidate is drawn reversed (dark bg, accent fg); others are dim.
+fn render_wildmenu(frame: &mut Frame, app: &AppState, hint_rect: Rect) {
+    if hint_rect.y == 0 {
+        return;
+    }
+    let menu_area = Rect::new(hint_rect.x, hint_rect.y - 1, hint_rect.width, 1);
+
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, cand) in app.completion_candidates.iter().enumerate() {
+        let is_active = i == app.completion_index;
+        let style = if is_active {
+            Style::default()
+                .fg(C_BG)
+                .bg(C_DONE)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(C_TEXT).bg(C_PANEL)
+        };
+        spans.push(Span::styled(format!(" {} ", cand), style));
+        if i + 1 < app.completion_candidates.len() {
+            // Thin separator between candidates.
+            spans.push(Span::styled("  ", Style::default().fg(C_FAINT).bg(C_PANEL)));
+        }
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(C_PANEL)),
+        menu_area,
     );
 }
 
