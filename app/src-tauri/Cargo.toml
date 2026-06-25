@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 libgen-core = { path = "../../crates/core" }
+libgen-engine = { path = "../../crates/engine" }
 
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"

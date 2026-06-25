@@ -68,7 +68,7 @@ pub struct AppSettings {
 
 /// Default global download cap (`G`). Five concurrent downloads balances
 /// throughput against politeness; tune in Settings.
-pub(crate) fn default_max_concurrent_downloads() -> usize {
+pub fn default_max_concurrent_downloads() -> usize {
     5
 }
 
@@ -128,7 +128,7 @@ impl AppSettings {
 
 impl Config {
     /// Resolve config from env vars, falling back to repo-relative defaults so a
-    /// plain `cargo tauri dev` from the repo "just works".
+    /// plain `cargo run` from the repo "just works".
     pub fn from_env() -> Self {
         let mirrors = std::env::var_os("LIBGEN_MIRRORS")
             .map(PathBuf::from)
@@ -188,7 +188,7 @@ fn app_config_path(db_path: &std::path::Path) -> PathBuf {
 }
 
 /// Best-effort default location for `mirrors.toml`: alongside the workspace
-/// root (two levels up from `app/src-tauri` at dev time), else CWD.
+/// root (two levels up from `crates/engine` at dev time), else CWD.
 fn default_mirrors() -> PathBuf {
     let candidates = [
         PathBuf::from("mirrors.toml"),
@@ -222,7 +222,7 @@ fn default_db_path() -> PathBuf {
     PathBuf::from("library.sqlite3")
 }
 
-/// Workspace root inferred from this crate's manifest dir (`app/src-tauri`).
+/// Workspace root inferred from this crate's manifest dir (`crates/engine`).
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")

@@ -7,23 +7,31 @@
 //! command goes through the engine's [`Orchestrator`], exactly as the CLI's
 //! `run-list` harness does.
 
-// These modules are `pub` so the integration tests under `tests/` (which compile
+// `commands` is `pub` so the integration tests under `tests/` (which compile
 // against the crate's public API) can construct an `AppState`, load lists, set
 // goals, and drive the engine headlessly — exercising the per-orchestrator
-// locking + the goal-driven driver exactly as the Tauri commands do. They are not
+// locking + the goal-driven driver exactly as the Tauri commands do. It is not
 // a stable external API; the front end only ever calls the registered commands.
 #[doc(hidden)]
-pub mod bridge;
-#[doc(hidden)]
 pub mod commands;
-#[doc(hidden)]
-pub mod engine;
-#[doc(hidden)]
-pub mod state;
-#[doc(hidden)]
-pub mod viewmodel;
 
-use state::{AppState, Config};
+// Tauri-only engine glue: TauriEmitter + spawn(AppHandle).
+mod engine_tauri;
+
+// Re-export the moved modules so existing `crate::bridge`, `crate::state`,
+// `crate::viewmodel`, `crate::engine` paths in commands.rs still resolve.
+// (Commands that previously used `crate::state::AppState` etc. now get them
+// from libgen_engine via these re-exports.)
+#[doc(hidden)]
+pub use libgen_engine::bridge;
+#[doc(hidden)]
+pub use libgen_engine::engine;
+#[doc(hidden)]
+pub use libgen_engine::state;
+#[doc(hidden)]
+pub use libgen_engine::viewmodel;
+
+use libgen_engine::state::{AppState, Config};
 
 /// Entry point shared by the desktop binary (and, if added later, mobile).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -47,7 +55,7 @@ pub fn run() {
             // Start the long-lived execution engine AFTER resume (launch is
             // paused: every book's goal is Idle, so the engine does nothing until
             // a command — Start / Re-query — raises a goal and wakes it).
-            engine::spawn(app.handle().clone());
+            engine_tauri::spawn(app.handle().clone());
 
             // Background: fill in missing book covers (Open Library) off-lock, and
             // cache thumbnails locally so the UI can show them.
