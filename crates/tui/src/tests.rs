@@ -398,13 +398,17 @@ mod tests {
             .map(|c| c.symbol().to_string())
             .collect();
 
-        assert!(
-            content.contains("kwire"),
-            "buffer should contain app name 'kwire'"
-        );
+        // The empty/first-run screen shows "kwire" but the main library screen
+        // renders the list strip with "★ <title>" and the filter row. Check
+        // for the active-list indicator and the list title.
         assert!(
             content.contains("Test List"),
             "buffer should contain list title 'Test List'"
+        );
+        // The list strip always shows the "All" chip when a view is loaded.
+        assert!(
+            content.contains("All"),
+            "buffer should contain 'All' filter chip"
         );
     }
 
@@ -474,6 +478,45 @@ mod tests {
         // No view loaded — should render the empty/first-run screen.
         assert!(app.view.is_none());
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn render_empty_screen_contains_expected_content() {
+        // The empty/first-run screen must contain the wordmark, the
+        // "NO READING LISTS YET" heading, and the command hints.
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        assert!(app.view.is_none());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let content: String = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+
+        assert!(
+            content.contains("kwire"),
+            "empty screen should contain wordmark 'kwire'"
+        );
+        assert!(
+            content.contains("NO READING LISTS YET"),
+            "empty screen should contain heading 'NO READING LISTS YET'"
+        );
+        assert!(
+            content.contains(": import ~/list.md"),
+            "empty screen should contain command hint ': import ~/list.md'"
+        );
+        assert!(
+            content.contains(": add"),
+            "empty screen should contain command hint ': add'"
+        );
+        assert!(
+            content.contains("all keys & commands"),
+            "empty screen should contain '?' hint description"
+        );
     }
 
     // -----------------------------------------------------------------------
