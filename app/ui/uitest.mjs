@@ -529,6 +529,23 @@ check("book row: a not-found book shows a single book-status line (no variation 
   if (!/Not found/.test(html)) throw new Error("not-found status missing: " + html.slice(0, 200));
 });
 
+check("book row: not-found cover is neutral + a low_pages variation flags ⚠", () => {
+  // A not-found book that still carries a removed/wrong pdf variation must show a
+  // NEUTRAL cover, never a PDF-colored placeholder.
+  const nf = { id: "nf0", list: "L1", bid: "nf0", title: "Gone", author: "X", seq: 1,
+    discovery: "not_found", review: false,
+    versions: [{ md5: "x".repeat(32), fmt: "pdf", state: "cancelled", cover_url: "" }] };
+  const ch = ctx.coverImg(nf, "cv-sm");
+  if (/pdf/i.test(ch)) throw new Error("not-found cover must not carry the format: " + ch);
+  if (!/—/.test(ch)) throw new Error("not-found cover should be the neutral placeholder: " + ch);
+  // A done variation flagged low_pages shows the ⚠ page warning.
+  const lp = { id: "lp0", list: "L1", bid: "lp0", title: "Tiny", author: "X", seq: 1,
+    discovery: "matched", review: false,
+    versions: [{ md5: "y".repeat(32), fmt: "pdf", state: "done", progress: 100, counted_pages: 3, low_pages: true }] };
+  const vh = ctx.varLine(lp, lp.versions[0]);
+  if (!/vwarn/.test(vh) || !/3p/.test(vh)) throw new Error("low_pages should show ⚠ Np: " + vh);
+});
+
 check("render() with a selected DONE (non-review) book also hydrates covers", () => {
   const b = reviewBook(); b.review = false; b.discovery = "matched";
   ctx.LISTS = [listOf(b)]; ctx.SELECTED = "bk0";

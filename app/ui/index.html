@@ -256,6 +256,7 @@
   .vline.bookline { grid-template-columns: auto; justify-items: start; }
   .vt { font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
   .vsz { color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .vwarn { font-size: 10px; font-weight: 700; color: var(--amber); white-space: nowrap; }
   .vstat { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--text-dim); }
   .vstat .vpct { font-variant-numeric: tabular-nums; }
   .vbar { height: 6px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
@@ -1511,6 +1512,12 @@ function bookCover(bk) {
 /* A cover <img> (lazy; swaps to a format-colored placeholder on 404), or the
    placeholder directly when no cover URL is known. `cls` = "cv-sm" | "cv-lg". */
 function coverImg(bk, cls) {
+  // A not-found / can't-download book has no file — show a NEUTRAL placeholder, never
+  // a format-colored one (a leftover format from a removed/wrong variation is
+  // misleading) and never a stale cover image.
+  if (effectiveStatus(bk) === "cantdl") {
+    return '<span class="cover ' + cls + ' cover-ph" style="color:var(--text-faint)">—</span>';
+  }
   var fmts = uniqueFormats(bk.versions), f = fmts[0] || "";
   var ph = '<span class="cover ' + cls + ' cover-ph" style="background:' + fmtColor(f) +
     '22;color:' + fmtColor(f) + '">' + esc((f || "?").toUpperCase().slice(0, 4)) + '</span>';
@@ -1600,10 +1607,15 @@ function varProgCell(v) {
 }
 function varLine(bk, v) {
   var dp = v.state === "downloading" ? ' data-vprog="' + esc(bk.id) + ":" + esc(v.md5) + '"' : '';
+  // Too-few-pages guard: a verified file with a suspiciously low page count is likely
+  // a sample/wrong/corrupt copy — flag it (the file is kept; this is a warning).
+  var warn = v.low_pages
+    ? '<span class="vwarn" title="Only ' + v.counted_pages + ' pages — this file may be a sample, incomplete, or the wrong book">⚠ ' + v.counted_pages + 'p</span>'
+    : '';
   return '<div class="vline"' + dp + '>' +
     '<span class="vt" style="color:' + fmtColor(v.fmt) + '">' + esc(v.fmt) + '</span>' +
     '<span class="vsz">' + (v.size ? v.size + ' MB' : '—') + '</span>' +
-    varStatusCell(v) + varProgCell(v) + '</div>';
+    varStatusCell(v) + warn + varProgCell(v) + '</div>';
 }
 /* The per-variation region of a book row: one line per REQUESTED variation
    (type · size · status · progress, stacked vertically). A book with no requested
