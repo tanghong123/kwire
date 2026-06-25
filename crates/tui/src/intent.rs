@@ -30,4 +30,31 @@ pub enum Intent {
 
     /// Terminate the event loop and restore the terminal.
     Quit,
+
+    /// Open the book-detail modal for the given flat index.
+    OpenDetail { flat_index: usize },
+
+    /// Open the variation-picker modal for the given flat index.
+    OpenPicker { flat_index: usize },
+
+    /// Open the help screen.
+    OpenHelp,
+
+    /// Pause a downloading variation.
+    Pause {
+        group_path: Vec<usize>,
+        book_index: usize,
+    },
+
+    /// Cancel a downloading variation.
+    Cancel {
+        group_path: Vec<usize>,
+        book_index: usize,
+    },
+
+    /// Open a file with the system default application.
+    OpenFile(String),
+
+    /// Reveal a file in Finder (macOS) / file manager.
+    RevealFile(String),
 }
