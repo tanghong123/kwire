@@ -985,7 +985,48 @@ var I18N = {
     "misc.autofill_title": "Auto-filled from the downloaded copy — edit to override",
     "misc.drag_resize": "Drag to resize",
     "misc.manual_empty": "Paste an md5 or libgen URL first.",
-    "misc.failed_unknown": "unknown error"
+    "misc.failed_unknown": "unknown error",
+    /* backend error messages */
+    "err.empty_title": "Enter a book title to add.",
+    "err.select_list_requery": "Select a specific list to re-query.",
+    "err.series_no_title": "This book has no title to look up a series for.",
+    "err.not_in_series": "This book isn't part of a known series.",
+    /* history event kind labels */
+    "evkind.born": "created",
+    "evkind.discovered": "discovered",
+    "evkind.selected": "selected",
+    "evkind.manual": "manual",
+    "evkind.accepted": "accepted",
+    "evkind.downloading": "downloading",
+    "evkind.resuming": "resuming",
+    "evkind.retry": "retry",
+    "evkind.failover": "failover",
+    "evkind.done": "done",
+    "evkind.failed": "failed",
+    "evkind.paused": "paused",
+    "evkind.cancelled": "cancelled",
+    "evkind.note": "note",
+    "evkind.verified": "verified",
+    /* history event detail templates */
+    "event.matched": "{n} candidate(s) → matched (auto-selected {ext})",
+    "event.needs_selection": "{n} candidate(s) → needs selection",
+    "event.notfound": "no candidates found",
+    "event.discovered": "{n} candidate(s)",
+    "event.selected": "selected for download",
+    "event.selected_retry": "retry requested",
+    "event.selected_recancel": "re-requested (was cancelled)",
+    "event.selected_redl": "re-download requested",
+    "event.manual": "md5 entered manually",
+    "event.accepted": "user accepted the current downloaded copy",
+    "event.downloading_started": "started on {host}",
+    "event.downloading_edge": "serving from {host}",
+    "event.resuming": "resuming from {mb} MB on {host}",
+    "event.retry": "retry attempt {attempt} on {host} after {backoff}s backoff — {error}",
+    "event.failover": "failing over from {from} — {error}",
+    "event.done": "completed on {host} ({mb} MB)",
+    "event.failed": "failed — {error}",
+    "event.paused": "paused",
+    "event.cancelled": "cancelled"
   },
   zh: {
     /* sidebar */
@@ -1224,7 +1265,48 @@ var I18N = {
     "misc.autofill_title": "从已下载版本自动填充 — 可编辑覆盖",
     "misc.drag_resize": "拖动以调整大小",
     "misc.manual_empty": "请先粘贴 md5 或 libgen URL。",
-    "misc.failed_unknown": "未知错误"
+    "misc.failed_unknown": "未知错误",
+    /* backend error messages */
+    "err.empty_title": "请输入书名。",
+    "err.select_list_requery": "请选择具体的书单进行重新查询。",
+    "err.series_no_title": "此书无标题，无法查找系列。",
+    "err.not_in_series": "此书不属于已知系列。",
+    /* history event kind labels */
+    "evkind.born": "已创建",
+    "evkind.discovered": "已发现",
+    "evkind.selected": "已选择",
+    "evkind.manual": "手动",
+    "evkind.accepted": "已确认",
+    "evkind.downloading": "下载中",
+    "evkind.resuming": "续传",
+    "evkind.retry": "重试",
+    "evkind.failover": "切换",
+    "evkind.done": "已完成",
+    "evkind.failed": "失败",
+    "evkind.paused": "已暂停",
+    "evkind.cancelled": "已取消",
+    "evkind.note": "备注",
+    "evkind.verified": "已验证",
+    /* history event detail templates */
+    "event.matched": "{n} 个候选 → 已匹配（自动选择 {ext}）",
+    "event.needs_selection": "{n} 个候选 → 需要手动选择",
+    "event.notfound": "未找到候选项",
+    "event.discovered": "{n} 个候选",
+    "event.selected": "已选择下载",
+    "event.selected_retry": "请求重试",
+    "event.selected_recancel": "重新请求（曾取消）",
+    "event.selected_redl": "请求重新下载",
+    "event.manual": "手动输入 md5",
+    "event.accepted": "用户确认保留当前已下载版本",
+    "event.downloading_started": "开始于 {host}",
+    "event.downloading_edge": "由 {host} 传输",
+    "event.resuming": "从 {mb} MB 续传，via {host}",
+    "event.retry": "第 {attempt} 次重试，{host}，退避 {backoff}s — {error}",
+    "event.failover": "从 {from} 切换 — {error}",
+    "event.done": "完成于 {host}（{mb} MB）",
+    "event.failed": "失败 — {error}",
+    "event.paused": "已暂停",
+    "event.cancelled": "已取消"
   }
 };
 function detectLang() {
@@ -1233,8 +1315,30 @@ function detectLang() {
 }
 var LANG = detectLang();
 try { document.documentElement.setAttribute("lang", LANG === "zh" ? "zh-Hans" : "en"); } catch (e) {}
-/* Translate one chrome key for the current language (en fallback, then the key). */
-function t(key) { var tb = I18N[LANG] || I18N.en; return (tb && tb[key]) || I18N.en[key] || key; }
+/* Translate one chrome key for the current language (en fallback, then the key).
+   If `args` is provided, replace {name} placeholders with args[name]. */
+function t(key, args) {
+  var tb = I18N[LANG] || I18N.en;
+  var tpl = (tb && tb[key]) || I18N.en[key] || key;
+  if (!args) return tpl;
+  return tpl.replace(/\{(\w+)\}/g, function (_, name) {
+    return Object.prototype.hasOwnProperty.call(args, name) ? args[name] : "{" + name + "}";
+  });
+}
+/* Decode a backend-encoded i18n string: "key" or "keyk=v…".
+   If the key is in the catalog, translates with params; otherwise returns s unchanged. */
+function decodeI18n(s) {
+  if (typeof s !== "string") return s;
+  var parts = s.split("");
+  var key = parts[0];
+  if (!(key in I18N.en)) return s;
+  var args = {};
+  for (var i = 1; i < parts.length; i++) {
+    var eq = parts[i].indexOf("=");
+    if (eq >= 0) args[parts[i].slice(0, eq)] = parts[i].slice(eq + 1);
+  }
+  return t(key, args);
+}
 /* Rewrite the static HTML skeleton in place. Idempotent; safe to re-run. */
 function applyStaticI18n(root) {
   var s = root || document;
@@ -2512,10 +2616,11 @@ function fmtEventTime(ms) {
 function historyRows(bk) {
   return (bk.history || []).map(function (e) {
     var fmt = e.fmt ? '<span class="he-fmt">' + esc(String(e.fmt).toUpperCase()) + '</span> ' : '';
+    var kindLabel = t("evkind." + e.kind) || e.kind;
     return '<div class="he">' +
       '<span class="he-t">' + esc(fmtEventTime(e.at_ms)) + '</span>' +
-      '<span class="he-k he-' + esc(e.kind) + '">' + esc(e.kind) + '</span>' +
-      '<span class="he-d">' + fmt + esc(e.detail) + '</span></div>';
+      '<span class="he-k he-' + esc(e.kind) + '">' + esc(kindLabel) + '</span>' +
+      '<span class="he-d">' + fmt + esc(decodeI18n(e.detail)) + '</span></div>';
   }).join("");
 }
 /* Open the chronicle for a book in the history modal (oldest first). The modal
@@ -2961,7 +3066,7 @@ function onRequestVariation(bookId, md5, listId) {
       // Surface the cross-list guard ("this file is already chosen for …") and any
       // other selection failure — silently swallowing it left the user wondering
       // why a click did nothing.
-      toast(errText(err) || "Couldn't select that copy.");
+      toast(decodeI18n(errText(err)) || "Couldn't select that copy.");
       console.error("request_variation failed:", err && err.message);
     });
 }
@@ -3074,7 +3179,7 @@ function onDownloadSeries(bookId, listId) {
     })
     .catch(function (err) {
       loading.remove();
-      toast(errText(err) || t("misc.series_failed"));
+      toast(decodeI18n(errText(err)) || t("misc.series_failed"));
     });
 }
 function onCancelDownload(bookId, md5, listId) {
@@ -3153,7 +3258,7 @@ function onConfirmImport() {
     if (!title) { toast("Title can't be empty."); return; }
     invoke("add_manual_book", { title: title, author: author || null })
       .then(function (vl) { applyLibrary(vl); closeImport(); })
-      .catch(function (err) { toast(errText(err) || "Couldn't add the book."); });
+      .catch(function (err) { toast(decodeI18n(errText(err)) || "Couldn't add the book."); });
     return;
   }
   // File tab → import a whole list. load_list is an implicit Start; a duplicate-titled
@@ -3611,7 +3716,7 @@ function onSearchAgain(bk) {
 }
 function onRequery(listId) {
   listId = listId || CURRENT;
-  if (!listId || listId === "__all__") { alert("Select a specific list to re-query."); return; }
+  if (!listId || listId === "__all__") { alert(t("err.select_list_requery")); return; }
   if (!hasTauri()) { setQuerying(true, "Re-querying…"); setTimeout(function () { setQuerying(false); }, 600); return; }
   setQuerying(true, "Re-querying this list with the latest matching…");
   invoke("requery", { listId: listArg(listId) })

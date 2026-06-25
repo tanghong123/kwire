@@ -619,6 +619,53 @@ check("render() with a selected DONE (non-review) book also hydrates covers", ()
   if (!invokeLog.some((c) => c.cmd === "cover_data_url")) throw new Error("no cover invoke for done book");
 });
 
+check("i18n: t(key, args) substitutes {n} placeholders", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "en";
+  const result = ctx.t("event.matched", { n: 3, ext: "epub" });
+  if (result !== "3 candidate(s) → matched (auto-selected epub)")
+    throw new Error("placeholder substitution failed: " + result);
+  // Missing param leaves the placeholder intact.
+  const partial = ctx.t("event.matched", { n: 5 });
+  if (!/\{ext\}/.test(partial)) throw new Error("missing param should leave {ext} in place: " + partial);
+  ctx.LANG = saved;
+});
+
+check("i18n: decodeI18n translates a known key with no params", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "en";
+  const result = ctx.decodeI18n("event.notfound");
+  if (result !== "no candidates found")
+    throw new Error("decodeI18n key-only failed: " + result);
+  ctx.LANG = saved;
+});
+
+check("i18n: decodeI18n translates a known key with params (U+001F encoded)", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "en";
+  const US = "";
+  const encoded = "event.done" + US + "host=libgen.li" + US + "mb=12";
+  const result = ctx.decodeI18n(encoded);
+  if (result !== "completed on libgen.li (12 MB)")
+    throw new Error("decodeI18n param substitution failed: " + result);
+  ctx.LANG = saved;
+});
+
+check("i18n: decodeI18n returns plain English string unchanged", () => {
+  const raw = "started on libgen.li";
+  const result = ctx.decodeI18n(raw);
+  if (result !== raw) throw new Error("decodeI18n must pass through unknown strings unchanged: " + result);
+});
+
+check("i18n: decodeI18n works in zh locale", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "zh";
+  const result = ctx.decodeI18n("event.notfound");
+  if (result !== "未找到候选项")
+    throw new Error("decodeI18n zh failed: " + result);
+  ctx.LANG = saved;
+});
+
 // --- REAL-DATA sweep: drive every book's detail panel with the actual ViewLibrary
 // dumped from the DB (app/src-tauri/examples/dump_vm.rs), catching any render-phase
 // throw that would blank thumbnails. This is the test that mirrors what the user sees.

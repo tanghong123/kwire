@@ -198,7 +198,7 @@ pub(crate) async fn add_manual_book_inner(
     author: Option<String>,
 ) -> Result<ViewLibrary, String> {
     if title.trim().is_empty() {
-        return Err("Enter a book title to add.".to_string());
+        return Err(libgen_core::model::ui_msg("err.empty_title", &[]));
     }
     let authors: Vec<String> = author
         .unwrap_or_default()
@@ -538,7 +538,7 @@ pub async fn requery(
 ) -> Result<ViewLibrary, String> {
     let id = match list_id {
         Some(s) if !s.is_empty() && s != "__all__" => s,
-        _ => return Err("Select a specific list to re-query.".to_string()),
+        _ => return Err(libgen_core::model::ui_msg("err.select_list_requery", &[])),
     };
     let orch = {
         let lib = state.library.lock().await;
@@ -1635,7 +1635,7 @@ pub async fn download_series(
     }; // orch lock dropped here — the network lookup runs OFF any lock.
 
     if title.trim().is_empty() {
-        return Err("This book has no title to look up a series for.".to_string());
+        return Err(libgen_core::model::ui_msg("err.series_no_title", &[]));
     }
 
     // 2. Open Library lookup — NO lock held across the network (per docs).
@@ -1651,7 +1651,7 @@ pub async fn download_series(
     // 3. None → not in a series. Some → build + persist a fresh list, run it.
     let series = match series {
         Some(s) if !s.members.is_empty() => s,
-        _ => return Err("This book isn't part of a known series.".to_string()),
+        _ => return Err(libgen_core::model::ui_msg("err.not_in_series", &[])),
     };
 
     let list = series_to_list(&series);

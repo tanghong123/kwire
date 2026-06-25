@@ -213,7 +213,22 @@ impl BookRequest {
             self.history.drain(0..excess);
         }
     }
+}
 
+/// Encode a UI message as `"key"` or `"key\u{1f}k=v\u{1f}…"` for the frontend
+/// to localize. Pass `args = &[]` for a key-only message.
+pub fn ui_msg(key: &str, args: &[(&str, &str)]) -> String {
+    let mut s = key.to_string();
+    for (k, v) in args {
+        s.push('\u{1f}');
+        s.push_str(k);
+        s.push('=');
+        s.push_str(v);
+    }
+    s
+}
+
+impl BookRequest {
     /// Roll-up of per-variation download state across requested variations
     /// (those with a `job`). Returns `None` if nothing has been requested for
     /// download yet (the request is still in discovery). This is what the book
