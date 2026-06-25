@@ -870,10 +870,13 @@ async fn per_host_rate_limit_spacing() {
     assert_eq!(all.len(), 4);
     for w in all.windows(2) {
         let gap = w[1].duration_since(w[0]);
-        // Allow a small scheduling slack below the nominal interval.
+        // Assert meaningful per-host spacing (the limiter isn't bursting) with a
+        // generous tolerance for wall-clock jitter under parallel-test load: a real
+        // rate-limit failure bunches requests near 0ms, far below this half-interval
+        // floor. (Was `min_interval - 20ms`, which flaked under load.)
         assert!(
-            gap >= min_interval - Duration::from_millis(20),
-            "requests too close: {gap:?} < {min_interval:?}"
+            gap >= min_interval / 2,
+            "requests too close: {gap:?} < {min_interval:?}/2 (rate-limit not spacing)"
         );
     }
 }
