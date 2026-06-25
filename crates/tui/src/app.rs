@@ -184,6 +184,20 @@ pub struct AppState {
 
     /// Index of the highlighted candidate within `completion_candidates`.
     pub completion_index: usize,
+
+    /// Transient one-shot status message (shown in the hint bar until the
+    /// next keypress, then cleared automatically in `on_input`).
+    pub status_msg: Option<String>,
+
+    /// Submitted `:` commands, oldest first (for ↑/↓ history recall).
+    pub cmd_history: Vec<String>,
+
+    /// History-browsing cursor: `None` = live buffer, `Some(0)` = most recent
+    /// entry, `Some(n-1)` = oldest.  Reset on submit / Esc / any typing.
+    cmd_history_cursor: Option<usize>,
+
+    /// Draft buffer saved when the user first presses ↑ (restored on ↓ past newest).
+    cmd_history_draft: String,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -217,6 +231,10 @@ impl AppState {
             transfers: std::collections::HashMap::new(),
             completion_candidates: Vec::new(),
             completion_index: 0,
+            status_msg: None,
+            cmd_history: Vec::new(),
+            cmd_history_cursor: None,
+            cmd_history_draft: String::new(),
         }
     }
 
@@ -293,6 +311,9 @@ impl AppState {
     /// should act on.  This method MUST be side-effect-free (no I/O, no
     /// network, no locks).
     pub fn on_input(&mut self, ev: Event) -> Intent {
+        // Clear any transient status message on every input event.
+        self.status_msg = None;
+
         // If command mode is active, route there first.
         if self.command_buf.is_some() {
             return self.handle_command_input(ev);
@@ -374,6 +395,8 @@ impl AppState {
                     }
                     KeyCode::Char(':') => {
                         self.command_buf = Some(String::new());
+                        self.cmd_history_cursor = None;
+                        self.cmd_history_draft = String::new();
                         Intent::Redraw
                     }
                     KeyCode::Enter => {
@@ -743,6 +766,62 @@ impl AppState {
                     Intent::Redraw
                 }
 
+                // ── History navigation (only when wildmenu is closed) ──────
+                KeyCode::Up => {
+                    if self.completion_candidates.is_empty() {
+                        let n = self.cmd_history.len();
+                        if n > 0 {
+                            match self.cmd_history_cursor {
+                                None => {
+                                    // Save in-progress draft and jump to most recent.
+                                    self.cmd_history_draft =
+                                        self.command_buf.clone().unwrap_or_default();
+                                    self.cmd_history_cursor = Some(0);
+                                    if let Some(ref mut b) = self.command_buf {
+                                        *b = self.cmd_history[n - 1].clone();
+                                    }
+                                }
+                                Some(i) if i + 1 < n => {
+                                    // Go one step older.
+                                    let next = i + 1;
+                                    self.cmd_history_cursor = Some(next);
+                                    if let Some(ref mut b) = self.command_buf {
+                                        *b = self.cmd_history[n - 1 - next].clone();
+                                    }
+                                }
+                                _ => {} // Already at oldest entry — do nothing.
+                            }
+                        }
+                    }
+                    Intent::Redraw
+                }
+
+                KeyCode::Down => {
+                    if self.completion_candidates.is_empty() {
+                        match self.cmd_history_cursor {
+                            None => {} // Already at the live buffer — nothing to do.
+                            Some(0) => {
+                                // Return to the saved draft.
+                                self.cmd_history_cursor = None;
+                                let draft = std::mem::take(&mut self.cmd_history_draft);
+                                if let Some(ref mut b) = self.command_buf {
+                                    *b = draft;
+                                }
+                            }
+                            Some(i) => {
+                                // Go one step newer.
+                                let prev = i - 1;
+                                self.cmd_history_cursor = Some(prev);
+                                let n = self.cmd_history.len();
+                                if let Some(ref mut b) = self.command_buf {
+                                    *b = self.cmd_history[n - 1 - prev].clone();
+                                }
+                            }
+                        }
+                    }
+                    Intent::Redraw
+                }
+
                 // ── Submit / accept ────────────────────────────────────────
                 KeyCode::Enter => {
                     if !self.completion_candidates.is_empty() {
@@ -752,6 +831,12 @@ impl AppState {
                         Intent::Redraw
                     } else {
                         let line = self.command_buf.take().unwrap_or_default();
+                        // Push non-empty commands to history.
+                        if !line.is_empty() {
+                            self.cmd_history.push(line.clone());
+                        }
+                        self.cmd_history_cursor = None;
+                        self.cmd_history_draft = String::new();
                         Intent::Command(line)
                     }
                 }
@@ -764,12 +849,16 @@ impl AppState {
                         self.completion_index = 0;
                     } else {
                         self.command_buf = None;
+                        self.cmd_history_cursor = None;
+                        self.cmd_history_draft = String::new();
                     }
                     Intent::Redraw
                 }
 
                 // ── Character input ────────────────────────────────────────
                 KeyCode::Char(c) => {
+                    // Any typing resets history browsing (keeps the current buffer).
+                    self.cmd_history_cursor = None;
                     if c == ' ' && !self.completion_candidates.is_empty() {
                         // Space while wildmenu open: accept current candidate.
                         let candidate = self.completion_candidates[self.completion_index].clone();
@@ -785,6 +874,8 @@ impl AppState {
                     Intent::Redraw
                 }
                 KeyCode::Backspace => {
+                    // Backspace also resets history browsing.
+                    self.cmd_history_cursor = None;
                     self.completion_candidates.clear();
                     self.completion_index = 0;
                     if let Some(ref mut b) = self.command_buf {

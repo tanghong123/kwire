@@ -970,6 +970,275 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // BUG 1 — theme bg uses Color::Reset
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn theme_bg_constant_is_color_reset() {
+        use crate::theme::C_BG;
+        use ratatui::style::Color;
+        assert_eq!(
+            C_BG,
+            Color::Reset,
+            "C_BG must be Color::Reset so the TUI blends into the terminal background"
+        );
+    }
+
+    #[test]
+    fn theme_panel_constant_is_color_reset() {
+        use crate::theme::C_PANEL;
+        use ratatui::style::Color;
+        assert_eq!(C_PANEL, Color::Reset, "C_PANEL must be Color::Reset");
+    }
+
+    #[test]
+    fn style_normal_bg_is_reset() {
+        use crate::theme::style_normal;
+        use ratatui::style::Color;
+        assert_eq!(
+            style_normal().bg,
+            Some(Color::Reset),
+            "style_normal() background must be Color::Reset"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // BUG 2 — :add arg parsing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_add_arg_with_comma_splits_title_and_author() {
+        let (title, authors) = crate::parse_add_arg("steve jobs, walter isaacson");
+        assert_eq!(title, "steve jobs");
+        assert_eq!(authors, vec!["walter isaacson"]);
+    }
+
+    #[test]
+    fn parse_add_arg_splits_on_last_comma() {
+        // Title itself contains a comma — split on last one only.
+        let (title, authors) = crate::parse_add_arg("A, B, C Author");
+        assert_eq!(title, "A, B");
+        assert_eq!(authors, vec!["C Author"]);
+    }
+
+    #[test]
+    fn parse_add_arg_without_comma_has_empty_authors() {
+        let (title, authors) = crate::parse_add_arg("  The Great Gatsby  ");
+        assert_eq!(title, "The Great Gatsby");
+        assert!(authors.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // BUG 3 — command-line history ↑/↓ recall
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cmd_history_up_recalls_most_recent() {
+        let mut app = AppState::new();
+        // Seed the history directly (simulates a previously submitted command).
+        app.cmd_history.push("import ~/books.md".to_string());
+
+        // Enter command mode.
+        app.on_input(key(KeyCode::Char(':')));
+        assert_eq!(app.command_buf.as_deref(), Some(""));
+
+        // Press ↑.
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(
+            app.command_buf.as_deref(),
+            Some("import ~/books.md"),
+            "↑ should recall the most recent command"
+        );
+    }
+
+    #[test]
+    fn cmd_history_up_multiple_entries() {
+        let mut app = AppState::new();
+        app.cmd_history.push("open Classics".to_string());
+        app.cmd_history.push("import ~/books.md".to_string());
+
+        app.on_input(key(KeyCode::Char(':')));
+        app.on_input(key(KeyCode::Up)); // most recent: "import ~/books.md"
+        assert_eq!(app.command_buf.as_deref(), Some("import ~/books.md"));
+
+        app.on_input(key(KeyCode::Up)); // older: "open Classics"
+        assert_eq!(app.command_buf.as_deref(), Some("open Classics"));
+    }
+
+    #[test]
+    fn cmd_history_down_restores_draft() {
+        let mut app = AppState::new();
+        app.cmd_history.push("import ~/books.md".to_string());
+
+        app.on_input(key(KeyCode::Char(':')));
+        // Type a draft.
+        app.on_input(key(KeyCode::Char('h')));
+        app.on_input(key(KeyCode::Char('e')));
+        assert_eq!(app.command_buf.as_deref(), Some("he"));
+
+        // ↑ saves draft and shows history.
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(app.command_buf.as_deref(), Some("import ~/books.md"));
+
+        // ↓ restores draft.
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(
+            app.command_buf.as_deref(),
+            Some("he"),
+            "↓ should restore the saved draft"
+        );
+    }
+
+    #[test]
+    fn cmd_history_pushed_on_submit() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "requery".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Command("requery".into()));
+        assert_eq!(
+            app.cmd_history.last().map(String::as_str),
+            Some("requery"),
+            "submitted command must be pushed to history"
+        );
+    }
+
+    #[test]
+    fn cmd_history_not_pushed_for_empty_command() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        app.on_input(key(KeyCode::Enter)); // submit empty
+        assert!(
+            app.cmd_history.is_empty(),
+            "empty command must not be pushed to history"
+        );
+    }
+
+    #[test]
+    fn cmd_history_up_does_nothing_when_empty() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        // Press ↑ with no history — must not panic.
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(
+            app.command_buf.as_deref(),
+            Some(""),
+            "buffer unchanged when history is empty"
+        );
+    }
+
+    #[test]
+    fn cmd_history_typing_resets_cursor() {
+        let mut app = AppState::new();
+        app.cmd_history.push("requery".to_string());
+
+        app.on_input(key(KeyCode::Char(':')));
+        app.on_input(key(KeyCode::Up)); // history mode
+        assert_eq!(app.command_buf.as_deref(), Some("requery"));
+
+        // Typing resets cursor (stays at whatever is in the buffer).
+        app.on_input(key(KeyCode::Char('x')));
+        // Next ↑ from this point should save the current buffer as draft.
+        // Verify by checking the buffer is now "requeryx".
+        assert_eq!(
+            app.command_buf.as_deref(),
+            Some("requeryx"),
+            "typed char must be appended after history recall"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // BUG 4 — :import tilde expansion + json dispatch helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn expand_tilde_expands_home() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/test".to_string());
+        let result = crate::expand_tilde("~/books.md");
+        assert_eq!(result, format!("{}/books.md", home));
+    }
+
+    #[test]
+    fn expand_tilde_bare_tilde_is_home() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/test".to_string());
+        let result = crate::expand_tilde("~");
+        assert_eq!(result, home);
+    }
+
+    #[test]
+    fn expand_tilde_absolute_path_unchanged() {
+        let result = crate::expand_tilde("/absolute/path/list.md");
+        assert_eq!(result, "/absolute/path/list.md");
+    }
+
+    #[test]
+    fn expand_tilde_no_tilde_relative_unchanged() {
+        let result = crate::expand_tilde("relative/path.md");
+        assert_eq!(result, "relative/path.md");
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 4c / shared — status_msg rendering and clearance
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn status_msg_renders_in_hint_bar() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.status_msg = Some("Imported 5 book(s) from \"My List\"".to_string());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains("Imported 5 book(s)"),
+            "status message must appear in the hint bar"
+        );
+    }
+
+    #[test]
+    fn status_msg_renders_on_empty_screen() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        // No list loaded — empty screen.
+        app.status_msg = Some("Import failed: file not found".to_string());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains("Import failed"),
+            "status message must appear in the empty-screen command box"
+        );
+    }
+
+    #[test]
+    fn status_msg_cleared_on_keypress() {
+        let mut app = AppState::new();
+        app.status_msg = Some("Some status".to_string());
+        // Any keypress should clear the message (on_input calls self.status_msg = None first).
+        app.on_input(key(KeyCode::Char('/')));
+        assert!(
+            app.status_msg.is_none(),
+            "status_msg must be cleared on the next keypress"
+        );
+    }
+
+    #[test]
+    fn status_msg_cleared_on_command_mode_key() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.status_msg = Some("old status".to_string());
+        // Pressing ':' enters command mode — this is also a keypress.
+        app.on_input(key(KeyCode::Char(':')));
+        assert!(
+            app.status_msg.is_none(),
+            "status_msg must be cleared when entering command mode"
+        );
+    }
+
     #[test]
     fn mouse_click_selects_book_row() {
         let backend = TestBackend::new(120, 30);

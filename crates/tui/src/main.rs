@@ -417,9 +417,49 @@ async fn handle_command_async(
             pause_all_active(app, handles).await;
         }
         "" => {}
-        other => tracing::warn!("unknown command: {:?}", other),
+        other => {
+            tracing::warn!("unknown command: {:?}", other);
+            app.status_msg = Some(format!("Unknown command: {other}"));
+        }
     }
     Ok(false)
+}
+
+// ---------------------------------------------------------------------------
+// Command argument helpers (pub(crate) so tests can call them directly)
+// ---------------------------------------------------------------------------
+
+/// Expand a leading `~` or `~/` to `$HOME`.
+pub(crate) fn expand_tilde(path: &str) -> String {
+    if path == "~" || path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        if path == "~" {
+            home
+        } else {
+            format!("{}{}", home, &path[1..])
+        }
+    } else {
+        path.to_string()
+    }
+}
+
+/// Parse a `:add` argument into `(title, authors)`.
+///
+/// If `arg` contains a comma, split on the **last** comma: everything before
+/// is the title, everything after is a single author string (both trimmed).
+/// If there is no comma, return the whole arg as the title with no authors.
+pub(crate) fn parse_add_arg(arg: &str) -> (String, Vec<String>) {
+    if let Some(pos) = arg.rfind(',') {
+        let title = arg[..pos].trim().to_string();
+        let author = arg[pos + 1..].trim().to_string();
+        if title.is_empty() {
+            (arg.trim().to_string(), vec![])
+        } else {
+            (title, vec![author])
+        }
+    } else {
+        (arg.trim().to_string(), vec![])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -587,25 +627,58 @@ async fn cancel_book(
 }
 
 async fn import_file(app: &mut AppState, handles: &EngineHandles, path: &str) {
-    let content = match std::fs::read_to_string(path) {
+    // (a) Expand a leading tilde.
+    let expanded = expand_tilde(path);
+
+    let content = match std::fs::read_to_string(&expanded) {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!("import: cannot read {path}: {e}");
+            tracing::warn!("import: cannot read {expanded}: {e}");
+            app.status_msg = Some(format!("Import failed: {e}"));
             return;
         }
     };
-    let list = match libgen_core::parse::parse_markdown(&content) {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::warn!("import: parse error: {e}");
-            return;
+
+    // (b) Dispatch to JSON or Markdown parser based on extension / fallback.
+    let is_json = expanded.ends_with(".json");
+    let list = if is_json {
+        match libgen_core::parse::parse_json(&content) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!("import: JSON parse error: {e}");
+                app.status_msg = Some(format!("Import failed: {e}"));
+                return;
+            }
+        }
+    } else {
+        match libgen_core::parse::parse_markdown(&content) {
+            Ok(l) => l,
+            Err(md_err) => {
+                // Markdown failed — try JSON as a fallback.
+                match libgen_core::parse::parse_json(&content) {
+                    Ok(l) => l,
+                    Err(json_err) => {
+                        tracing::warn!(
+                            "import: parse failed (markdown: {md_err}, json: {json_err})"
+                        );
+                        app.status_msg = Some(format!("Import failed: {md_err}"));
+                        return;
+                    }
+                }
+            }
         }
     };
+
+    // Record book count and title before the list is consumed.
+    let book_count: usize = list.groups.iter().map(|g| g.books.len()).sum();
+    let list_title = list.title.clone();
+
     let cfg = handles.config.lock().expect("config poisoned").clone();
     let mut store = match open_store(&cfg) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("import: open_store: {e}");
+            app.status_msg = Some(format!("Import failed: {e}"));
             return;
         }
     };
@@ -613,10 +686,12 @@ async fn import_file(app: &mut AppState, handles: &EngineHandles, path: &str) {
     match store.list_id_by_title(&list.title) {
         Ok(Some(_)) => {
             tracing::warn!("import: list '{}' already exists", list.title);
+            app.status_msg = Some(format!("List \"{}\" already exists", list.title));
             return;
         }
         Err(e) => {
             tracing::warn!("import: list_id_by_title: {e}");
+            app.status_msg = Some(format!("Import failed: {e}"));
             return;
         }
         Ok(None) => {}
@@ -625,6 +700,7 @@ async fn import_file(app: &mut AppState, handles: &EngineHandles, path: &str) {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!("import: insert_list: {e}");
+            app.status_msg = Some(format!("Import failed: {e}"));
             return;
         }
     };
@@ -632,6 +708,7 @@ async fn import_file(app: &mut AppState, handles: &EngineHandles, path: &str) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("import: build_search: {e}");
+            app.status_msg = Some(format!("Import failed: {e}"));
             return;
         }
     };
@@ -639,6 +716,7 @@ async fn import_file(app: &mut AppState, handles: &EngineHandles, path: &str) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!("import: open_store2: {e}");
+            app.status_msg = Some(format!("Import failed: {e}"));
             return;
         }
     };
@@ -666,12 +744,20 @@ async fn import_file(app: &mut AppState, handles: &EngineHandles, path: &str) {
     }
     handles.engine_wake.notify_one();
     refresh_active_view(app, handles).await;
-    info!("imported list '{}' as {id}", list.title);
+    info!("imported list '{}' as {id}", list_title);
+    // (c) Visible feedback.
+    app.status_msg = Some(format!(
+        "Imported {} book(s) from \"{}\"",
+        book_count, list_title
+    ));
 }
 
-async fn add_manual(app: &mut AppState, handles: &EngineHandles, title: &str) {
+async fn add_manual(app: &mut AppState, handles: &EngineHandles, arg: &str) {
     const MANUAL_TITLE: &str = "Manual";
     let cfg = handles.config.lock().expect("config poisoned").clone();
+
+    // (B) Parse title and optional author from the argument.
+    let (book_title, book_authors) = parse_add_arg(arg);
 
     // Find the Manual list id in the store.
     let store_id = {
@@ -679,6 +765,7 @@ async fn add_manual(app: &mut AppState, handles: &EngineHandles, title: &str) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("add: open_store: {e}");
+                app.status_msg = Some(format!("Add failed: {e}"));
                 return;
             }
         };
@@ -701,12 +788,14 @@ async fn add_manual(app: &mut AppState, handles: &EngineHandles, title: &str) {
                     Ok(id) => id,
                     Err(e) => {
                         tracing::warn!("add: insert_list: {e}");
+                        app.status_msg = Some(format!("Add failed: {e}"));
                         return;
                     }
                 }
             }
             Err(e) => {
                 tracing::warn!("add: list_id_by_title: {e}");
+                app.status_msg = Some(format!("Add failed: {e}"));
                 return;
             }
         }
@@ -724,6 +813,7 @@ async fn add_manual(app: &mut AppState, handles: &EngineHandles, title: &str) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("add: build_search: {e}");
+                app.status_msg = Some(format!("Add failed: {e}"));
                 return;
             }
         };
@@ -731,6 +821,7 @@ async fn add_manual(app: &mut AppState, handles: &EngineHandles, title: &str) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!("add: open_store2: {e}");
+                app.status_msg = Some(format!("Add failed: {e}"));
                 return;
             }
         };
@@ -746,21 +837,35 @@ async fn add_manual(app: &mut AppState, handles: &EngineHandles, title: &str) {
     }
 
     // Add book to the manual list.
+    let mut add_status: Option<String> = None;
     if let Some(orch_arc) = {
         let lib = handles.library.lock().await;
         lib.arc_for(&id)
     } {
         let mut guard = orch_arc.lock().await;
-        match guard.add_book(title, vec![]) {
+        match guard.add_book(&book_title, book_authors) {
             Ok((group_path, book_index)) => {
                 let _ = guard.set_goal_one(&group_path, book_index, Goal::Complete);
-                info!("added book '{}' to Manual list", title);
+                info!("added book '{}' to Manual list", book_title);
+                add_status = Some(format!("Added '{}' to Manual", book_title));
             }
-            Err(e) => tracing::warn!("add: add_book: {e}"),
+            Err(e) => {
+                tracing::warn!("add: add_book: {e}");
+                add_status = Some(format!("Add failed: {e}"));
+            }
         }
+    }
+
+    // (A) Switch the active view to the Manual list so the user sees the result.
+    {
+        let mut lib = handles.library.lock().await;
+        lib.current = id.clone();
     }
     handles.engine_wake.notify_one();
     refresh_active_view(app, handles).await;
+
+    // (c) Report outcome.
+    app.status_msg = add_status;
 }
 
 async fn open_list(app: &mut AppState, handles: &EngineHandles, id: &str) {
