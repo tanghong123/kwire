@@ -1676,15 +1676,9 @@ impl Orchestrator {
         }
         if rearm {
             let what = match prior {
-                Some(JobState::Failed) => {
-                    crate::model::ui_msg("event.selected_retry", &[])
-                }
-                Some(JobState::Cancelled) => {
-                    crate::model::ui_msg("event.selected_recancel", &[])
-                }
-                Some(JobState::Done) => {
-                    crate::model::ui_msg("event.selected_redl", &[])
-                }
+                Some(JobState::Failed) => crate::model::ui_msg("event.selected_retry", &[]),
+                Some(JobState::Cancelled) => crate::model::ui_msg("event.selected_recancel", &[]),
+                Some(JobState::Done) => crate::model::ui_msg("event.selected_redl", &[]),
                 _ => crate::model::ui_msg("event.selected", &[]),
             };
             req.log_event(Some(md5.to_string()), ext, "selected", what);
@@ -1748,7 +1742,12 @@ impl Orchestrator {
         req.status = RequestStatus::Matched;
         req.review = false;
         req.goal = crate::model::Goal::Complete;
-        req.log_event(Some(md5.clone()), None, "manual", crate::model::ui_msg("event.manual", &[]));
+        req.log_event(
+            Some(md5.clone()),
+            None,
+            "manual",
+            crate::model::ui_msg("event.manual", &[]),
+        );
         self.store
             .update_request(self.list_id, group_path, book_index, &req)?;
         Ok(())
@@ -3042,7 +3041,10 @@ impl Orchestrator {
                     job.host = Some(host.clone());
                     job.total_bytes = *total_bytes;
                     job.state = JobState::Downloading;
-                    event = Some(("downloading", crate::model::ui_msg("event.downloading_started", &[("host", host)])));
+                    event = Some((
+                        "downloading",
+                        crate::model::ui_msg("event.downloading_started", &[("host", host)]),
+                    ));
                 }
                 Progress::Resuming { host, offset, .. } => {
                     // Informational: continuing from an on-disk partial. Don't touch
@@ -3078,7 +3080,10 @@ impl Orchestrator {
                         job.speed_bps = *speed_bps;
                         job.eta_secs = *eta_secs;
                         if new_edge {
-                            event = Some(("downloading", crate::model::ui_msg("event.downloading_edge", &[("host", host)])));
+                            event = Some((
+                                "downloading",
+                                crate::model::ui_msg("event.downloading_edge", &[("host", host)]),
+                            ));
                         }
                     }
                 }
@@ -3103,7 +3108,12 @@ impl Orchestrator {
                         "retry",
                         crate::model::ui_msg(
                             "event.retry",
-                            &[("attempt", &attempt_str), ("host", host), ("backoff", &backoff_str), ("error", error)],
+                            &[
+                                ("attempt", &attempt_str),
+                                ("host", host),
+                                ("backoff", &backoff_str),
+                                ("error", error),
+                            ],
                         ),
                     ));
                 }
@@ -3113,7 +3123,10 @@ impl Orchestrator {
                     job.last_error = Some(error.clone());
                     event = Some((
                         "failover",
-                        crate::model::ui_msg("event.failover", &[("from", from_host), ("error", error)]),
+                        crate::model::ui_msg(
+                            "event.failover",
+                            &[("from", from_host), ("error", error)],
+                        ),
                     ));
                 }
                 Progress::Done {
@@ -3191,7 +3204,10 @@ impl Orchestrator {
                     job.last_error = Some(error.clone());
                     job.speed_bps = None;
                     job.eta_secs = None;
-                    event = Some(("failed", crate::model::ui_msg("event.failed", &[("error", error)])));
+                    event = Some((
+                        "failed",
+                        crate::model::ui_msg("event.failed", &[("error", error)]),
+                    ));
                 }
                 Progress::Note { detail, .. } => {
                     // Diagnostic-only: chronicle a download-path note (edge rotation
