@@ -567,7 +567,7 @@ mod unit {
             ..Default::default()
         });
         let mut c = cand(); // reports pages = Some(233)
-        // A PDF: its counted page_count is real PAGES → wins over the mirror's report.
+                            // A PDF: its counted page_count is real PAGES → wins over the mirror's report.
         c.extension = Some(libgen_core::model::Format::Pdf);
         c.job = Some(DownloadJob {
             state: JobState::Done,
@@ -592,7 +592,11 @@ mod unit {
         req.candidates[0].extension = Some(libgen_core::model::Format::Epub);
         req.candidates[0].job.as_mut().unwrap().page_count = Some(9999);
         let book = build_book(&req, 0, 1);
-        assert_eq!(book.pages, Some(233), "epub spine count never shown as pages");
+        assert_eq!(
+            book.pages,
+            Some(233),
+            "epub spine count never shown as pages"
+        );
 
         // No acquiring copy → no page count.
         req.candidates[0].job = None;
