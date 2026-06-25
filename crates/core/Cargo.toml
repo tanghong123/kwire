@@ -32,6 +32,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 imageproc = { version = "0.25", default-features = false }
 ab_glyph = "0.2"
+# Robust PDF page counting (pagecount.rs). `Document::get_pages` resolves the
+# page tree across xref/object streams — far more reliable than scanning for
+# `/Type /Page` markers (which can live in compressed object streams).
+lopdf = "0.34"
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -140,6 +140,16 @@ pub struct ViewVariation {
     pub language: String,
     /// Page count, when the mirror exposed one.
     pub pages: Option<u32>,
+    /// Pages (PDF) or spine sections (EPUB) counted from the FINISHED file after
+    /// its md5 verified — distinct from `pages` (mirror-reported metadata). `None`
+    /// when unchecked/unsupported/unparseable. The UI shows this as the trustworthy
+    /// "actual" page count.
+    pub counted_pages: Option<u32>,
+    /// True when `counted_pages` is known and below
+    /// [`libgen_core::pagecount::LOW_PAGE_THRESHOLD`] (currently 10): the download
+    /// completed and verified but is suspiciously short, so the UI can warn it may
+    /// be a sample/wrong/corrupt file. Non-fatal — the variation is still `done`.
+    pub low_pages: bool,
     pub host: Option<String>,
     /// One of: available | queued | downloading | done | failed — the UI's
     /// per-variation vocabulary, derived from the candidate's `job`.
@@ -265,6 +275,11 @@ fn view_variation(c: &Candidate) -> ViewVariation {
         publisher: c.publisher.clone().unwrap_or_default(),
         language: c.language.clone().unwrap_or_default(),
         pages: c.pages,
+        counted_pages: job.and_then(|j| j.page_count),
+        low_pages: job
+            .and_then(|j| j.page_count)
+            .map(|n| n < libgen_core::pagecount::LOW_PAGE_THRESHOLD)
+            .unwrap_or(false),
         host: job.and_then(|j| j.host.clone()),
         state: variation_state(job).to_string(),
         progress: progress_pct(job),

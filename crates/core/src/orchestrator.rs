@@ -2943,6 +2943,31 @@ impl Orchestrator {
                     // Transfer finished: clear the live speed/ETA readout.
                     job.speed_bps = None;
                     job.eta_secs = None;
+                    // Too-few-pages guard: the file is present at `p.destination`
+                    // and md5-verified, so count its pages (best-effort, sync file
+                    // IO — same shape as the dedupe `fs::copy` just above; the
+                    // whole `apply_progress` runs under a brief per-list lock).
+                    // A `None` count (unsupported/unparseable) simply leaves the
+                    // flag unset. Below threshold → log it (observability).
+                    job.page_count = crate::pagecount::page_count(&p.destination);
+                    if let Some(pages) = job.page_count {
+                        if pages < crate::pagecount::LOW_PAGE_THRESHOLD {
+                            tracing::warn!(
+                                md5 = %md5,
+                                path = %p.destination.display(),
+                                pages,
+                                threshold = crate::pagecount::LOW_PAGE_THRESHOLD,
+                                "downloaded file has suspiciously few pages — may be a sample/wrong/corrupt file"
+                            );
+                        } else {
+                            tracing::info!(
+                                md5 = %md5,
+                                path = %p.destination.display(),
+                                pages,
+                                "counted pages of finished download"
+                            );
+                        }
+                    }
                     event = Some((
                         "done",
                         format!("completed on {host} ({} MB)", bytes_written / (1024 * 1024)),

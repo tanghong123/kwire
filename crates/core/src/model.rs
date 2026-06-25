@@ -374,6 +374,15 @@ pub struct DownloadJob {
     /// Byte offset to resume from on restart (HTTP Range).
     pub resume_offset: u64,
     pub md5_verified: bool,
+    /// Pages (PDF) or spine sections (EPUB) counted from the finished file after
+    /// its md5 verified. `None` = unknown/unchecked (older persisted jobs, an
+    /// unsupported format, or a file we couldn't parse). The raw count is stored
+    /// rather than a precomputed boolean so the UI stays informative and applies
+    /// [`crate::pagecount::LOW_PAGE_THRESHOLD`] itself ("only 4 pages" reads far
+    /// better than a bare flag). `serde(default)` keeps existing rows readable
+    /// with NO schema bump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     /// Final on-disk path, once written.

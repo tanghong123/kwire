@@ -11,6 +11,7 @@ pub mod matching;
 pub mod model;
 pub mod naming;
 pub mod orchestrator;
+pub mod pagecount;
 pub mod parse;
 pub mod queue;
 pub mod ranking;
