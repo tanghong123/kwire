@@ -12,6 +12,10 @@ path = "src/main.rs"
 libgen-engine = { path = "../engine" }
 libgen-core = { path = "../core" }
 
+# CLI arg parsing
+clap.workspace = true
+reqwest.workspace = true
+
 # TUI
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
