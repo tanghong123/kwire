@@ -98,6 +98,23 @@ pub enum Modal {
 }
 
 // ---------------------------------------------------------------------------
+// ListSummary — title + counts for one loaded reading list
+// ---------------------------------------------------------------------------
+
+/// Summary of a loaded reading list shown in the list strip.
+#[derive(Debug, Clone, Default)]
+pub struct ListSummary {
+    /// Engine ID (used for switching the active list).
+    pub id: String,
+    /// Human-readable title.
+    pub title: String,
+    /// Number of books that are fully done.
+    pub done: usize,
+    /// Total number of books in this list.
+    pub total: usize,
+}
+
+// ---------------------------------------------------------------------------
 // LastRects — stores panel Rects from the last render for mouse hit-testing
 // ---------------------------------------------------------------------------
 
@@ -198,6 +215,13 @@ pub struct AppState {
 
     /// Draft buffer saved when the user first presses ↑ (restored on ↓ past newest).
     cmd_history_draft: String,
+
+    /// Summaries for ALL loaded reading lists (id, title, done, total).
+    /// Shown in the list strip.  Updated at startup and after each import/switch.
+    pub all_lists: Vec<ListSummary>,
+
+    /// Index into `all_lists` for the currently displayed list.
+    pub active_list_idx: usize,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -235,6 +259,8 @@ impl AppState {
             cmd_history: Vec::new(),
             cmd_history_cursor: None,
             cmd_history_draft: String::new(),
+            all_lists: Vec::new(),
+            active_list_idx: 0,
         }
     }
 
@@ -468,7 +494,27 @@ impl AppState {
                         Intent::Redraw
                     }
                     KeyCode::Char('?') => Intent::OpenHelp,
-                    KeyCode::Left | KeyCode::Right => Intent::Redraw,
+                    KeyCode::Left => {
+                        if self.all_lists.len() > 1 {
+                            let new_idx = self
+                                .active_list_idx
+                                .checked_sub(1)
+                                .unwrap_or(self.all_lists.len() - 1);
+                            self.active_list_idx = new_idx;
+                            let id = self.all_lists[new_idx].id.clone();
+                            return Intent::SwitchList { id };
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Right => {
+                        if self.all_lists.len() > 1 {
+                            let new_idx = (self.active_list_idx + 1) % self.all_lists.len();
+                            self.active_list_idx = new_idx;
+                            let id = self.all_lists[new_idx].id.clone();
+                            return Intent::SwitchList { id };
+                        }
+                        Intent::Redraw
+                    }
                     KeyCode::Char('a') => {
                         // Request all preferred format variations — UI-only stub for Stage 3.
                         Intent::Redraw

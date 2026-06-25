@@ -57,4 +57,7 @@ pub enum Intent {
 
     /// Reveal a file in Finder (macOS) / file manager.
     RevealFile(String),
+
+    /// Switch the active reading list (emitted by ←/→ in the list strip).
+    SwitchList { id: String },
 }
