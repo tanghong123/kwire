@@ -23,15 +23,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, Mutex, Semaphore};
 
 use libgen_core::model::{DownloadList, Goal, JobState, RequestStatus};
 use libgen_core::orchestrator::{Event, Orchestrator};
 use libgen_core::queue::{Progress, Scheduler};
 
-use crate::commands;
-use crate::state::{AppState, EngineHandles};
+use crate::state::{Config, EngineHandles};
 use crate::{bridge, viewmodel};
 
 /// How long the driver sleeps between ticks when nothing wakes it. A safety net:
@@ -82,34 +80,9 @@ pub struct BookStatePayload {
     pub goal: String,
 }
 
-/// Spawn the long-lived engine driver task, wired to the Tauri [`AppHandle`]
-/// (which owns the managed [`AppState`] and is the event sink). Idempotent: only
-/// the first call spawns; subsequent calls are no-ops (guarded by
-/// `engine_started`). The task re-fetches the managed state each tick from the
-/// handle, so it shares the SAME `AppState` every command sees.
-pub fn spawn(app: AppHandle) {
-    let handles = {
-        let state = app.state::<AppState>();
-        if state.engine_started.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        state.engine_handles()
-    };
-    let emitter = TauriEmitter { app };
-    // Spawn on Tauri's managed async runtime — this runs from the `setup` hook,
-    // which is NOT inside a Tokio runtime context, so a bare `tokio::spawn` would
-    // panic ("no reactor running"). `tauri::async_runtime::spawn` works from any
-    // context. (Workers spawned inside `run_engine` are fine — they run within
-    // this task, which is on the runtime.)
-    tauri::async_runtime::spawn(async move {
-        run_engine(handles, emitter).await;
-    });
-}
-
 /// Spawn an engine driver for a test / headless harness against explicit shared
 /// [`EngineHandles`] and an [`EngineEmitter`]. Returns nothing; the task runs
-/// until the runtime is dropped. `#[doc(hidden)]` — for the integration tests.
-#[doc(hidden)]
+/// until the runtime is dropped.
 pub fn spawn_with<E: EngineEmitter>(handles: EngineHandles, emitter: E) {
     tokio::spawn(async move {
         run_engine(handles, emitter).await;
@@ -139,59 +112,6 @@ pub trait EngineEmitter: Send + Sync + 'static {
     /// Used after a background job-state change the per-tick events don't cover —
     /// e.g. the in-session completed-but-stuck reconciliation flips a job to Done.
     fn emit_refresh(&self) {}
-}
-
-/// The production emitter: forwards engine events to the front end as the same
-/// `query://book` / `download://progress` events the UI already consumes, plus
-/// `engine://book` for per-book state.
-struct TauriEmitter {
-    app: AppHandle,
-}
-
-impl EngineEmitter for TauriEmitter {
-    fn emit_event(&self, list_id: &str, shape: &DownloadList, ev: &Event) {
-        match ev {
-            Event::QueryStage {
-                group_path,
-                book_index,
-                title,
-                stage,
-            } => {
-                let book_id = bridge::flat_id_in(shape, group_path, *book_index)
-                    .unwrap_or_else(|| format!("bk{book_index}"));
-                let _ = self.app.emit(
-                    "query://book",
-                    commands::QueryStagePayload {
-                        list_id: list_id.to_string(),
-                        book_id,
-                        title: title.clone(),
-                        stage: stage.clone(),
-                    },
-                );
-            }
-            Event::Download(p) => {
-                if let Some(payload) = commands::ProgressPayload::from_progress(p) {
-                    let _ = self.app.emit("download://progress", payload);
-                }
-            }
-            Event::Done => {
-                let _ = self
-                    .app
-                    .emit("download://progress", commands::ProgressPayload::AllDone);
-            }
-            // Planned / StatusChanged carry no extra UI signal beyond the above +
-            // engine://book + the refreshed library, so they are not forwarded.
-            _ => {}
-        }
-    }
-
-    fn emit_book_state(&self, payload: BookStatePayload) {
-        let _ = self.app.emit("engine://book", payload);
-    }
-
-    fn emit_refresh(&self) {
-        let _ = self.app.emit("library://refresh", ());
-    }
 }
 
 /// Identity of one in-flight transition, so the driver never spawns a second
@@ -322,7 +242,7 @@ async fn tick<E: EngineEmitter>(
     // up just to discover/reverify). If it can't be built, drop download items.
     let needs_download = work.iter().any(|w| w.kind == WorkKind::Download);
     let scheduler: Option<Arc<Scheduler>> = if needs_download {
-        commands::ensure_scheduler_from(&handles.scheduler, &handles.config, None)
+        ensure_scheduler_from(&handles.scheduler, &handles.config, None)
             .await
             .ok()
     } else {
@@ -371,7 +291,7 @@ async fn tick<E: EngineEmitter>(
 }
 
 /// In-session sweep for **stuck (not-Done) downloads**: across every loaded list,
-/// reuse [`commands::reconcile_completed_inflight`] (the SAME judgement the startup
+/// reuse [`reconcile_completed_inflight`] (the SAME judgement the startup
 /// integrity scan uses) to fix any in-flight variation that has NO live transport:
 /// a complete file → `Done`, a partial/absent file → re-queued to resume, and one
 /// over the attempt cap → `Failed`.
@@ -398,9 +318,7 @@ async fn reconcile_inflight_sweep<E: EngineEmitter>(
     };
     let mut fixed = 0usize;
     for (_, orch) in &arcs {
-        fixed +=
-            commands::reconcile_completed_inflight(orch, &live_md5s, "engine in-session sweep")
-                .await;
+        fixed += reconcile_completed_inflight(orch, &live_md5s, "engine in-session sweep").await;
     }
     if fixed > 0 {
         emitter.emit_refresh();
@@ -448,7 +366,7 @@ async fn download_worker<E: EngineEmitter>(
         };
         let key = item_key(&item);
         // Reuse the shared scheduler (built lazily once).
-        let scheduler = commands::ensure_scheduler_from(&handles.scheduler, &handles.config, None)
+        let scheduler = ensure_scheduler_from(&handles.scheduler, &handles.config, None)
             .await
             .ok();
         if let Some(s) = scheduler {
@@ -731,6 +649,282 @@ fn group_book<'a>(
     }
     groups.get(*last)?.books.get(book_index)
 }
+
+// ---------------------------------------------------------------------------
+// Scheduler building (shared by the engine and the commands layer)
+// ---------------------------------------------------------------------------
+
+/// Max download attempts a sessionless stuck variation may be re-queued before the
+/// reconciliation gives up on it and marks it `Failed`. Stops a dead source from
+/// thrashing (re-queue → fail-fast → re-queue …) forever; the failed copy becomes a
+/// visible, user-retryable state instead.
+pub const RECONCILE_MAX_ATTEMPTS: u32 = 3;
+
+/// Session-gated reconciliation of every **in-flight-but-not-Done** variation in
+/// ONE list. The `live_md5s` set is the LIVENESS AUTHORITY: a variation whose md5
+/// has an in-flight transport in the engine's `inflight` set is NEVER touched (no
+/// false kill of a slow-but-alive transfer). On startup nothing is live, so the
+/// set is empty and every stuck variation qualifies.
+///
+/// For each SESSIONLESS in-flight variation (its persisted job says
+/// `Downloading`/`Resolving`/`Verifying`/`Pending` but no transport is running):
+///   * final file present + size matches (== `total_bytes` when known) + content
+///     md5 verifies → **Done** (the lost `Progress::Done` reconciled in);
+///   * file partial or absent → **re-queue** (`state → Pending`, `attempts += 1`,
+///     KEEPING `resume_offset`/`.part`) so the engine's drive loop resumes it. We
+///     never call `begin_download` here — we only fix persisted state;
+///   * once a variation's `attempts` has already reached
+///     [`RECONCILE_MAX_ATTEMPTS`] without completing → **Failed** (stop thrashing).
+///
+/// Returns the number of variations whose persisted state changed. Shared by the
+/// startup integrity scan and the running engine's tick loop. CHEAP when idle: a
+/// settled list yields an empty worklist and hashes nothing; a file is hashed only
+/// when a sessionless in-flight job actually has a final file on disk. Hashing runs
+/// OFF the per-list lock. `context` distinguishes the call site in the log line.
+pub async fn reconcile_completed_inflight(
+    orch: &Arc<Mutex<Orchestrator>>,
+    live_md5s: &std::collections::HashSet<String>,
+    context: &str,
+) -> usize {
+    let candidates = {
+        let g = orch.lock().await;
+        g.inflight_variations().unwrap_or_default()
+    };
+    let mut fixed = 0usize;
+    for v in candidates {
+        // LIVENESS GATE: a variation with a live in-flight transport is never
+        // touched, even if quiet — the engine owns it.
+        if live_md5s.contains(&v.md5) {
+            continue;
+        }
+        let md5 = v.md5.as_str();
+
+        // Is the final file complete (present, full size, md5-verified)? Hash only
+        // when there's a recorded path AND its size matches — off the lock.
+        let mut complete = false;
+        if let Some(output_path) = v.output_path.as_deref() {
+            let path = std::path::Path::new(output_path);
+            if let Ok(meta) = std::fs::metadata(path) {
+                let size_ok = v.total_bytes.map(|t| meta.len() == t).unwrap_or(true);
+                if size_ok {
+                    let actual = libgen_core::download::md5_of_file(path).await;
+                    complete = matches!(actual, Ok(h) if h.eq_ignore_ascii_case(md5));
+                }
+            }
+        }
+
+        if complete {
+            let promoted = {
+                let mut g = orch.lock().await;
+                g.promote_variation(&v.group_path, v.book_index, md5)
+                    .unwrap_or(false)
+            };
+            if promoted {
+                fixed += 1;
+                tracing::info!(
+                    md5 = %md5,
+                    path = v.output_path.as_deref().unwrap_or(""),
+                    context,
+                    "reconciled completed-but-stuck download — promoted sessionless in-flight job to Done"
+                );
+            }
+            continue;
+        }
+
+        // NOT complete and NOT live: the file is partial/absent and no transport is
+        // running. Re-queue it (resuming from the `.part`) unless it has already
+        // burned through the attempt cap, in which case fail it so a dead source
+        // stops thrashing and becomes user-retryable.
+        if v.attempts >= RECONCILE_MAX_ATTEMPTS {
+            let failed = {
+                let mut g = orch.lock().await;
+                g.fail_inflight_variation(
+                    &v.group_path,
+                    v.book_index,
+                    md5,
+                    "download did not complete after repeated attempts — source may be unavailable; retry manually",
+                )
+                .unwrap_or(false)
+            };
+            if failed {
+                fixed += 1;
+                tracing::warn!(
+                    md5 = %md5,
+                    attempts = v.attempts,
+                    context,
+                    "reconciled stuck download — attempt cap reached, marked Failed (re-queue thrash guard)"
+                );
+            }
+        } else {
+            let requeued = {
+                let mut g = orch.lock().await;
+                g.requeue_variation(&v.group_path, v.book_index, md5)
+                    .unwrap_or(false)
+            };
+            if requeued {
+                fixed += 1;
+                tracing::info!(
+                    md5 = %md5,
+                    attempts = v.attempts + 1,
+                    context,
+                    "reconciled stuck download — no live session, re-queued to resume from partial"
+                );
+            }
+        }
+    }
+    fixed
+}
+
+/// Build (or reuse) the shared scheduler from the bare shared handles — what the
+/// engine task holds. The cached scheduler lives behind `scheduler`; the configured
+/// sites/limits come from `config` (or an explicit `site`).
+pub async fn ensure_scheduler_from(
+    scheduler: &tokio::sync::Mutex<Option<Arc<libgen_core::queue::Scheduler>>>,
+    config: &std::sync::Mutex<Config>,
+    site: Option<&str>,
+) -> Result<Arc<libgen_core::queue::Scheduler>, String> {
+    let mut guard = scheduler.lock().await;
+    if let Some(s) = guard.as_ref() {
+        return Ok(Arc::clone(s));
+    }
+    let cfg = config.lock().expect("config mutex poisoned").clone();
+    let sched = Arc::new(build_scheduler(site, &cfg).map_err(|e| e.to_string())?);
+    *guard = Some(Arc::clone(&sched));
+    Ok(sched)
+}
+
+/// Order `hosts` best-first by live SLUM availability (cached snapshot) + measured
+/// quality (`site_quality` for `role`). Degrades to the given order when there's
+/// no data (no network, fresh DB) — see [`libgen_core::ranking::order_hosts`].
+fn order_by_quality(
+    cfg: &Config,
+    role: libgen_core::store::SiteRole,
+    hosts: &[String],
+) -> Vec<String> {
+    let slum = libgen_core::slum::SlumReport::load(cfg.slum_cache_path());
+    let quality = open_store(cfg)
+        .ok()
+        .and_then(|s| s.site_quality(role).ok())
+        .unwrap_or_default();
+    libgen_core::ranking::order_hosts(hosts, slum.as_ref(), &quality)
+}
+
+/// Open a [`libgen_core::store::Store`] against the configured on-disk DB,
+/// creating its parent dir.
+pub fn open_store(cfg: &Config) -> Result<libgen_core::store::Store, String> {
+    if let Some(parent) = cfg.db_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("creating db dir {}: {e}", parent.display()))?;
+    }
+    libgen_core::store::Store::open(&cfg.db_path).map_err(|e| e.to_string())
+}
+
+/// Build a download scheduler. The resolver chain comes from an explicit
+/// non-empty `site` (comma-separated mirrors, or a `{md5}` direct-URL template
+/// for tests) when given, else from the app-config failover order — auto-ordered
+/// by live SLUM health + measured success (Phase B). Per-host politeness
+/// (concurrency, rate, attempts) and the global cap come from the app settings.
+pub fn build_scheduler(
+    site: Option<&str>,
+    cfg: &Config,
+) -> Result<libgen_core::queue::Scheduler, anyhow::Error> {
+    use libgen_core::download::resolver_for_site;
+    use libgen_core::download::{host_of, DirectUrlResolver, Resolver, ResolverChain};
+    use libgen_core::queue::SchedulerBuilder;
+
+    let app = &cfg.app;
+    // Browser-like UA + redirect following: real mirrors gate on UA and
+    // 307-redirect to a CDN (see cmd_run.rs).
+    let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Kwire/1.0";
+    // DOWNLOAD client: bounds connection setup only (the streaming body must NOT
+    // have an overall timeout, or large downloads would be killed). The headers
+    // phase + body idle-stall are bounded inside `download_with_client_cancellable`.
+    let client = reqwest::Client::builder()
+        .user_agent(ua)
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    // RESOLVE client: resolver fetches (ads.php→get.php, by-id JSON, md5→CID) are
+    // SMALL responses, so a full overall timeout is safe and stops a hung mirror
+    // from stalling resolution forever (which would funnel everything onto one
+    // host and starve the spill). Resolvers use this; the scheduler streams with
+    // the download client above.
+    let resolve_client = reqwest::Client::builder()
+        .user_agent(ua)
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+
+    let mut resolvers: Vec<Arc<dyn Resolver>> = Vec::new();
+    // Resolve a chain. An explicit `site` (non-empty) wins so tests can pin a
+    // mock direct-URL template; otherwise use the configured failover order.
+    let explicit = site.map(str::trim).filter(|s| !s.is_empty());
+    match explicit {
+        Some(spec) => {
+            for entry in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                if entry.contains("{md5}") {
+                    // Direct-URL template (used by mock servers in tests).
+                    resolvers.push(Arc::new(DirectUrlResolver::new(
+                        host_of(entry),
+                        entry.to_string(),
+                        resolve_client.clone(),
+                    )) as Arc<dyn Resolver>);
+                } else {
+                    resolvers.push(resolver_for_site(entry, &resolve_client)?);
+                }
+            }
+        }
+        None => {
+            // The download chain is the fixed libgen+ family (all front the same
+            // booksdl CDN — multiple mirrors give resolve-resilience only, not
+            // throughput; see DESIGN §13b). Auto-ordered by live health so a down
+            // mirror sinks in the failover chain.
+            let chain: Vec<String> = libgen_core::download::LIBGEN_FAMILY_SITES
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let ordered = order_by_quality(cfg, libgen_core::store::SiteRole::Download, &chain);
+            for entry in ordered {
+                resolvers.push(resolver_for_site(&entry, &resolve_client)?);
+            }
+        }
+    }
+
+    let chain = ResolverChain::new(resolvers);
+    // NOTE: total download concurrency is now bounded by the engine's download
+    // WORKER POOL (`max_concurrent_downloads` workers, each pulling one book), so
+    // the scheduler's own global gate is left unlimited; per-host caps still apply.
+    Ok(SchedulerBuilder::new(chain, client)
+        .default_limits(app.host_limits())
+        .hedge(app.hedge_config())
+        .build())
+}
+
+/// Build the search client from config: replay (offline) when a replay dir is
+/// configured, else live mirrors.
+pub fn build_search(cfg: &Config) -> Result<libgen_core::search::SearchClient, String> {
+    use libgen_core::search::{LiveTransport, MirrorConfig};
+    let mut mirror_cfg = MirrorConfig::load(&cfg.mirrors)
+        .map_err(|e| format!("loading mirrors from {}: {e}", cfg.mirrors.display()))?;
+    // Auto-order search mirrors by live SLUM health + measured success (Phase B):
+    // a down/flaky mirror sinks so it's tried last (the search client fails over in
+    // list order). No-op when there's no data (e.g. replay/tests → identity order).
+    let hosts: Vec<String> = mirror_cfg
+        .search_mirrors
+        .iter()
+        .map(|m| m.host.clone())
+        .collect();
+    let ranked = order_by_quality(cfg, libgen_core::store::SiteRole::Search, &hosts);
+    let rank_of = |host: &str| ranked.iter().position(|h| h == host).unwrap_or(usize::MAX);
+    mirror_cfg.search_mirrors.sort_by_key(|m| rank_of(&m.host));
+    Ok(match &cfg.replay_dir {
+        Some(dir) => libgen_core::search::SearchClient::replay(mirror_cfg, dir.clone()),
+        None => libgen_core::search::SearchClient::new(mirror_cfg, Box::new(LiveTransport::new())),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests (generic engine logic only — no tauri)
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
