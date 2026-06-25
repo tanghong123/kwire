@@ -12,6 +12,14 @@ self-contained web UI.
 written for engineers who don't know Rust yet. For *why* things are designed this
 way, see [DESIGN.md](DESIGN.md); for the build order, [PLAN.md](PLAN.md).
 
+## The name
+
+**Kwire** is a respelling of **quire** (pronounced the same). A *quire* is a gathering
+of folded sheets sewn together to form one section of a book — and, historically, a
+unit of paper (about 24–25 sheets, 1⁄20 of a ream). The app gathers the scattered
+titles of a reading list into one tidy, downloaded collection, so the bookbinding
+sense fit.
+
 ## What it does
 1. Add books by manual entry or by importing a **Markdown / JSON** list.
 2. Manage all books as one **persistent, resumable queue** with status + retries.
@@ -97,6 +105,43 @@ The **data pipeline** (each engine module is one stage):
 parse ──▶ search ──▶ match ──▶ queue ──▶ download ──▶ files on disk
                        (orchestrator persists every step through `store`)
 ```
+
+## Prerequisites (macOS)
+
+Building from source needs a C toolchain, **Rust via rustup** (so the pinned
+[`rust-toolchain.toml`](rust-toolchain.toml) — `stable` + `rustfmt` + `clippy` — is
+honored), and the **Tauri v2 CLI**. With [Homebrew](https://brew.sh):
+
+```bash
+xcode-select --install              # Command Line Tools: clang/linker + the macOS SDK & WebKit that Tauri links against
+brew install rustup && rustup-init  # Rust toolchain manager → installs stable + rustfmt + clippy
+cargo install tauri-cli             # Tauri v2 CLI (builds the .app/.dmg)
+                                    #   faster: brew install cargo-binstall && cargo binstall tauri-cli
+brew install node                   # OPTIONAL — only to run the headless UI test harness (app/ui/*.mjs)
+```
+
+The pure-Rust **engine + CLI** build on Linux/Windows too; the **desktop bundle**
+(`cargo tauri build`) targets macOS. Producing a signed/notarized `.dmg` for
+distribution additionally needs an Apple Developer account and Xcode's `codesign` /
+`notarytool` (set `APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_PASSWORD` /
+`APPLE_TEAM_ID`); an unsigned local build needs none of that.
+
+### Optional external tools — PDF cover thumbnails
+
+Covers are produced in-process: EPUB covers are extracted in pure Rust, and PDF page
+counts use the bundled `lopdf` — so **no external tool is required** for core
+features. The one optional dependency is rendering a **PDF's first page** into a cover
+thumbnail, which needs a PDF rasterizer on your `PATH` — either Poppler's `pdftoppm`
+or MuPDF's `mutool`:
+
+```bash
+brew install poppler        # provides pdftoppm
+# …or…
+brew install mupdf-tools    # provides mutool
+```
+
+Without one, PDF books simply fall back to a generated format-colored placeholder;
+every other feature still works.
 
 ## Quick start (CLI)
 
