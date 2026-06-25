@@ -166,6 +166,22 @@ check("language pref: empty/None and match-title both resolve to the match-title
   if (ctx.LANGUAGES[0] !== "match-title") throw new Error("match-title must be the default (first) option");
 });
 
+check("i18n: t() resolves the active language, falling back en → key", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "zh";
+  if (ctx.t("status.done") !== "已完成") throw new Error("zh lookup failed: " + ctx.t("status.done"));
+  ctx.LANG = "en";
+  if (ctx.t("status.done") !== "Done") throw new Error("en lookup failed: " + ctx.t("status.done"));
+  if (ctx.t("no.such.key") !== "no.such.key") throw new Error("missing key must fall back to the key itself");
+  ctx.LANG = saved;
+});
+
+check("i18n: en and zh catalogs have identical key sets (no untranslated chrome)", () => {
+  const en = Object.keys(ctx.I18N.en).sort(), zh = Object.keys(ctx.I18N.zh).sort();
+  const enOnly = en.filter((k) => !(k in ctx.I18N.zh)), zhOnly = zh.filter((k) => !(k in ctx.I18N.en));
+  if (enOnly.length || zhOnly.length) throw new Error("catalog mismatch — en-only: [" + enOnly + "] zh-only: [" + zhOnly + "]");
+});
+
 check("visibleBooks returns the filtered books for keyboard nav", () => {
   ctx.LISTS = [listOf(reviewBook())]; ctx.CURRENT = "L1"; ctx.FILTER = "all"; ctx.FMT_FILTER = "";
   var vb = ctx.visibleBooks();
@@ -601,6 +617,53 @@ check("render() with a selected DONE (non-review) book also hydrates covers", ()
   invokeLog.length = 0;
   ctx.render();
   if (!invokeLog.some((c) => c.cmd === "cover_data_url")) throw new Error("no cover invoke for done book");
+});
+
+check("i18n: t(key, args) substitutes {n} placeholders", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "en";
+  const result = ctx.t("event.matched", { n: 3, ext: "epub" });
+  if (result !== "3 candidate(s) → matched (auto-selected epub)")
+    throw new Error("placeholder substitution failed: " + result);
+  // Missing param leaves the placeholder intact.
+  const partial = ctx.t("event.matched", { n: 5 });
+  if (!/\{ext\}/.test(partial)) throw new Error("missing param should leave {ext} in place: " + partial);
+  ctx.LANG = saved;
+});
+
+check("i18n: decodeI18n translates a known key with no params", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "en";
+  const result = ctx.decodeI18n("event.notfound");
+  if (result !== "no candidates found")
+    throw new Error("decodeI18n key-only failed: " + result);
+  ctx.LANG = saved;
+});
+
+check("i18n: decodeI18n translates a known key with params (U+001F encoded)", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "en";
+  const US = "";
+  const encoded = "event.done" + US + "host=libgen.li" + US + "mb=12";
+  const result = ctx.decodeI18n(encoded);
+  if (result !== "completed on libgen.li (12 MB)")
+    throw new Error("decodeI18n param substitution failed: " + result);
+  ctx.LANG = saved;
+});
+
+check("i18n: decodeI18n returns plain English string unchanged", () => {
+  const raw = "started on libgen.li";
+  const result = ctx.decodeI18n(raw);
+  if (result !== raw) throw new Error("decodeI18n must pass through unknown strings unchanged: " + result);
+});
+
+check("i18n: decodeI18n works in zh locale", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "zh";
+  const result = ctx.decodeI18n("event.notfound");
+  if (result !== "未找到候选项")
+    throw new Error("decodeI18n zh failed: " + result);
+  ctx.LANG = saved;
 });
 
 // --- REAL-DATA sweep: drive every book's detail panel with the actual ViewLibrary

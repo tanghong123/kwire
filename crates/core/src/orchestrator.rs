@@ -245,6 +245,7 @@ fn recommended_replacement(req: &BookRequest) -> Option<String> {
 /// A short chronicle detail for a just-completed discovery (query + match).
 fn discovery_detail(req: &BookRequest) -> String {
     let n = req.candidates.len();
+    let n_str = n.to_string();
     match &req.status {
         RequestStatus::Matched => {
             let ext = req
@@ -253,11 +254,13 @@ fn discovery_detail(req: &BookRequest) -> String {
                 .and_then(|c| c.extension.as_ref())
                 .map(|e| e.ext())
                 .unwrap_or_default();
-            format!("{n} candidate(s) → matched (auto-selected {ext})")
+            crate::model::ui_msg("event.matched", &[("n", &n_str), ("ext", &ext)])
         }
-        RequestStatus::NeedsSelection => format!("{n} candidate(s) → needs selection"),
-        RequestStatus::NotFound => "no candidates found".to_string(),
-        _ => format!("{n} candidate(s)"),
+        RequestStatus::NeedsSelection => {
+            crate::model::ui_msg("event.needs_selection", &[("n", &n_str)])
+        }
+        RequestStatus::NotFound => crate::model::ui_msg("event.notfound", &[]),
+        _ => crate::model::ui_msg("event.discovered", &[("n", &n_str)]),
     }
 }
 
@@ -1471,7 +1474,7 @@ impl Orchestrator {
             req.selected.clone(),
             None,
             "accepted",
-            "user accepted the current downloaded copy",
+            crate::model::ui_msg("event.accepted", &[]),
         );
         // Settle the book so the engine doesn't re-verify it every tick and
         // re-raise the flag: a `Done` book at goal `Complete` is actionable as a
@@ -1673,10 +1676,16 @@ impl Orchestrator {
         }
         if rearm {
             let what = match prior {
-                Some(JobState::Failed) => "retry requested",
-                Some(JobState::Cancelled) => "re-requested (was cancelled)",
-                Some(JobState::Done) => "re-download requested",
-                _ => "selected for download",
+                Some(JobState::Failed) => {
+                    crate::model::ui_msg("event.selected_retry", &[])
+                }
+                Some(JobState::Cancelled) => {
+                    crate::model::ui_msg("event.selected_recancel", &[])
+                }
+                Some(JobState::Done) => {
+                    crate::model::ui_msg("event.selected_redl", &[])
+                }
+                _ => crate::model::ui_msg("event.selected", &[]),
             };
             req.log_event(Some(md5.to_string()), ext, "selected", what);
         }
@@ -1739,7 +1748,7 @@ impl Orchestrator {
         req.status = RequestStatus::Matched;
         req.review = false;
         req.goal = crate::model::Goal::Complete;
-        req.log_event(Some(md5.clone()), None, "manual", "md5 entered manually");
+        req.log_event(Some(md5.clone()), None, "manual", crate::model::ui_msg("event.manual", &[]));
         self.store
             .update_request(self.list_id, group_path, book_index, &req)?;
         Ok(())
@@ -3033,14 +3042,15 @@ impl Orchestrator {
                     job.host = Some(host.clone());
                     job.total_bytes = *total_bytes;
                     job.state = JobState::Downloading;
-                    event = Some(("downloading", format!("started on {host}")));
+                    event = Some(("downloading", crate::model::ui_msg("event.downloading_started", &[("host", host)])));
                 }
                 Progress::Resuming { host, offset, .. } => {
                     // Informational: continuing from an on-disk partial. Don't touch
                     // job state (the Resolved/Bytes events drive it) — just chronicle.
+                    let mb = (offset / (1024 * 1024)).to_string();
                     event = Some((
                         "resuming",
-                        format!("resuming from {} MB on {host}", offset / (1024 * 1024)),
+                        crate::model::ui_msg("event.resuming", &[("mb", &mb), ("host", host)]),
                     ));
                 }
                 Progress::Bytes {
@@ -3068,7 +3078,7 @@ impl Orchestrator {
                         job.speed_bps = *speed_bps;
                         job.eta_secs = *eta_secs;
                         if new_edge {
-                            event = Some(("downloading", format!("serving from {host}")));
+                            event = Some(("downloading", crate::model::ui_msg("event.downloading_edge", &[("host", host)])));
                         }
                     }
                 }
@@ -3087,11 +3097,13 @@ impl Orchestrator {
                 } => {
                     job.attempts = *attempt;
                     job.last_error = Some(error.clone());
+                    let attempt_str = attempt.to_string();
+                    let backoff_str = backoff.as_secs().max(1).to_string();
                     event = Some((
                         "retry",
-                        format!(
-                            "retry attempt {attempt} on {host} after {}s backoff — {error}",
-                            backoff.as_secs().max(1)
+                        crate::model::ui_msg(
+                            "event.retry",
+                            &[("attempt", &attempt_str), ("host", host), ("backoff", &backoff_str), ("error", error)],
                         ),
                     ));
                 }
@@ -3101,7 +3113,7 @@ impl Orchestrator {
                     job.last_error = Some(error.clone());
                     event = Some((
                         "failover",
-                        format!("failing over from {from_host} — {error}"),
+                        crate::model::ui_msg("event.failover", &[("from", from_host), ("error", error)]),
                     ));
                 }
                 Progress::Done {
@@ -3168,9 +3180,10 @@ impl Orchestrator {
                             );
                         }
                     }
+                    let mb = (bytes_written / (1024 * 1024)).to_string();
                     event = Some((
                         "done",
-                        format!("completed on {host} ({} MB)", bytes_written / (1024 * 1024)),
+                        crate::model::ui_msg("event.done", &[("host", host), ("mb", &mb)]),
                     ));
                 }
                 Progress::Failed { error, .. } => {
@@ -3178,7 +3191,7 @@ impl Orchestrator {
                     job.last_error = Some(error.clone());
                     job.speed_bps = None;
                     job.eta_secs = None;
-                    event = Some(("failed", format!("failed — {error}")));
+                    event = Some(("failed", crate::model::ui_msg("event.failed", &[("error", error)])));
                 }
                 Progress::Note { detail, .. } => {
                     // Diagnostic-only: chronicle a download-path note (edge rotation
@@ -3202,11 +3215,11 @@ impl Orchestrator {
                         job.state = JobState::Paused;
                         job.resume_offset = *resume_offset;
                         job.bytes_done = job.bytes_done.max(*resume_offset);
-                        event = Some(("paused", "paused".into()));
+                        event = Some(("paused", crate::model::ui_msg("event.paused", &[])));
                     } else {
                         job.state = JobState::Cancelled;
                         job.resume_offset = 0;
-                        event = Some(("cancelled", "cancelled".into()));
+                        event = Some(("cancelled", crate::model::ui_msg("event.cancelled", &[])));
                     }
                 }
             }
@@ -5164,8 +5177,8 @@ mod tests {
             .find(|e| e.kind == "resuming")
             .expect("resuming event");
         assert!(
-            resuming.detail.contains("5 MB"),
-            "records the resume offset: {}",
+            resuming.detail.contains("mb=5"),
+            "records the resume offset (encoded): {}",
             resuming.detail
         );
         let failed = h.iter().find(|e| e.kind == "failed").expect("failed event");
