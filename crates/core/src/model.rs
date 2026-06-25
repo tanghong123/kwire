@@ -112,6 +112,16 @@ pub struct BookRequest {
     /// UI and for diagnosis. Capped (oldest dropped) to bound growth.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<BookEvent>,
+    /// Names of the [`BookInput`] metadata fields currently AUTO-FILLED from the
+    /// downloading/downloaded copy's candidate (a subset of `["authors", "year"]`,
+    /// see [`BACKFILLABLE_FIELDS`]). A book's original entry often omits metadata;
+    /// once a copy is acquiring we back-fill the empty fields from it, and remember
+    /// which here so (a) the UI can mark them as auto-filled and (b) a re-compute
+    /// never overwrites a field the USER typed. See
+    /// [`crate::model::backfill_input`]. `serde(default)` + `skip_serializing_if`
+    /// so old persisted rows decode unchanged with NO schema bump.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backfilled: Vec<String>,
 }
 
 /// One entry in a book's [`BookRequest::history`] chronicle. `md5`/`fmt` tag the
@@ -172,6 +182,7 @@ impl BookRequest {
             goal: Goal::default(),
             dismissed: Vec::new(),
             history: Vec::new(),
+            backfilled: Vec::new(),
         }
     }
 
@@ -249,6 +260,96 @@ impl BookRequest {
         }
         Some(a)
     }
+}
+
+/// The back-fillable [`BookInput`] metadata fields: `authors` and `year`. (These
+/// are the fields the product back-fills; `title` is always present from the
+/// entry so it's never derived, and `isbn`/`edition` aren't on a [`Candidate`].)
+pub const BACKFILLABLE_FIELDS: [&str; 2] = ["authors", "year"];
+
+/// The candidate a [`BookRequest`]'s metadata should be back-filled FROM: the
+/// `selected` candidate if it is acquiring (job state Resolving/Downloading/
+/// Verifying/Done), else the FIRST candidate (in rank order) that is acquiring.
+/// `None` when nothing is downloading/done yet (back-fill is a no-op).
+fn backfill_source(req: &BookRequest) -> Option<&Candidate> {
+    fn acquiring(c: &Candidate) -> bool {
+        matches!(
+            c.job.as_ref().map(|j| &j.state),
+            Some(
+                JobState::Resolving | JobState::Downloading | JobState::Verifying | JobState::Done
+            )
+        )
+    }
+    // Prefer the selected copy when it is itself acquiring.
+    if let Some(sel) = req.selected.as_deref() {
+        if let Some(c) = req.candidates.iter().find(|c| c.md5 == sel && acquiring(c)) {
+            return Some(c);
+        }
+    }
+    req.candidates.iter().find(|c| acquiring(c))
+}
+
+/// The effective page count of a book's CHOSEN acquiring copy, for the UI to
+/// display: the chosen copy's job-`page_count` (the actual count from the
+/// pagecount feature) when known, else the candidate's mirror-reported `pages`.
+/// The "chosen copy" is picked exactly like [`backfill_input`]'s source (the
+/// `selected` candidate if it is acquiring, else the first acquiring candidate).
+/// `None` when no copy is acquiring. NOT back-filled into [`BookInput`] (which has
+/// no pages slot) — purely a derived display value.
+pub fn effective_pages(req: &BookRequest) -> Option<u32> {
+    let c = backfill_source(req)?;
+    c.job.as_ref().and_then(|j| j.page_count).or(c.pages)
+}
+
+/// Back-fill a book's EMPTY [`BookInput`] metadata from its acquiring copy's
+/// candidate, remembering which fields we filled in [`BookRequest::backfilled`].
+///
+/// As soon as the first copy of a book is acquiring (Resolving/Downloading/
+/// Verifying/Done), each back-fillable field (`authors`, `year` — see
+/// [`BACKFILLABLE_FIELDS`]) is treated as:
+///   * **user-owned** — non-empty AND NOT recorded in `backfilled` — left
+///     untouched forever (a value the user typed is never overwritten);
+///   * **ours** — empty, OR already recorded in `backfilled` — (re)derived from
+///     the source candidate when the source HAS that value, and the field name is
+///     ensured present in `backfilled`. If the source lacks the value, the field
+///     is left as-is (a prior back-fill / empty is kept; the name is NOT removed
+///     from `backfilled`).
+///
+/// Idempotent + re-runnable: re-running after the source/selection changes
+/// re-derives the back-filled fields while preserving user-owned ones. Returns
+/// `true` if it changed `req` (input or `backfilled`), so a caller can skip an
+/// unnecessary persist. A no-op (returns `false`) when no copy is acquiring.
+pub fn backfill_input(req: &mut BookRequest) -> bool {
+    let source = match backfill_source(req) {
+        Some(c) => c.clone(),
+        None => return false,
+    };
+    let mut changed = false;
+    let in_backfilled = |req: &BookRequest, f: &str| req.backfilled.iter().any(|b| b == f);
+
+    // authors
+    if req.input.authors.is_empty() || in_backfilled(req, "authors") {
+        if !source.authors.is_empty() && req.input.authors != source.authors {
+            req.input.authors = source.authors.clone();
+            changed = true;
+        }
+        if !source.authors.is_empty() && !in_backfilled(req, "authors") {
+            req.backfilled.push("authors".to_string());
+            changed = true;
+        }
+    }
+    // year
+    if req.input.year.is_none() || in_backfilled(req, "year") {
+        if source.year.is_some() && req.input.year != source.year {
+            req.input.year = source.year;
+            changed = true;
+        }
+        if source.year.is_some() && !in_backfilled(req, "year") {
+            req.backfilled.push("year".to_string());
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// A roll-up of a request's per-variation download state, for the row summary.
@@ -596,6 +697,184 @@ mod tests {
                 ..Default::default()
             }),
         }
+    }
+
+    /// A candidate carrying metadata + a job in `state`, used by the back-fill
+    /// tests (authors/year/pages drive the source-of-truth assertions).
+    fn meta_cand(
+        md5: &str,
+        authors: &[&str],
+        year: Option<u16>,
+        pages: Option<u32>,
+        counted: Option<u32>,
+        state: Option<JobState>,
+    ) -> Candidate {
+        Candidate {
+            md5: md5.into(),
+            title: "t".into(),
+            authors: authors.iter().map(|a| a.to_string()).collect(),
+            year,
+            publisher: None,
+            language: None,
+            pages,
+            extension: Some(Format::Epub),
+            size_bytes: None,
+            source_host: None,
+            cover_url: None,
+            score: 1.0,
+            job: state.map(|s| DownloadJob {
+                state: s,
+                page_count: counted,
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn backfill_fills_empty_author_from_downloading_copy() {
+        // (a) Empty author + a Downloading candidate that HAS an author → filled,
+        // and `backfilled` records "authors".
+        let mut req = BookRequest::new(BookInput {
+            title: "Wanted".into(),
+            ..Default::default()
+        });
+        req.candidates = vec![meta_cand(
+            "m1",
+            &["Real Author"],
+            None,
+            None,
+            None,
+            Some(JobState::Downloading),
+        )];
+        assert!(backfill_input(&mut req));
+        assert_eq!(req.input.authors, vec!["Real Author".to_string()]);
+        assert!(req.backfilled.iter().any(|b| b == "authors"));
+    }
+
+    #[test]
+    fn backfill_never_overwrites_user_author() {
+        // (b) A user-provided author is never overwritten, even when a downloading
+        // candidate carries a different author.
+        let mut req = BookRequest::new(BookInput {
+            title: "Wanted".into(),
+            authors: vec!["User Author".into()],
+            ..Default::default()
+        });
+        req.candidates = vec![meta_cand(
+            "m1",
+            &["Different Author"],
+            None,
+            None,
+            None,
+            Some(JobState::Downloading),
+        )];
+        // No change → returns false, value preserved, not recorded as backfilled.
+        assert!(!backfill_input(&mut req));
+        assert_eq!(req.input.authors, vec!["User Author".to_string()]);
+        assert!(!req.backfilled.iter().any(|b| b == "authors"));
+    }
+
+    #[test]
+    fn backfill_recomputes_year_when_selected_copy_changes() {
+        // (c) Recompute: after the selected copy changes to one with a different
+        // year, the back-filled year updates (the user never set a year).
+        let mut req = BookRequest::new(BookInput {
+            title: "Wanted".into(),
+            ..Default::default()
+        });
+        req.candidates = vec![
+            meta_cand("m1", &["A"], Some(1999), None, None, Some(JobState::Done)),
+            meta_cand(
+                "m2",
+                &["A"],
+                Some(2020),
+                None,
+                None,
+                Some(JobState::Pending),
+            ),
+        ];
+        req.selected = Some("m1".into());
+        assert!(backfill_input(&mut req));
+        assert_eq!(req.input.year, Some(1999));
+        assert!(req.backfilled.iter().any(|b| b == "year"));
+
+        // Selection changes to a copy that is now itself acquiring with a new year.
+        req.selected = Some("m2".into());
+        req.candidates[1].job.as_mut().unwrap().state = JobState::Downloading;
+        assert!(backfill_input(&mut req));
+        assert_eq!(req.input.year, Some(2020), "back-filled year recomputed");
+    }
+
+    #[test]
+    fn backfill_leaves_field_empty_when_source_lacks_it() {
+        // (d) The source has no year → `year` stays empty and `backfilled` does not
+        // gain it (but the author it DOES have is filled).
+        let mut req = BookRequest::new(BookInput {
+            title: "Wanted".into(),
+            ..Default::default()
+        });
+        req.candidates = vec![meta_cand(
+            "m1",
+            &["A"],
+            None,
+            None,
+            None,
+            Some(JobState::Downloading),
+        )];
+        assert!(backfill_input(&mut req));
+        assert_eq!(req.input.year, None);
+        assert!(!req.backfilled.iter().any(|b| b == "year"));
+        assert!(req.backfilled.iter().any(|b| b == "authors"));
+    }
+
+    #[test]
+    fn backfill_noop_when_nothing_acquiring() {
+        // (e) No candidate downloading/done → no change at all.
+        let mut req = BookRequest::new(BookInput {
+            title: "Wanted".into(),
+            ..Default::default()
+        });
+        req.candidates = vec![
+            meta_cand("m1", &["A"], Some(2000), None, None, None),
+            meta_cand(
+                "m2",
+                &["B"],
+                Some(2001),
+                None,
+                None,
+                Some(JobState::Pending),
+            ),
+        ];
+        assert!(!backfill_input(&mut req));
+        assert!(req.input.authors.is_empty());
+        assert_eq!(req.input.year, None);
+        assert!(req.backfilled.is_empty());
+    }
+
+    #[test]
+    fn effective_pages_prefers_counted_over_reported() {
+        // The chosen copy's actual counted pages win when present…
+        let mut req = BookRequest::new(BookInput {
+            title: "Wanted".into(),
+            ..Default::default()
+        });
+        req.candidates = vec![meta_cand(
+            "m1",
+            &["A"],
+            None,
+            Some(120),
+            Some(118),
+            Some(JobState::Done),
+        )];
+        assert_eq!(effective_pages(&req), Some(118));
+
+        // …else the candidate's mirror-reported `pages`.
+        req.candidates[0].job.as_mut().unwrap().page_count = None;
+        assert_eq!(effective_pages(&req), Some(120));
+
+        // None when no copy is acquiring.
+        req.candidates[0].job = None;
+        assert_eq!(effective_pages(&req), None);
     }
 
     #[test]

@@ -134,6 +134,7 @@ impl Store {
             ("dismissed_json", "TEXT"),               // v5: md5s the user removed
             ("review_dismissed_md5", "TEXT"),         // v7: declined recommendation
             ("history_json", "TEXT"),                 // v8: event chronicle
+            ("backfilled_json", "TEXT"),              // v8+: auto-filled metadata field names
         ] {
             self.ensure_book_column(name, decl)?;
         }
@@ -333,7 +334,7 @@ impl Store {
             .prepare(
                 "SELECT id, input_json, status_json, selected, job_json, seq,
                         review, trash_on_replace_json, goal_json, dismissed_json,
-                        review_dismissed_md5, history_json
+                        review_dismissed_md5, history_json, backfilled_json
                  FROM book WHERE group_id = ?1 ORDER BY ord, id",
             )
             .context("preparing book load")?;
@@ -350,6 +351,7 @@ impl Store {
             dismissed_json: Option<String>,
             review_dismissed_md5: Option<String>,
             history_json: Option<String>,
+            backfilled_json: Option<String>,
         }
         let rows: Vec<Row> = stmt
             .query_map(params![group_id], |r| {
@@ -366,6 +368,7 @@ impl Store {
                     dismissed_json: r.get(9)?,
                     review_dismissed_md5: r.get(10)?,
                     history_json: r.get(11)?,
+                    backfilled_json: r.get(12)?,
                 })
             })
             .context("querying books")?
@@ -398,6 +401,10 @@ impl Store {
                 Some(j) => serde_json::from_str(&j).context("decoding history")?,
                 None => Vec::new(),
             };
+            let backfilled: Vec<String> = match row.backfilled_json {
+                Some(j) => serde_json::from_str(&j).context("decoding backfilled")?,
+                None => Vec::new(),
+            };
             let candidates = self.load_candidates(row.id)?;
             books.push(BookRequest {
                 input,
@@ -412,6 +419,7 @@ impl Store {
                 goal,
                 dismissed,
                 history,
+                backfilled,
             });
         }
         Ok(books)
@@ -802,11 +810,16 @@ fn insert_book_tx(tx: &Transaction, group_id: i64, ord: i64, book: &BookRequest)
     } else {
         Some(serde_json::to_string(&book.history).context("encoding history")?)
     };
+    let backfilled_json: Option<String> = if book.backfilled.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&book.backfilled).context("encoding backfilled")?)
+    };
     tx.execute(
         "INSERT INTO book (group_id, ord, input_json, status_json, selected, job_json, seq,
                            review, trash_on_replace_json, goal_json, dismissed_json,
-                           review_dismissed_md5, history_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                           review_dismissed_md5, history_json, backfilled_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             group_id,
             ord,
@@ -820,7 +833,8 @@ fn insert_book_tx(tx: &Transaction, group_id: i64, ord: i64, book: &BookRequest)
             goal_json,
             dismissed_json,
             book.review_dismissed,
-            history_json
+            history_json,
+            backfilled_json
         ],
     )
     .context("inserting book")?;
@@ -849,10 +863,16 @@ fn write_book_fields(tx: &Transaction, book_id: i64, book: &BookRequest) -> Resu
     } else {
         Some(serde_json::to_string(&book.history).context("encoding history")?)
     };
+    let backfilled_json: Option<String> = if book.backfilled.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&book.backfilled).context("encoding backfilled")?)
+    };
     tx.execute(
         "UPDATE book SET input_json = ?2, status_json = ?3, selected = ?4, job_json = ?5,
          seq = ?6, review = ?7, trash_on_replace_json = ?8, goal_json = ?9,
-         dismissed_json = ?10, review_dismissed_md5 = ?11, history_json = ?12 WHERE id = ?1",
+         dismissed_json = ?10, review_dismissed_md5 = ?11, history_json = ?12,
+         backfilled_json = ?13 WHERE id = ?1",
         params![
             book_id,
             input_json,
@@ -865,7 +885,8 @@ fn write_book_fields(tx: &Transaction, book_id: i64, book: &BookRequest) -> Resu
             goal_json,
             dismissed_json,
             book.review_dismissed,
-            history_json
+            history_json,
+            backfilled_json
         ],
     )
     .context("updating book fields")?;

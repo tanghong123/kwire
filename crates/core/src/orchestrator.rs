@@ -3027,6 +3027,13 @@ impl Orchestrator {
             }
             // Roll the request status up from the per-variation states.
             req.status = roll_up_status(&req);
+            // Back-fill the book's EMPTY metadata (author/year/publisher/language)
+            // from this acquiring copy's candidate, remembering which fields were
+            // auto-filled so user-entered ones are never overwritten. Cheap +
+            // in-memory; re-runs on each Resolved/Bytes/Done tick (recompute on
+            // change) and folds into the same persist below. See
+            // `crate::model::backfill_input`.
+            crate::model::backfill_input(&mut req);
             self.store
                 .update_request(self.list_id, &p.group_path, p.book_index, &req)?;
             if let (Some(ok), Some(host)) = (outcome, host) {

@@ -85,6 +85,18 @@ pub struct ViewBook {
     pub id: String,
     pub title: String,
     pub author: String,
+    /// The book's (possibly back-filled) publication year, when known.
+    pub year: Option<u16>,
+    /// Effective page count of the book's CHOSEN downloading/done copy: that
+    /// copy's actual counted pages if known, else its mirror-reported `pages`;
+    /// `None` when no copy is acquiring. A derived display value (NOT stored on
+    /// `BookInput`). See [`libgen_core::model::effective_pages`].
+    pub pages: Option<u32>,
+    /// Names of the book's [`BookInput`] metadata fields currently AUTO-FILLED
+    /// from the downloading/downloaded copy (a subset of `["authors", "year"]`),
+    /// so the UI can mark them as auto-filled rather than user-entered. Mirrors
+    /// [`libgen_core::model::BookRequest::backfilled`].
+    pub backfilled: Vec<String>,
     pub seq: usize,
     /// Discovery state of the request: queued | matched | needs_selection |
     /// not_found. Drives the "Needs you" / "Not found" treatment independently
@@ -468,6 +480,9 @@ fn build_book(req: &BookRequest, flat_index: usize, seq: usize) -> ViewBook {
         id: format!("bk{flat_index}"),
         title: req.input.title.clone(),
         author: req.input.authors.join(", "),
+        year: req.input.year,
+        pages: libgen_core::model::effective_pages(req),
+        backfilled: req.backfilled.clone(),
         seq,
         discovery,
         versions,
@@ -537,6 +552,43 @@ mod unit {
         let v = view_variation(&c);
         assert_eq!(v.language, "");
         assert_eq!(v.pages, None);
+    }
+
+    #[test]
+    fn book_pages_prefer_counted_then_reported() {
+        use libgen_core::model::{BookInput, BookRequest};
+        // Chosen (done) copy with both a counted page_count and reported pages:
+        // the actual counted value wins.
+        let mut req = BookRequest::new(BookInput {
+            title: "T".into(),
+            // The book's year lives on `input` (set by back-fill or the user); the
+            // viewmodel surfaces it as `book.year`.
+            year: Some(2000),
+            ..Default::default()
+        });
+        let mut c = cand(); // reports pages = Some(233)
+        c.job = Some(DownloadJob {
+            state: JobState::Done,
+            page_count: Some(231),
+            output_path: Some("/x".into()),
+            ..Default::default()
+        });
+        req.candidates = vec![c];
+        req.selected = Some("a".repeat(32));
+        let book = build_book(&req, 0, 1);
+        assert_eq!(book.pages, Some(231), "counted pages preferred");
+        // Year is surfaced on the book.
+        assert_eq!(book.year, Some(2000));
+
+        // No counted value → fall back to the candidate's reported pages.
+        req.candidates[0].job.as_mut().unwrap().page_count = None;
+        let book = build_book(&req, 0, 1);
+        assert_eq!(book.pages, Some(233), "falls back to reported pages");
+
+        // No acquiring copy → no page count.
+        req.candidates[0].job = None;
+        let book = build_book(&req, 0, 1);
+        assert_eq!(book.pages, None);
     }
 
     #[test]
