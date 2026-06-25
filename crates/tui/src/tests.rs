@@ -513,7 +513,10 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();
         app.set_view(fixture_vm());
-        app.modal = Some(Modal::Detail { book_flat_index: 0 });
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+        });
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
     }
 
@@ -1243,6 +1246,230 @@ mod tests {
         assert!(
             app.status_msg.is_none(),
             "status_msg must be cleared when entering command mode"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // FIX 1 — detail modal variation ↑/↓ navigation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detail_modal_down_advances_selected() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        // Open detail on the first book (which has 2 versions).
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+        });
+        let intent = app.on_input(key(KeyCode::Down));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 1,
+            }),
+            "Down inside detail modal should advance variation selected to 1"
+        );
+    }
+
+    #[test]
+    fn detail_modal_up_retreats_selected() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 1,
+        });
+        let intent = app.on_input(key(KeyCode::Up));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 0,
+            }),
+            "Up inside detail modal should retreat variation selected to 0"
+        );
+    }
+
+    #[test]
+    fn detail_modal_down_clamps_at_last_version() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        // Already at the last variation (index 1 of 2).
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 1,
+        });
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 1,
+            }),
+            "Down must not go past the last variation"
+        );
+    }
+
+    #[test]
+    fn detail_modal_j_k_also_navigate() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+        });
+        app.on_input(key(KeyCode::Char('j')));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 1,
+            }),
+            "'j' must advance variation selected"
+        );
+        app.on_input(key(KeyCode::Char('k')));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 0,
+            }),
+            "'k' must retreat variation selected"
+        );
+    }
+
+    #[test]
+    fn render_detail_modal_selected_variant_visible() {
+        // Render detail modal with selected=1 — the buffer should show the ▶ marker.
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 1,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        // ▶ (U+25B6) should appear in the buffer as the selection marker.
+        assert!(
+            content.contains('\u{25b6}'),
+            "detail modal selected row must show ▶ marker"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // FIX 3 — page up/down in the book list
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shift_j_moves_selection_page_down() {
+        // Build a fixture with enough books to page through.
+        use libgen_core::model::{BookInput, BookRequest, DownloadList, Group};
+        use libgen_engine::viewmodel::build_with_id;
+        let mut g = Group::new("G");
+        for i in 0..20 {
+            g.books.push(BookRequest::new(BookInput {
+                title: format!("Book {}", i),
+                authors: vec!["A".into()],
+                ..Default::default()
+            }));
+        }
+        let list = DownloadList {
+            title: "Big".into(),
+            settings: libgen_core::model::ListSettings::default(),
+            groups: vec![g],
+        };
+        let vm = build_with_id("big".into(), &list);
+
+        let mut app = AppState::new();
+        app.set_view(vm);
+        // Simulate a rendered viewport height of 10.
+        app.last_rects.book_table.height = 10;
+        assert_eq!(app.selected, 0);
+
+        // Shift-J (uppercase J) = page down.
+        let intent = app.on_input(key(KeyCode::Char('J')));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(
+            app.selected, 10,
+            "Shift-J should jump the selection down by one page (10 rows)"
+        );
+    }
+
+    #[test]
+    fn shift_k_moves_selection_page_up() {
+        use libgen_core::model::{BookInput, BookRequest, DownloadList, Group};
+        use libgen_engine::viewmodel::build_with_id;
+        let mut g = Group::new("G");
+        for i in 0..20 {
+            g.books.push(BookRequest::new(BookInput {
+                title: format!("Book {}", i),
+                authors: vec!["A".into()],
+                ..Default::default()
+            }));
+        }
+        let list = DownloadList {
+            title: "Big".into(),
+            settings: libgen_core::model::ListSettings::default(),
+            groups: vec![g],
+        };
+        let vm = build_with_id("big".into(), &list);
+
+        let mut app = AppState::new();
+        app.set_view(vm);
+        app.last_rects.book_table.height = 10;
+        app.selected = 15;
+
+        let intent = app.on_input(key(KeyCode::Char('K')));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(
+            app.selected, 5,
+            "Shift-K should jump the selection up by one page (10 rows)"
+        );
+    }
+
+    #[test]
+    fn shift_down_key_moves_selection_page_down() {
+        use crossterm::event::{
+            Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
+        };
+        use libgen_core::model::{BookInput, BookRequest, DownloadList, Group};
+        use libgen_engine::viewmodel::build_with_id;
+        let mut g = Group::new("G");
+        for i in 0..20 {
+            g.books.push(BookRequest::new(BookInput {
+                title: format!("Book {}", i),
+                authors: vec!["A".into()],
+                ..Default::default()
+            }));
+        }
+        let list = DownloadList {
+            title: "Big".into(),
+            settings: libgen_core::model::ListSettings::default(),
+            groups: vec![g],
+        };
+        let vm = build_with_id("big".into(), &list);
+
+        let mut app = AppState::new();
+        app.set_view(vm);
+        app.last_rects.book_table.height = 8;
+        assert_eq!(app.selected, 0);
+
+        let intent = app.on_input(Event::Key(KeyEvent {
+            code: KeyCode::Down,
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(
+            app.selected, 8,
+            "Shift-Down should jump the selection down by one page"
         );
     }
 

@@ -385,6 +385,7 @@ async fn dispatch_intent(
         Intent::OpenDetail { flat_index } => {
             app.modal = Some(Modal::Detail {
                 book_flat_index: flat_index,
+                selected: 0,
             });
         }
         Intent::OpenPicker { flat_index } => {
