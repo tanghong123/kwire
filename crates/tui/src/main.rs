@@ -18,6 +18,7 @@ mod theme;
 mod ui;
 
 use std::io;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -36,7 +37,7 @@ use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::app::AppState;
+use crate::app::{AppState, Modal};
 use crate::guard::TerminalGuard;
 use crate::intent::Intent;
 
@@ -149,7 +150,44 @@ async fn run_loop(
                 match intent {
                     Intent::Quit => break,
                     Intent::Command(line) => {
-                        handle_command(&line, app);
+                        if handle_command(&line, app) {
+                            break;
+                        }
+                    }
+                    Intent::OpenDetail { flat_index } => {
+                        app.modal = Some(Modal::Detail { book_flat_index: flat_index });
+                    }
+                    Intent::OpenPicker { flat_index } => {
+                        app.modal = Some(Modal::Picker { book_flat_index: flat_index, selected: 0 });
+                    }
+                    Intent::OpenHelp => {
+                        app.modal = Some(Modal::Help);
+                    }
+                    Intent::OpenFile(path) => {
+                        let _ = std::process::Command::new("open")
+                            .arg(&path)
+                            .spawn();
+                    }
+                    Intent::RevealFile(path) => {
+                        let parent = Path::new(&path)
+                            .parent()
+                            .unwrap_or(Path::new("."))
+                            .to_owned();
+                        let _ = std::process::Command::new("open")
+                            .arg("-R")
+                            .arg(&path)
+                            .spawn()
+                            .or_else(|_| {
+                                std::process::Command::new("open")
+                                    .arg(&parent)
+                                    .spawn()
+                            });
+                    }
+                    Intent::Pause { .. } => {
+                        // Stage 3 stub: engine call not yet wired.
+                    }
+                    Intent::Cancel { .. } => {
+                        // Stage 3 stub: engine call not yet wired.
                     }
                     Intent::Redraw
                     | Intent::Select { .. }
@@ -173,9 +211,28 @@ async fn run_loop(
     Ok(())
 }
 
-/// Minimal command dispatcher for Stage 2 (`:quit`, `:help`, `:import`).
-fn handle_command(line: &str, _app: &mut AppState) {
+/// Command-line dispatcher (`:` commands per TUI.md §6). Returns `true` when the
+/// command requests a graceful exit (`:quit`/`:q`).
+///
+/// The engine-backed commands (`:import`, `:add`, `:open`, `:requery`,
+/// `:pause-all`) are recognized and logged here; their orchestrator wiring lands
+/// when the multi-list engine driver is mounted. The pure UI commands
+/// (`:settings`, `:help`, `:quit`) take effect immediately.
+fn handle_command(line: &str, app: &mut AppState) -> bool {
     let line = line.trim();
     info!("command: {:?}", line);
-    // Full command parsing (`:import`, `:add`, `:requery`, …) is Stage 3.
+    let mut parts = line.split_whitespace();
+    let cmd = parts.next().unwrap_or("");
+    match cmd {
+        "quit" | "q" => return true,
+        "settings" => app.modal = Some(Modal::Settings),
+        "help" => app.modal = Some(Modal::Help),
+        "import" | "add" | "open" | "requery" | "pause-all" => {
+            // Recognized; engine wiring lands with the multi-list driver.
+            info!("command {:?} recognized (engine wiring pending)", cmd);
+        }
+        "" => {}
+        other => tracing::warn!("unknown command: {:?}", other),
+    }
+    false
 }

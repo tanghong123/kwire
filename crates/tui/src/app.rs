@@ -6,6 +6,7 @@
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use libgen_engine::{ViewBook, ViewGroup, ViewModel};
+use ratatui::layout::Rect;
 
 use crate::intent::Intent;
 
@@ -64,6 +65,46 @@ impl StatusFilter {
 }
 
 // ---------------------------------------------------------------------------
+// Modal
+// ---------------------------------------------------------------------------
+
+/// Overlay modals that take over keyboard input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Modal {
+    /// "Choose a copy" variation picker.
+    Picker {
+        book_flat_index: usize,
+        /// The picker's own selection index (row within the variation list).
+        selected: usize,
+    },
+    /// Book detail + history.
+    Detail { book_flat_index: usize },
+    /// Settings key-value editor.
+    Settings,
+    /// Full help screen.
+    Help,
+}
+
+// ---------------------------------------------------------------------------
+// LastRects — stores panel Rects from the last render for mouse hit-testing
+// ---------------------------------------------------------------------------
+
+/// Rects from the most-recent render pass; used for mouse hit-testing.
+/// All fields default to `Rect::default()` (zero-sized, at origin).
+#[derive(Debug, Clone, Default)]
+pub struct LastRects {
+    pub list_strip: Rect,
+    pub filter_row: Rect,
+    pub book_table: Rect,
+    pub activity: Rect,
+    pub hint_bar: Rect,
+    /// `(row_rect, flat_index)` for each rendered book row.
+    pub book_rows: Vec<(Rect, usize)>,
+    /// `(chip_rect, StatusFilter)` for each rendered filter chip.
+    pub filter_chips: Vec<(Rect, StatusFilter)>,
+}
+
+// ---------------------------------------------------------------------------
 // AppState
 // ---------------------------------------------------------------------------
 
@@ -93,6 +134,21 @@ pub struct AppState {
 
     /// Command-line mode: if `Some(_)` the hint bar is replaced by an edit field.
     pub command_buf: Option<String>,
+
+    /// Active overlay modal, if any.
+    pub modal: Option<Modal>,
+
+    /// Activity pane scroll offset (when focus == Activity).
+    pub activity_selected: usize,
+
+    /// Rects from the most-recent render pass (for mouse hit-testing).
+    pub last_rects: LastRects,
+
+    /// Which settings row is selected in the Settings modal.
+    pub settings_selected: usize,
+
+    /// Inline edit buffer for the Settings modal.
+    pub settings_edit: Option<String>,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -118,6 +174,11 @@ impl AppState {
             activity_expanded: true,
             tick: 0,
             command_buf: None,
+            modal: None,
+            activity_selected: 0,
+            last_rects: LastRects::default(),
+            settings_selected: 0,
+            settings_edit: None,
         }
     }
 
@@ -144,6 +205,11 @@ impl AppState {
             return self.handle_command_input(ev);
         }
 
+        // If a modal is open, route input there.
+        if self.modal.is_some() {
+            return self.handle_modal_input(ev);
+        }
+
         match ev {
             // ---------------------------------------------------------------
             // Keyboard
@@ -158,11 +224,17 @@ impl AppState {
                 match code {
                     KeyCode::Char('q') | KeyCode::Esc => Intent::Quit,
                     KeyCode::Down | KeyCode::Char('j') => {
-                        self.move_selection(1);
+                        match self.focus {
+                            Focus::List => self.move_selection(1),
+                            Focus::Activity => self.scroll_activity(1),
+                        }
                         Intent::Redraw
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
-                        self.move_selection_up();
+                        match self.focus {
+                            Focus::List => self.move_selection_up(),
+                            Focus::Activity => self.scroll_activity_up(),
+                        }
                         Intent::Redraw
                     }
                     KeyCode::Tab => {
@@ -211,6 +283,80 @@ impl AppState {
                         self.command_buf = Some(String::new());
                         Intent::Redraw
                     }
+                    KeyCode::Enter => {
+                        if let Some(fb) = self.flat.get(self.selected) {
+                            if fb.book.discovery == "needs_selection" {
+                                Intent::OpenPicker {
+                                    flat_index: self.selected,
+                                }
+                            } else {
+                                Intent::OpenDetail {
+                                    flat_index: self.selected,
+                                }
+                            }
+                        } else {
+                            Intent::Redraw
+                        }
+                    }
+                    KeyCode::Char('d') => Intent::OpenDetail {
+                        flat_index: self.selected,
+                    },
+                    KeyCode::Char('r') => {
+                        if let Some(fb) = self.flat.get(self.selected) {
+                            Intent::Retry {
+                                group_path: vec![fb.group_index],
+                                book_index: fb.book_index_in_group,
+                            }
+                        } else {
+                            Intent::Redraw
+                        }
+                    }
+                    KeyCode::Char('p') => {
+                        if let Some(fb) = self.flat.get(self.selected) {
+                            Intent::Pause {
+                                group_path: vec![fb.group_index],
+                                book_index: fb.book_index_in_group,
+                            }
+                        } else {
+                            Intent::Redraw
+                        }
+                    }
+                    KeyCode::Char('c') => {
+                        if let Some(fb) = self.flat.get(self.selected) {
+                            Intent::Cancel {
+                                group_path: vec![fb.group_index],
+                                book_index: fb.book_index_in_group,
+                            }
+                        } else {
+                            Intent::Redraw
+                        }
+                    }
+                    KeyCode::Char('o') => {
+                        if let Some(fb) = self.flat.get(self.selected) {
+                            if let Some(path) =
+                                fb.book.versions.iter().find_map(|v| v.output_path.clone())
+                            {
+                                return Intent::OpenFile(path);
+                            }
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Char('R') => {
+                        if let Some(fb) = self.flat.get(self.selected) {
+                            if let Some(path) =
+                                fb.book.versions.iter().find_map(|v| v.output_path.clone())
+                            {
+                                return Intent::RevealFile(path);
+                            }
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Char('?') => Intent::OpenHelp,
+                    KeyCode::Left | KeyCode::Right => Intent::Redraw,
+                    KeyCode::Char('a') => {
+                        // Request all preferred format variations — UI-only stub for Stage 3.
+                        Intent::Redraw
+                    }
                     _ => Intent::Redraw,
                 }
             }
@@ -220,15 +366,58 @@ impl AppState {
             // ---------------------------------------------------------------
             Event::Mouse(me) => match me.kind {
                 MouseEventKind::ScrollDown => {
-                    self.move_selection(1);
+                    // Wheel scrolls whichever pane holds focus (§6).
+                    match self.focus {
+                        Focus::List => self.move_selection(1),
+                        Focus::Activity => self.scroll_activity(1),
+                    }
                     Intent::Redraw
                 }
                 MouseEventKind::ScrollUp => {
-                    self.move_selection_up();
+                    match self.focus {
+                        Focus::List => self.move_selection_up(),
+                        Focus::Activity => self.scroll_activity_up(),
+                    }
                     Intent::Redraw
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    // Hit-testing is Stage 3 (needs the last-frame Rects).
+                    let col = me.column;
+                    let row = me.row;
+
+                    // Hit-test book rows.
+                    let book_rows = self.last_rects.book_rows.clone();
+                    for (rect, flat_index) in &book_rows {
+                        if col >= rect.x
+                            && col < rect.x + rect.width
+                            && row >= rect.y
+                            && row < rect.y + rect.height
+                        {
+                            self.selected = *flat_index;
+                            return Intent::Redraw;
+                        }
+                    }
+
+                    // Hit-test filter chips.
+                    let filter_chips = self.last_rects.filter_chips.clone();
+                    for (rect, filter) in &filter_chips {
+                        if col >= rect.x
+                            && col < rect.x + rect.width
+                            && row >= rect.y
+                            && row < rect.y + rect.height
+                        {
+                            self.filter = *filter;
+                            self.rebuild_flat();
+                            return Intent::Redraw;
+                        }
+                    }
+
+                    // Hit-test activity header to toggle expand.
+                    let act = self.last_rects.activity;
+                    if col >= act.x && col < act.x + act.width && row == act.y {
+                        self.activity_expanded = !self.activity_expanded;
+                        return Intent::Redraw;
+                    }
+
                     Intent::Redraw
                 }
                 _ => Intent::Redraw,
@@ -236,6 +425,157 @@ impl AppState {
 
             Event::Resize(_, _) => Intent::Redraw,
             _ => Intent::Redraw,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Modal input routing
+    // -----------------------------------------------------------------------
+
+    fn handle_modal_input(&mut self, ev: Event) -> Intent {
+        let modal = match &self.modal {
+            Some(m) => m.clone(),
+            None => return Intent::Redraw,
+        };
+
+        match &modal {
+            Modal::Picker {
+                book_flat_index,
+                selected,
+            } => {
+                let flat_index = *book_flat_index;
+                let sel = *selected;
+                match ev {
+                    Event::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Esc => {
+                            self.modal = None;
+                            Intent::Redraw
+                        }
+                        KeyCode::Enter => {
+                            // Select the chosen variation.
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                if let Some(v) = fb.book.versions.get(sel) {
+                                    let md5 = v.md5.clone();
+                                    self.modal = None;
+                                    return Intent::Select {
+                                        group_path: vec![fb.group_index],
+                                        book_index: fb.book_index_in_group,
+                                        md5,
+                                    };
+                                }
+                            }
+                            self.modal = None;
+                            Intent::Redraw
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            let max = self
+                                .flat
+                                .get(flat_index)
+                                .map(|fb| fb.book.versions.len().saturating_sub(1))
+                                .unwrap_or(0);
+                            let new_sel = (sel + 1).min(max);
+                            self.modal = Some(Modal::Picker {
+                                book_flat_index: flat_index,
+                                selected: new_sel,
+                            });
+                            Intent::Redraw
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            let new_sel = sel.saturating_sub(1);
+                            self.modal = Some(Modal::Picker {
+                                book_flat_index: flat_index,
+                                selected: new_sel,
+                            });
+                            Intent::Redraw
+                        }
+                        KeyCode::Char('a') => {
+                            // Request all preferred format variations — stub.
+                            Intent::Redraw
+                        }
+                        _ => Intent::Redraw,
+                    },
+                    _ => Intent::Redraw,
+                }
+            }
+
+            Modal::Detail { book_flat_index } => {
+                let flat_index = *book_flat_index;
+                match ev {
+                    Event::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Esc => {
+                            self.modal = None;
+                            Intent::Redraw
+                        }
+                        KeyCode::Char('o') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                if let Some(path) =
+                                    fb.book.versions.iter().find_map(|v| v.output_path.clone())
+                                {
+                                    return Intent::OpenFile(path);
+                                }
+                            }
+                            Intent::Redraw
+                        }
+                        KeyCode::Char('R') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                if let Some(path) =
+                                    fb.book.versions.iter().find_map(|v| v.output_path.clone())
+                                {
+                                    return Intent::RevealFile(path);
+                                }
+                            }
+                            Intent::Redraw
+                        }
+                        KeyCode::Char('r') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                return Intent::Retry {
+                                    group_path: vec![fb.group_index],
+                                    book_index: fb.book_index_in_group,
+                                };
+                            }
+                            Intent::Redraw
+                        }
+                        _ => Intent::Redraw,
+                    },
+                    _ => Intent::Redraw,
+                }
+            }
+
+            Modal::Settings => match ev {
+                Event::Key(KeyEvent { code, .. }) => match code {
+                    KeyCode::Esc => {
+                        self.modal = None;
+                        self.settings_edit = None;
+                        Intent::Redraw
+                    }
+                    KeyCode::Enter => {
+                        // Commit inline edit — stub for Stage 3.
+                        self.settings_edit = None;
+                        Intent::Redraw
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.settings_selected = self.settings_selected.saturating_add(1);
+                        Intent::Redraw
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.settings_selected = self.settings_selected.saturating_sub(1);
+                        Intent::Redraw
+                    }
+                    _ => Intent::Redraw,
+                },
+                _ => Intent::Redraw,
+            },
+
+            Modal::Help => match ev {
+                Event::Key(KeyEvent { code, .. }) => match code {
+                    KeyCode::Esc | KeyCode::Char('?') => {
+                        self.modal = None;
+                        Intent::Redraw
+                    }
+                    _ => Intent::Redraw,
+                },
+                _ => Intent::Redraw,
+            },
         }
     }
 
@@ -261,6 +601,31 @@ impl AppState {
     fn move_selection_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
+        }
+    }
+
+    /// Number of in-flight (downloading) variations across the filtered list —
+    /// the rows the Activity pane scrolls through.
+    fn activity_row_count(&self) -> usize {
+        self.flat
+            .iter()
+            .flat_map(|fb| fb.book.versions.iter())
+            .filter(|v| v.state == "downloading")
+            .count()
+    }
+
+    fn scroll_activity(&mut self, delta: usize) {
+        let n = self.activity_row_count();
+        if n == 0 {
+            self.activity_selected = 0;
+            return;
+        }
+        self.activity_selected = (self.activity_selected + delta).min(n - 1);
+    }
+
+    fn scroll_activity_up(&mut self) {
+        if self.activity_selected > 0 {
+            self.activity_selected -= 1;
         }
     }
 
