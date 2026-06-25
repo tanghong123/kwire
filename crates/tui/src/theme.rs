@@ -18,6 +18,7 @@ pub const C_FAINT: Color = Color::Rgb(0x5c, 0x57, 0x50); // faint / separators
 pub const C_BG: Color = Color::Reset; // background (terminal default)
 pub const C_PANEL: Color = Color::Reset; // panel background (terminal default)
 pub const C_SELECTED: Color = Color::Rgb(0x1b, 0x1a, 0x14); // selected row
+pub const C_BACKDROP: Color = Color::Rgb(0x12, 0x11, 0x0f); // modal dim overlay
 
 // ---------------------------------------------------------------------------
 // Convenience style constructors
@@ -70,6 +71,31 @@ pub fn progress_bar(pct: u32, width: usize) -> String {
     let filled = ((pct as usize) * width / 100).min(width);
     let empty = width - filled;
     format!("{}{}", "▰".repeat(filled), "▱".repeat(empty))
+}
+
+/// Color-code a MATCH score: green → amber → red by value.
+pub fn score_color(score: f64) -> Color {
+    if score >= 0.85 {
+        C_DONE
+    } else if score >= 0.60 {
+        C_NEEDS_YOU
+    } else {
+        C_FAILED
+    }
+}
+
+/// Color for a history-event `kind` string, keyed by common substrings.
+pub fn history_kind_color(kind: &str) -> Color {
+    let k = kind.to_ascii_lowercase();
+    if k.contains("done") || k.contains("download") || k.contains("match") {
+        C_DONE
+    } else if k.contains("fail") || k.contains("error") || k.contains("cancel") {
+        C_FAILED
+    } else if k.contains("start") || k.contains("resolv") || k.contains("queue") {
+        C_DOWNLOADING
+    } else {
+        C_DIM
+    }
 }
 
 /// Braille spinner frames, advanced by the tick counter.
