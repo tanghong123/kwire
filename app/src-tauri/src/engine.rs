@@ -38,6 +38,12 @@ use crate::{bridge, viewmodel};
 /// goal/state changes wake it immediately via the `Notify`.
 const IDLE_TICK: Duration = Duration::from_millis(750);
 
+/// Minimum spacing between in-session "completed-but-stuck download" reconciliation
+/// sweeps (see [`reconcile_inflight_sweep`]). The tick loop wakes often (≤750 ms,
+/// plus on every goal/state change), so this throttles the sweep to a modest
+/// cadence instead of re-walking every list on each wake.
+const RECONCILE_CADENCE: Duration = Duration::from_secs(30);
+
 /// One unit of reconciliation work the engine will perform: a single book and the
 /// transition it needs next.
 #[derive(Clone)]
@@ -129,6 +135,10 @@ pub trait EngineEmitter: Send + Sync + 'static {
     fn emit_event(&self, list_id: &str, shape: &DownloadList, ev: &Event);
     /// Emit a per-book state/goal change (`engine://book`).
     fn emit_book_state(&self, payload: BookStatePayload);
+    /// Ask the front end to refresh the whole library view (`library://refresh`).
+    /// Used after a background job-state change the per-tick events don't cover —
+    /// e.g. the in-session completed-but-stuck reconciliation flips a job to Done.
+    fn emit_refresh(&self) {}
 }
 
 /// The production emitter: forwards engine events to the front end as the same
@@ -177,6 +187,10 @@ impl EngineEmitter for TauriEmitter {
 
     fn emit_book_state(&self, payload: BookStatePayload) {
         let _ = self.app.emit("engine://book", payload);
+    }
+
+    fn emit_refresh(&self) {
+        let _ = self.app.emit("library://refresh", ());
     }
 }
 
@@ -228,6 +242,13 @@ async fn run_engine<E: EngineEmitter>(handles: EngineHandles, emitter: E) {
     let dl_rx = Arc::new(Mutex::new(dl_rx));
     let dl_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
+    // In-session reconciliation cadence: a completed-but-stuck download (its
+    // `Progress::Done` lost to an edit/re-query race) is otherwise frozen in the
+    // downloading view until relaunch. Sweep all lists every `RECONCILE_CADENCE`
+    // and promote any whose file is complete + md5-verifies. First sweep runs on
+    // the first tick (`Instant::now() - cadence`).
+    let mut last_reconcile = std::time::Instant::now() - RECONCILE_CADENCE;
+
     loop {
         // Reconcile the pool size up to the current setting: GROW by spawning
         // workers here (a worker retires itself when the target drops — see
@@ -248,6 +269,13 @@ async fn run_engine<E: EngineEmitter>(handles: EngineHandles, emitter: E) {
             ));
         }
         tick(&handles, &emitter, &gate, &inflight, &dl_tx).await;
+        // In-session "completed-but-stuck download" reconciliation, throttled to
+        // `RECONCILE_CADENCE` (the loop wakes far more often). Cheap when idle: for
+        // a settled list the worklist is empty and no file is hashed.
+        if last_reconcile.elapsed() >= RECONCILE_CADENCE {
+            last_reconcile = std::time::Instant::now();
+            reconcile_inflight_sweep(&handles, &emitter, &inflight).await;
+        }
         // WAIT: woken by a goal/state change or a finished worker, else idle tick.
         tokio::select! {
             _ = handles.engine_wake.notified() => {}
@@ -339,6 +367,43 @@ async fn tick<E: EngineEmitter>(
             // book is now downloadable): wake the driver to re-plan promptly.
             wake.notify_one();
         });
+    }
+}
+
+/// In-session sweep for **stuck (not-Done) downloads**: across every loaded list,
+/// reuse [`commands::reconcile_completed_inflight`] (the SAME judgement the startup
+/// integrity scan uses) to fix any in-flight variation that has NO live transport:
+/// a complete file → `Done`, a partial/absent file → re-queued to resume, and one
+/// over the attempt cap → `Failed`.
+///
+/// LIVENESS AUTHORITY: the engine's `inflight` set is the source of truth for what
+/// is genuinely mid-download. We snapshot the md5s it holds (a download `BookKey`
+/// carries `Some(md5)`) and pass them as the live set, so a slow-but-alive transfer
+/// is never touched. If any list changed, ask the front end to refresh so the
+/// reconciled book updates live (no relaunch). Cheap when nothing is stuck: a
+/// settled list yields an empty worklist and hashes no files.
+async fn reconcile_inflight_sweep<E: EngineEmitter>(
+    handles: &Arc<EngineHandles>,
+    emitter: &Arc<E>,
+    inflight: &Arc<Mutex<std::collections::HashSet<BookKey>>>,
+) {
+    let arcs = {
+        let lib = handles.library.lock().await;
+        lib.all_arcs()
+    };
+    // Snapshot the live download md5s (a download key is `(.., Some(md5))`).
+    let live_md5s: std::collections::HashSet<String> = {
+        let guard = inflight.lock().await;
+        guard.iter().filter_map(|k| k.3.clone()).collect()
+    };
+    let mut fixed = 0usize;
+    for (_, orch) in &arcs {
+        fixed +=
+            commands::reconcile_completed_inflight(orch, &live_md5s, "engine in-session sweep")
+                .await;
+    }
+    if fixed > 0 {
+        emitter.emit_refresh();
     }
 }
 

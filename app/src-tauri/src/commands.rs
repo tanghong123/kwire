@@ -1800,6 +1800,127 @@ pub fn resume_on_launch(state: &AppState, cfg: &Config) {
     }
 }
 
+/// Max download attempts a sessionless stuck variation may be re-queued before the
+/// reconciliation gives up on it and marks it `Failed`. Stops a dead source from
+/// thrashing (re-queue → fail-fast → re-queue …) forever; the failed copy becomes a
+/// visible, user-retryable state instead.
+pub const RECONCILE_MAX_ATTEMPTS: u32 = 3;
+
+/// Session-gated reconciliation of every **in-flight-but-not-Done** variation in
+/// ONE list. The `live_md5s` set is the LIVENESS AUTHORITY: a variation whose md5
+/// has an in-flight transport in the engine's `inflight` set is NEVER touched (no
+/// false kill of a slow-but-alive transfer). On startup nothing is live, so the
+/// set is empty and every stuck variation qualifies.
+///
+/// For each SESSIONLESS in-flight variation (its persisted job says
+/// `Downloading`/`Resolving`/`Verifying`/`Pending` but no transport is running):
+///   * final file present + size matches (== `total_bytes` when known) + content
+///     md5 verifies → **Done** (the lost `Progress::Done` reconciled in);
+///   * file partial or absent → **re-queue** (`state → Pending`, `attempts += 1`,
+///     KEEPING `resume_offset`/`.part`) so the engine's drive loop resumes it. We
+///     never call `begin_download` here — we only fix persisted state;
+///   * once a variation's `attempts` has already reached
+///     [`RECONCILE_MAX_ATTEMPTS`] without completing → **Failed** (stop thrashing).
+///
+/// Returns the number of variations whose persisted state changed. Shared by the
+/// startup integrity scan and the running engine's tick loop. CHEAP when idle: a
+/// settled list yields an empty worklist and hashes nothing; a file is hashed only
+/// when a sessionless in-flight job actually has a final file on disk. Hashing runs
+/// OFF the per-list lock. `context` distinguishes the call site in the log line.
+pub async fn reconcile_completed_inflight(
+    orch: &Arc<Mutex<Orchestrator>>,
+    live_md5s: &std::collections::HashSet<String>,
+    context: &str,
+) -> usize {
+    let candidates = {
+        let g = orch.lock().await;
+        g.inflight_variations().unwrap_or_default()
+    };
+    let mut fixed = 0usize;
+    for v in candidates {
+        // LIVENESS GATE: a variation with a live in-flight transport is never
+        // touched, even if quiet — the engine owns it.
+        if live_md5s.contains(&v.md5) {
+            continue;
+        }
+        let md5 = v.md5.as_str();
+
+        // Is the final file complete (present, full size, md5-verified)? Hash only
+        // when there's a recorded path AND its size matches — off the lock.
+        let mut complete = false;
+        if let Some(output_path) = v.output_path.as_deref() {
+            let path = std::path::Path::new(output_path);
+            if let Ok(meta) = std::fs::metadata(path) {
+                let size_ok = v.total_bytes.map(|t| meta.len() == t).unwrap_or(true);
+                if size_ok {
+                    let actual = libgen_core::download::md5_of_file(path).await;
+                    complete = matches!(actual, Ok(h) if h.eq_ignore_ascii_case(md5));
+                }
+            }
+        }
+
+        if complete {
+            let promoted = {
+                let mut g = orch.lock().await;
+                g.promote_variation(&v.group_path, v.book_index, md5)
+                    .unwrap_or(false)
+            };
+            if promoted {
+                fixed += 1;
+                tracing::info!(
+                    md5 = %md5,
+                    path = v.output_path.as_deref().unwrap_or(""),
+                    context,
+                    "reconciled completed-but-stuck download — promoted sessionless in-flight job to Done"
+                );
+            }
+            continue;
+        }
+
+        // NOT complete and NOT live: the file is partial/absent and no transport is
+        // running. Re-queue it (resuming from the `.part`) unless it has already
+        // burned through the attempt cap, in which case fail it so a dead source
+        // stops thrashing and becomes user-retryable.
+        if v.attempts >= RECONCILE_MAX_ATTEMPTS {
+            let failed = {
+                let mut g = orch.lock().await;
+                g.fail_inflight_variation(
+                    &v.group_path,
+                    v.book_index,
+                    md5,
+                    "download did not complete after repeated attempts — source may be unavailable; retry manually",
+                )
+                .unwrap_or(false)
+            };
+            if failed {
+                fixed += 1;
+                tracing::warn!(
+                    md5 = %md5,
+                    attempts = v.attempts,
+                    context,
+                    "reconciled stuck download — attempt cap reached, marked Failed (re-queue thrash guard)"
+                );
+            }
+        } else {
+            let requeued = {
+                let mut g = orch.lock().await;
+                g.requeue_variation(&v.group_path, v.book_index, md5)
+                    .unwrap_or(false)
+            };
+            if requeued {
+                fixed += 1;
+                tracing::info!(
+                    md5 = %md5,
+                    attempts = v.attempts + 1,
+                    context,
+                    "reconciled stuck download — no live session, re-queued to resume from partial"
+                );
+            }
+        }
+    }
+    fixed
+}
+
 /// Spawn the background **cover backfill** loop: periodically look up missing book
 /// covers (Open Library), cache a local thumbnail under `<list>/thumbnails/`, and
 /// point the book's cover at that local file — all OFF the orchestrator lock (a
@@ -1817,7 +1938,25 @@ pub fn spawn_download_verify(library: Arc<Mutex<Library>>, app: tauri::AppHandle
             lib.all_arcs()
         };
         let mut total = 0usize;
+        let mut reconciled = 0usize;
+        // At startup NOTHING is live (the engine task hasn't dispatched any
+        // transport yet), so the liveness set is empty: every stuck variation
+        // qualifies for reconciliation.
+        let live_md5s = std::collections::HashSet::new();
         for (_, orch) in arcs {
+            // 0. Session-gated reconciliation of in-flight-but-not-Done variations
+            //    (the inverse of the demotions below). A download can finish — the
+            //    `.part` promoted to the full-size `output_path` — yet the job stay
+            //    in-flight with stale bytes because the `Progress::Done` reconciliation
+            //    was lost (it raced with an edit/re-query). Reuse the SAME judgement
+            //    the running engine uses in-session (`reconcile_completed_inflight`):
+            //    complete file → Done; partial/absent → re-queue (resume); over the
+            //    attempt cap → Failed. This runs FIRST so a reconciled-Done job is
+            //    never re-downloaded; the engine is paused at launch anyway (every goal
+            //    Idle), so a re-queued variation simply waits for a Start.
+            let n = reconcile_completed_inflight(&orch, &live_md5s, "startup integrity scan").await;
+            reconciled += n;
+            total += n;
             // 1. Existence (cheap, under a brief lock): a Done variation with no
             //    file on disk → Failed ("data lost").
             total += {
@@ -1859,7 +1998,9 @@ pub fn spawn_download_verify(library: Arc<Mutex<Library>>, app: tauri::AppHandle
         if total > 0 {
             tracing::warn!(
                 count = total,
-                "startup integrity scan: demoted Done variations (missing file or md5 mismatch)"
+                reconciled,
+                demoted = total - reconciled,
+                "startup integrity scan: changed variations (reconciled completed-but-stuck + demoted missing/mismatched)"
             );
             use tauri::Emitter;
             let _ = app.emit("library://refresh", ());

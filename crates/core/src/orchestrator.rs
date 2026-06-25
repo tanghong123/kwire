@@ -98,6 +98,22 @@ pub struct PlannedDownload {
     pub destination: PathBuf,
 }
 
+/// One in-flight (not-yet-`Done`) variation surfaced by
+/// [`Orchestrator::inflight_variations`] for the session-gated reconciliation to
+/// judge. Carries everything the judgement needs without holding the per-list
+/// lock: the tree position, the variation md5, its recorded final-file path (when
+/// any), the expected total size, and how many download attempts it has already
+/// consumed (the re-queue cap reads this).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InflightVariation {
+    pub group_path: Vec<usize>,
+    pub book_index: usize,
+    pub md5: String,
+    pub output_path: Option<String>,
+    pub total_bytes: Option<u64>,
+    pub attempts: u32,
+}
+
 /// One finished variation whose file is NOT at its current correct destination,
 /// plus where to take it from. Computed by `compute_relocations` and shared by the
 /// "Reorganize needed?" check and the relocate action so the two never disagree.
@@ -2019,6 +2035,183 @@ impl Orchestrator {
         Ok(changed)
     }
 
+    /// Every variation whose job is **in-flight but not yet Done** — state ∈
+    /// {`Pending`, `Resolving`, `Downloading`, `Verifying`} — as the read-only
+    /// worklist the session-gated reconciliation judges (off-lock). Unlike
+    /// `done_variations`, entries with NO `output_path` are INCLUDED (a stuck job
+    /// whose file is absent must be re-queued), and `attempts` is carried so the
+    /// reconciliation can cap re-queue thrash. `Pending` is included because
+    /// `resume_on_launch` rewinds every interrupted in-flight job to `Pending`
+    /// BEFORE the startup scan runs (see `reset_inflight_for_resume`), so a
+    /// real-world stuck job presents as `Pending`.
+    pub fn inflight_variations(&self) -> Result<Vec<InflightVariation>> {
+        let list = self.snapshot()?;
+        let mut out = Vec::new();
+        walk(&list.groups, &mut Vec::new(), &mut |path, bi, req| {
+            for c in &req.candidates {
+                let Some(job) = c.job.as_ref() else { continue };
+                let in_flight = matches!(
+                    job.state,
+                    JobState::Pending
+                        | JobState::Resolving
+                        | JobState::Downloading
+                        | JobState::Verifying
+                );
+                if !in_flight {
+                    continue;
+                }
+                out.push(InflightVariation {
+                    group_path: path.to_vec(),
+                    book_index: bi,
+                    md5: c.md5.clone(),
+                    output_path: job
+                        .output_path
+                        .as_deref()
+                        .filter(|p| !p.is_empty())
+                        .map(str::to_owned),
+                    total_bytes: job.total_bytes,
+                    attempts: job.attempts,
+                });
+            }
+        });
+        Ok(out)
+    }
+
+    /// Re-queue ONE sessionless in-flight variation (by md5) for a fresh download
+    /// pass: `state → Pending` (so the engine's drive loop picks it up and resumes)
+    /// with `attempts += 1`. The `.part`/`resume_offset` are KEPT so the ranged
+    /// downloader continues from the partial rather than refetching. Clears the
+    /// stale live readout. Only acts on a job currently in-flight; returns whether
+    /// it changed.
+    pub fn requeue_variation(
+        &mut self,
+        group_path: &[usize],
+        book_index: usize,
+        md5: &str,
+    ) -> Result<bool> {
+        let mut req = match self.request_at(group_path, book_index)? {
+            Some(r) => r,
+            None => return Ok(false),
+        };
+        let mut changed = false;
+        if let Some(cand) = req.candidates.iter_mut().find(|c| c.md5 == md5) {
+            if let Some(job) = cand.job.as_mut() {
+                let in_flight = matches!(
+                    job.state,
+                    JobState::Pending
+                        | JobState::Resolving
+                        | JobState::Downloading
+                        | JobState::Verifying
+                );
+                if in_flight {
+                    job.state = JobState::Pending;
+                    job.attempts = job.attempts.saturating_add(1);
+                    job.speed_bps = None;
+                    job.eta_secs = None;
+                    // resume_offset + the on-disk `.part` are intentionally KEPT.
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            req.status = roll_up_status(&req);
+            self.store
+                .update_request(self.list_id, group_path, book_index, &req)?;
+        }
+        Ok(changed)
+    }
+
+    /// Fail ONE sessionless in-flight variation (by md5) with `reason` — the
+    /// re-queue cap (a dead source that never completes) routes here so it becomes
+    /// a visible, user-retryable `Failed` state instead of thrashing forever. Only
+    /// acts on a job currently in-flight; returns whether it changed.
+    pub fn fail_inflight_variation(
+        &mut self,
+        group_path: &[usize],
+        book_index: usize,
+        md5: &str,
+        reason: &str,
+    ) -> Result<bool> {
+        let mut req = match self.request_at(group_path, book_index)? {
+            Some(r) => r,
+            None => return Ok(false),
+        };
+        let mut changed = false;
+        if let Some(cand) = req.candidates.iter_mut().find(|c| c.md5 == md5) {
+            if let Some(job) = cand.job.as_mut() {
+                let in_flight = matches!(
+                    job.state,
+                    JobState::Pending
+                        | JobState::Resolving
+                        | JobState::Downloading
+                        | JobState::Verifying
+                );
+                if in_flight {
+                    job.state = JobState::Failed;
+                    job.last_error = Some(reason.to_string());
+                    job.speed_bps = None;
+                    job.eta_secs = None;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            req.status = roll_up_status(&req);
+            self.store
+                .update_request(self.list_id, group_path, book_index, &req)?;
+        }
+        Ok(changed)
+    }
+
+    /// Promote ONE in-flight variation (by md5) to `Done` — the inverse of
+    /// [`Self::demote_variation`]. Used by the startup reconciliation when the
+    /// variation's `output_path` exists on disk at full size AND its content md5
+    /// has been verified (off-lock) to match the requested md5: the download
+    /// genuinely finished, only the `Done` reconciliation was lost. Marks
+    /// `state = Done`, `md5_verified = true`, `bytes_done = total` (when known),
+    /// keeps `output_path`, and clears the live speed/ETA readout. Returns
+    /// whether it changed.
+    pub fn promote_variation(
+        &mut self,
+        group_path: &[usize],
+        book_index: usize,
+        md5: &str,
+    ) -> Result<bool> {
+        let mut req = match self.request_at(group_path, book_index)? {
+            Some(r) => r,
+            None => return Ok(false),
+        };
+        let mut changed = false;
+        if let Some(cand) = req.candidates.iter_mut().find(|c| c.md5 == md5) {
+            if let Some(job) = cand.job.as_mut() {
+                let in_flight = matches!(
+                    job.state,
+                    JobState::Pending
+                        | JobState::Resolving
+                        | JobState::Downloading
+                        | JobState::Verifying
+                );
+                if in_flight {
+                    job.state = JobState::Done;
+                    job.md5_verified = true;
+                    if let Some(total) = job.total_bytes {
+                        job.bytes_done = total;
+                    }
+                    job.speed_bps = None;
+                    job.eta_secs = None;
+                    job.last_error = None;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            req.status = roll_up_status(&req);
+            self.store
+                .update_request(self.list_id, group_path, book_index, &req)?;
+        }
+        Ok(changed)
+    }
+
     /// Reset any in-flight (`Downloading`/`Resolving`/`Verifying`) variation jobs
     /// to `Pending` so a fresh `start_downloads` continues them after a restart
     /// (item 3, resume-on-launch). `resume_offset` is preserved so the ranged
@@ -2812,6 +3005,12 @@ impl Orchestrator {
             // match's `_ => None` arm handles it). Leg lifecycle is a UI concern.
             Progress::LegEnded { md5, .. } => md5.clone(),
         };
+        // Track whether this progress event actually landed on a current
+        // candidate. A `Done` that matches NO variation means the completion is
+        // being dropped — the candidate was cleared out from under it (an
+        // edit/re-query re-created the job), which is the root-cause race behind
+        // the "completed-but-stuck download" bug. Make that silent no-op visible.
+        let mut applied = false;
         for p in planned.iter().filter(|p| p.md5 == md5) {
             let mut req = match self.request_at(&p.group_path, p.book_index)? {
                 Some(r) => r,
@@ -2821,6 +3020,7 @@ impl Orchestrator {
                 Some(c) => c,
                 None => continue,
             };
+            applied = true;
             let ext = cand.extension.as_ref().map(|e| e.ext());
             let mut job = cand.job.clone().unwrap_or_default();
             // A chronicle entry for the meaningful lifecycle transitions (NOT the
@@ -3044,6 +3244,12 @@ impl Orchestrator {
                     None,
                 );
             }
+        }
+        if !applied && matches!(prog, Progress::Done { .. }) {
+            tracing::warn!(
+                md5 = %md5,
+                "Done received for md5 {md5} but no matching variation — completion dropped; likely an edit/re-query race"
+            );
         }
         Ok(())
     }
@@ -3962,6 +4168,196 @@ mod tests {
             "a Failed job is not re-demoted"
         );
         let _ = std::fs::remove_dir_all(&out);
+    }
+
+    /// Reconciliation: a download that finished on disk (full-size file at the
+    /// recorded `output_path`, content md5 matching the candidate) but whose job
+    /// is stuck in-flight (the lost `Progress::Done` — here `Downloading` with
+    /// stale bytes, exactly the live bug) is promoted to `Done`/`md5_verified`.
+    /// A size/md5 MISMATCH variation is left untouched (it'll resume normally).
+    #[tokio::test]
+    async fn inflight_completed_reconciliation_promotes_only_verified_full_size_files() {
+        let out = std::env::temp_dir().join(format!("lgdl-reconcile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+
+        // GOOD: finished file on disk, full size, content md5 == candidate md5,
+        // but the job is stuck Downloading at 50 of 90 bytes (the live symptom).
+        let good_path = out.join("good.epub");
+        let good_bytes = vec![7u8; 90];
+        std::fs::write(&good_path, &good_bytes).unwrap();
+        let good_md5 = crate::download::md5_hex(&good_bytes);
+
+        // BAD (size): file exists but is shorter than total_bytes → not complete.
+        let short_path = out.join("short.epub");
+        std::fs::write(&short_path, vec![7u8; 40]).unwrap();
+        let short_md5 = crate::download::md5_hex(&vec![7u8; 90]); // claims a 90-byte md5
+
+        // BAD (md5): file is full size but its content md5 differs from candidate.
+        let wrong_path = out.join("wrong.epub");
+        std::fs::write(&wrong_path, vec![9u8; 90]).unwrap();
+        let wrong_md5 = crate::download::md5_hex(&vec![1u8; 90]); // doesn't match content
+
+        let inflight_cand = |md5: &str, path: &std::path::Path, total: u64| Candidate {
+            md5: md5.to_string(),
+            title: "T".into(),
+            authors: vec![],
+            year: None,
+            publisher: None,
+            language: None,
+            pages: None,
+            extension: Some(Format::Epub),
+            size_bytes: None,
+            source_host: None,
+            cover_url: None,
+            score: 1.0,
+            job: Some(DownloadJob {
+                state: JobState::Downloading,
+                bytes_done: 50,
+                total_bytes: Some(total),
+                speed_bps: Some(1_600_000),
+                output_path: Some(path.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+        };
+        let book = |title: &str, md5: &str, path: &std::path::Path, total: u64| {
+            let mut b = BookRequest::new(BookInput {
+                title: title.into(),
+                ..Default::default()
+            });
+            b.status = RequestStatus::Downloading;
+            b.selected = Some(md5.to_string());
+            b.candidates = vec![inflight_cand(md5, path, total)];
+            b
+        };
+        let mut g = Group::new("Batch");
+        g.books.push(book("Good", &good_md5, &good_path, 90));
+        g.books.push(book("Short", &short_md5, &short_path, 90));
+        g.books.push(book("Wrong", &wrong_md5, &wrong_path, 90));
+        let list = DownloadList {
+            title: "L".into(),
+            settings: ListSettings::default(),
+            groups: vec![g],
+        };
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch = Orchestrator::new(store, &list, search, &out).unwrap();
+
+        // Worklist surfaces all three in-flight variations (each has an output_path).
+        let work = orch.inflight_variations().unwrap();
+        assert_eq!(
+            work.len(),
+            3,
+            "all in-flight variations with a path are listed"
+        );
+
+        // Drive the same gate the reconciliation applies (size + md5), off-lock.
+        let mut promoted = 0usize;
+        for v in work {
+            let output_path = v.output_path.clone().unwrap();
+            let path = std::path::Path::new(&output_path);
+            let size = std::fs::metadata(path).unwrap().len();
+            if v.total_bytes.map(|t| size != t).unwrap_or(false) {
+                continue; // size mismatch
+            }
+            let actual = crate::download::md5_of_file(path).await.unwrap();
+            if !actual.eq_ignore_ascii_case(&v.md5) {
+                continue; // md5 mismatch
+            }
+            if orch
+                .promote_variation(&v.group_path, v.book_index, &v.md5)
+                .unwrap()
+            {
+                promoted += 1;
+            }
+        }
+        assert_eq!(promoted, 1, "only the verified full-size file is promoted");
+
+        let snap = orch.snapshot().unwrap();
+        let job_of = |title: &str| {
+            snap.groups[0]
+                .books
+                .iter()
+                .find(|bk| bk.input.title == title)
+                .unwrap()
+                .candidates[0]
+                .job
+                .clone()
+                .unwrap()
+        };
+        let good = job_of("Good");
+        assert_eq!(good.state, JobState::Done, "verified file promoted to Done");
+        assert!(good.md5_verified, "md5_verified set");
+        assert_eq!(good.bytes_done, 90, "bytes_done reconciled to total");
+        assert_eq!(good.speed_bps, None, "live readout cleared");
+        assert_eq!(
+            good.output_path.as_deref(),
+            Some(good_path.to_string_lossy().as_ref()),
+            "output_path kept"
+        );
+        assert_eq!(
+            job_of("Short").state,
+            JobState::Downloading,
+            "size-mismatch variation left in-flight"
+        );
+        assert_eq!(
+            job_of("Wrong").state,
+            JobState::Downloading,
+            "md5-mismatch variation left in-flight"
+        );
+
+        // Idempotent: a now-Done job is no longer surfaced, and promote is a no-op.
+        assert_eq!(
+            orch.inflight_variations().unwrap().len(),
+            2,
+            "the promoted variation drops out of the worklist"
+        );
+        assert!(!orch.promote_variation(&[0], 0, &good_md5).unwrap());
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    /// Observability for the root-cause race: a `Progress::Done` whose md5
+    /// matches NO current variation is dropped (not applied) — apply_progress
+    /// returns Ok with no state change (and logs the warn). Sanity-checks that the
+    /// no-op path is reached without panicking and a real Done still applies.
+    #[tokio::test]
+    async fn apply_progress_done_for_unknown_md5_is_a_logged_no_op() {
+        use crate::queue::Progress;
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch = Orchestrator::new(store, &small_list(), search, "/books").unwrap();
+        let (tx, rx) = mpsc::channel(64);
+        let t = tokio::spawn(drain(rx));
+        orch.query_all(&tx).await.unwrap();
+        drop(tx);
+        let _ = t.await.unwrap();
+
+        let planned = orch.plan_downloads().unwrap();
+        // A Done for an md5 that is in no candidate/plan: silently dropped, but
+        // apply_progress must not error (it logs the completion-dropped warn).
+        orch.apply_progress(
+            &planned,
+            &Progress::Done {
+                md5: "f".repeat(32),
+                host: "libgen.li".into(),
+                path: std::path::PathBuf::from("/books/orphan.epub"),
+                bytes_written: 123,
+            },
+        )
+        .unwrap();
+        // Nothing in the tree flipped to Done off the orphan completion.
+        let snap = orch.snapshot().unwrap();
+        let any_done = snap.groups.iter().any(|g| {
+            g.books.iter().any(|b| {
+                b.candidates.iter().any(|c| {
+                    c.job
+                        .as_ref()
+                        .map(|j| j.state == JobState::Done)
+                        .unwrap_or(false)
+                })
+            })
+        });
+        assert!(!any_done, "an unknown-md5 Done changes no variation");
     }
 
     /// reorganize locates a finished file via its recorded `output_path` even when
