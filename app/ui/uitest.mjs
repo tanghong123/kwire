@@ -166,6 +166,22 @@ check("language pref: empty/None and match-title both resolve to the match-title
   if (ctx.LANGUAGES[0] !== "match-title") throw new Error("match-title must be the default (first) option");
 });
 
+check("i18n: t() resolves the active language, falling back en → key", () => {
+  const saved = ctx.LANG;
+  ctx.LANG = "zh";
+  if (ctx.t("status.done") !== "已完成") throw new Error("zh lookup failed: " + ctx.t("status.done"));
+  ctx.LANG = "en";
+  if (ctx.t("status.done") !== "Done") throw new Error("en lookup failed: " + ctx.t("status.done"));
+  if (ctx.t("no.such.key") !== "no.such.key") throw new Error("missing key must fall back to the key itself");
+  ctx.LANG = saved;
+});
+
+check("i18n: en and zh catalogs have identical key sets (no untranslated chrome)", () => {
+  const en = Object.keys(ctx.I18N.en).sort(), zh = Object.keys(ctx.I18N.zh).sort();
+  const enOnly = en.filter((k) => !(k in ctx.I18N.zh)), zhOnly = zh.filter((k) => !(k in ctx.I18N.en));
+  if (enOnly.length || zhOnly.length) throw new Error("catalog mismatch — en-only: [" + enOnly + "] zh-only: [" + zhOnly + "]");
+});
+
 check("visibleBooks returns the filtered books for keyboard nav", () => {
   ctx.LISTS = [listOf(reviewBook())]; ctx.CURRENT = "L1"; ctx.FILTER = "all"; ctx.FMT_FILTER = "";
   var vb = ctx.visibleBooks();

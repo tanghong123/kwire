@@ -738,6 +738,66 @@ function fmtLabel(f) {
 function pad(n) { return (n < 10 ? "0" : "") + n; }
 
 /* =====================================================================
+   i18n — UI-chrome localization (book titles/authors are NEVER translated).
+   Two surfaces:
+     • t(key)      — strings built in JS render functions; re-evaluated every
+                     render(), so a language switch re-translates them.
+     • [data-i18n] — the static HTML skeleton; applyStaticI18n() rewrites those
+                     nodes on load + on every language change.
+   Add a key to BOTH `en` and `zh`. t() falls back en → key, so a missing
+   translation degrades gracefully rather than blanking the UI.
+   ===================================================================== */
+var I18N = {
+  en: {
+    "side.library": "Library",
+    "empty.side": "No lists yet.",
+    "empty.title": "No lists yet",
+    "empty.sub": "Import a Markdown/JSON file, or add a book, to get started.",
+    "status.queued": "Queued", "status.active": "Downloading", "status.done": "Done",
+    "status.needs": "Needs you", "status.review": "Check download", "status.cantdl": "Cannot download",
+    "settings.perlist": "Per-list settings", "settings.app": "App settings",
+    "settings.mirrors": "Search mirrors", "settings.health": "Mirror health",
+    "settings.uilang": "App language"
+  },
+  zh: {
+    "side.library": "书库",
+    "empty.side": "暂无列表。",
+    "empty.title": "暂无列表",
+    "empty.sub": "导入 Markdown/JSON 文件，或添加一本书即可开始。",
+    "status.queued": "排队中", "status.active": "下载中", "status.done": "已完成",
+    "status.needs": "需要处理", "status.review": "检查下载", "status.cantdl": "无法下载",
+    "settings.perlist": "列表设置", "settings.app": "应用设置",
+    "settings.mirrors": "搜索镜像", "settings.health": "镜像状态",
+    "settings.uilang": "界面语言"
+  }
+};
+function detectLang() {
+  try { var s = localStorage.getItem("lang"); if (s === "en" || s === "zh") return s; } catch (e) {}
+  return (navigator.language || "en").toLowerCase().indexOf("zh") === 0 ? "zh" : "en";
+}
+var LANG = detectLang();
+try { document.documentElement.setAttribute("lang", LANG === "zh" ? "zh-Hans" : "en"); } catch (e) {}
+/* Translate one chrome key for the current language (en fallback, then the key). */
+function t(key) { var tb = I18N[LANG] || I18N.en; return (tb && tb[key]) || I18N.en[key] || key; }
+/* Rewrite the static HTML skeleton in place. Idempotent; safe to re-run. */
+function applyStaticI18n(root) {
+  var s = root || document;
+  s.querySelectorAll("[data-i18n]").forEach(function (el) { el.textContent = t(el.getAttribute("data-i18n")); });
+  s.querySelectorAll("[data-i18n-ph]").forEach(function (el) { el.setAttribute("placeholder", t(el.getAttribute("data-i18n-ph"))); });
+  s.querySelectorAll("[data-i18n-title]").forEach(function (el) { el.setAttribute("title", t(el.getAttribute("data-i18n-title"))); });
+}
+/* Switch language: persist, update <html lang>, re-translate static nodes, and
+   re-render so every t() in a render function re-evaluates. */
+function setUiLang(l) {
+  if (l !== "en" && l !== "zh") return;
+  LANG = l;
+  try { localStorage.setItem("lang", l); } catch (e) {}
+  document.documentElement.setAttribute("lang", l === "zh" ? "zh-Hans" : "en");
+  applyStaticI18n();
+  try { render(); } catch (e) {}
+}
+
+/* =====================================================================
    State + rendering
    ===================================================================== */
 var LISTS = [
@@ -1053,10 +1113,10 @@ function scheduleCoverRender() {
 /* Empty state: no lists yet (fresh app / fresh DB). Prompt to import. */
 function renderEmpty() {
   document.getElementById("sidebar").innerHTML =
-    '<div class="side-h">Library</div>' +
-    '<div style="padding:8px 10px;color:var(--text-faint);font-size:12px">No lists yet.</div>';
-  document.getElementById("listTitle").textContent = "No lists yet";
-  document.getElementById("listSub").textContent = "Import a Markdown/JSON file, or add a book, to get started.";
+    '<div class="side-h">' + esc(t("side.library")) + '</div>' +
+    '<div style="padding:8px 10px;color:var(--text-faint);font-size:12px">' + esc(t("empty.side")) + '</div>';
+  document.getElementById("listTitle").textContent = t("empty.title");
+  document.getElementById("listSub").textContent = t("empty.sub");
   document.getElementById("progBar").innerHTML = "";
   document.getElementById("progNum").textContent = "";
   document.getElementById("filters").innerHTML = "";
@@ -1108,7 +1168,7 @@ function renderSettings() {
   var html = "";
 
   // --- Per-list settings ---
-  html += '<div class="set-sec"><h3>Per-list settings</h3>';
+  html += '<div class="set-sec"><h3>' + esc(t("settings.perlist")) + '</h3>';
   html += '<div class="set-row"><div class="lab">Preferred formats<span class="hint">most-preferred first</span></div>' +
     '<div class="set-ctl"><div class="fmt-rank" id="fmtRank"></div></div></div>';
   html += '<div class="set-row"><div class="lab">Auto-download threshold<span class="hint">auto-download at/above this confidence</span></div>' +
@@ -1132,7 +1192,12 @@ function renderSettings() {
   html += '</div>';
 
   // --- App settings ---
-  html += '<div class="set-sec"><h3>App settings</h3>';
+  html += '<div class="set-sec"><h3>' + esc(t("settings.app")) + '</h3>';
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.uilang")) + '</div>' +
+    '<div class="set-ctl">' +
+    '<button class="tbtn" data-setlang="en">English' + (LANG === "en" ? " ✓" : "") + '</button> ' +
+    '<button class="tbtn" data-setlang="zh">中文（简体）' + (LANG === "zh" ? " ✓" : "") + '</button>' +
+    '</div></div>';
   html += '<div class="set-row"><div class="lab">Default download folder</div>' +
     '<div class="set-ctl"><input type="text" id="setOut" value="' + esc(APPCFG.out_dir) + '">' +
     '<button class="tbtn" data-action="choose-folder">Choose…</button></div></div>';
@@ -1147,14 +1212,14 @@ function renderSettings() {
   html += '</div>';
 
   // --- Search mirrors (read-only) ---
-  html += '<div class="set-sec"><h3>Search mirrors</h3>';
+  html += '<div class="set-sec"><h3>' + esc(t("settings.mirrors")) + '</h3>';
   html += '<div class="set-ctl" style="display:block">' +
     SEARCH_MIRRORS.map(function (h) { return '<span class="mirror-host">' + esc(h) + '</span>'; }).join("") +
     '<div class="mirror-note">Read-only — edit <code>mirrors.toml</code> to change search mirrors.</div></div>';
   html += '</div>';
 
   // --- Mirror health (live, from open-slum.org) ---
-  html += '<div class="set-sec"><h3>Mirror health' +
+  html += '<div class="set-sec"><h3>' + esc(t("settings.health")) +
     '<span class="hint">live availability via open-slum.org</span></h3>';
   html += '<div class="set-row"><div class="lab">Live mirror status</div>' +
     '<div class="set-ctl"><button class="tbtn" data-action="refresh-mirrors"' +
@@ -2181,6 +2246,7 @@ document.addEventListener("click", function (e) {
   }
   if (t.dataset.fmtshowall) { SHOW_ALL_FORMATS = !SHOW_ALL_FORMATS; renderFormatRank(); return; }
   if (t.dataset.toggleSet === "seq") { SETTINGS.seq_per_group = !SETTINGS.seq_per_group; renderSettings(); return; }
+  if (t.dataset.setlang) { setUiLang(t.dataset.setlang); renderSettings(); return; } // switch app language (live)
 
   if (t.dataset.replace) { // download the recommended copy, Trash the old on success
     var rp = t.dataset.replace.split(":"), rbk = bookById(rp[0]);
