@@ -440,8 +440,8 @@
   <div class="titlebar">
     <button class="tbtn" data-action="toggle-sidebar" id="sidebarBtn" title="Toggle sidebar" aria-label="Toggle sidebar">☰</button>
     <span class="spacer"></span>
-    <button class="tbtn" data-action="open-import">＋ Import files</button>
-    <button class="tbtn primary" data-action="toggle-run" id="runBtn">▶ Start downloading for all lists</button>
+    <button class="tbtn" data-action="open-import" data-i18n="toolbar.import">＋ Import files</button>
+    <button class="tbtn primary" data-action="toggle-run" id="runBtn" data-i18n="toolbar.start_all">▶ Start downloading for all lists</button>
   </div>
 
   <div class="body">
@@ -470,7 +470,7 @@
               <h2 id="dTitle">—</h2>
               <div class="da" id="dAuthor"></div>
             </div>
-            <button class="x" data-action="close-drawer" title="Collapse detail" aria-label="Collapse detail">⟩</button>
+            <button class="x" data-action="close-drawer" data-i18n-title="detail.close_title" title="Collapse detail" aria-label="Collapse detail">⟩</button>
           </div>
           <div class="dbody" id="dBody"></div>
         </aside>
@@ -480,7 +480,7 @@
         <div class="ap-resize" id="apResize" title="Drag to resize"></div>
         <div class="ap-head" data-action="toggle-active">
           <span class="tw" id="apTwirl">▾</span>
-          <span class="ap-title">Active work</span>
+          <span class="ap-title" data-i18n="ap.title">Active work</span>
           <span class="ap-sum" id="apSummary"></span>
           <span class="spacer"></span>
           <div class="ap-hosts" id="apHosts"></div>
@@ -494,48 +494,48 @@
 <!-- import sheet -->
 <div class="scrim" id="scrim" data-action="close-import"></div>
 <div class="sheet" id="sheet">
-  <div class="sh"><h2>Import a reading list</h2><button class="x" data-action="close-import">×</button></div>
+  <div class="sh"><h2 data-i18n="import.title">Import a reading list</h2><button class="x" data-action="close-import">×</button></div>
   <div class="tabs" id="importTabs">
-    <button class="tab active" data-imptab="file">Upload file</button>
-    <button class="tab" data-imptab="manual">Manual entry</button>
+    <button class="tab active" data-imptab="file" data-i18n="import.tab_file">Upload file</button>
+    <button class="tab" data-imptab="manual" data-i18n="import.tab_manual">Manual entry</button>
   </div>
   <div class="sbody">
     <div data-imppane="file">
       <label class="dropzone" id="dropzone">
         <input type="file" id="fileInput" accept=".md,.markdown,.json,.txt" hidden />
         <div class="dz-icon">⬆︎</div>
-        <div class="dz-title">Choose a Markdown or JSON file</div>
-        <div class="dz-sub">or drag &amp; drop it here · .md / .json</div>
+        <div class="dz-title" data-i18n="import.dz_title">Choose a Markdown or JSON file</div>
+        <div class="dz-sub" data-i18n="import.dz_sub">or drag &amp; drop it here · .md / .json</div>
       </label>
       <div id="fileChosen" class="file-chosen hide"></div>
     </div>
     <div data-imppane="manual" class="hide">
-      <div class="field"><label>Title</label><input type="text" id="mTitle" placeholder="Treasure Island" /></div>
-      <div class="field"><label>Author(s)</label><input type="text" id="mAuthor" placeholder="Robert Louis Stevenson" /></div>
-      <div class="field"><label>Preferred format</label><input type="text" id="mFmt" placeholder="epub" /></div>
+      <div class="field"><label data-i18n="import.field_title">Title</label><input type="text" id="mTitle" data-i18n-ph="import.ph_title" placeholder="Treasure Island" /></div>
+      <div class="field"><label data-i18n="import.field_author">Author(s)</label><input type="text" id="mAuthor" data-i18n-ph="import.ph_author" placeholder="Robert Louis Stevenson" /></div>
+      <div class="field"><label data-i18n="import.field_fmt">Preferred format</label><input type="text" id="mFmt" data-i18n-ph="import.ph_fmt" placeholder="epub" /></div>
     </div>
     <div class="preview" id="importPreview"></div>
   </div>
   <div class="sf">
-    <button class="tbtn" data-action="close-import">Cancel</button>
-    <button class="tbtn primary" data-action="confirm-import">Add to list</button>
+    <button class="tbtn" data-action="close-import" data-i18n="btn.cancel">Cancel</button>
+    <button class="tbtn primary" data-action="confirm-import" data-i18n="import.btn_add">Add to list</button>
   </div>
 </div>
 
 <!-- settings sheet -->
 <div class="scrim" id="settingsScrim" data-action="close-settings"></div>
 <div class="sheet" id="settingsSheet">
-  <div class="sh"><h2>Settings</h2><button class="x" data-action="close-settings">×</button></div>
+  <div class="sh"><h2 data-i18n="settings.title">Settings</h2><button class="x" data-action="close-settings">×</button></div>
   <div class="sbody" id="settingsBody"></div>
   <div class="sf">
-    <button class="tbtn" data-action="close-settings">Done</button>
-    <button class="tbtn primary" data-action="save-settings">Save</button>
+    <button class="tbtn" data-action="close-settings" data-i18n="btn.done">Done</button>
+    <button class="tbtn primary" data-action="save-settings" data-i18n="btn.save">Save</button>
   </div>
 </div>
 
 <div class="scrim" id="histScrim" data-action="close-history"></div>
 <div class="sheet" id="histSheet" style="width:min(760px,94vw)">
-  <div class="sh"><h2 id="histTitle">History</h2><button class="x" data-action="close-history">×</button></div>
+  <div class="sh"><h2 id="histTitle" data-i18n="history.title">History</h2><button class="x" data-action="close-history">×</button></div>
   <div class="sbody" id="histBody"></div>
 </div>
 
@@ -749,26 +749,482 @@ function pad(n) { return (n < 10 ? "0" : "") + n; }
    ===================================================================== */
 var I18N = {
   en: {
+    /* sidebar */
     "side.library": "Library",
+    "side.all_downloads": "All downloads",
+    /* empty state */
     "empty.side": "No lists yet.",
     "empty.title": "No lists yet",
     "empty.sub": "Import a Markdown/JSON file, or add a book, to get started.",
+    "empty.nothing_yet": "Nothing to download yet.",
+    "empty.import_prompt": "＋ Import a list",
+    "empty.filter": "Nothing here for this filter.",
+    /* toolbar */
+    "toolbar.import": "＋ Import files",
+    "toolbar.start_all": "▶ Start downloading for all lists",
+    "toolbar.stop_all": "❚❚ Stop all",
+    "toolbar.done_of": "done",
+    /* filter chips */
+    "filter.all": "All",
+    "filter.needs": "Needs you",
+    "filter.review": "Check download",
+    "filter.cantdl": "Cannot download",
+    "filter.active": "In progress",
+    "filter.done": "Done",
+    "filter.queued": "Queued",
+    /* per-book roll-up status labels (used via t("status."+x) in STATUS_META) */
     "status.queued": "Queued", "status.active": "Downloading", "status.done": "Done",
     "status.needs": "Needs you", "status.review": "Check download", "status.cantdl": "Cannot download",
-    "settings.perlist": "Per-list settings", "settings.app": "App settings",
-    "settings.mirrors": "Search mirrors", "settings.health": "Mirror health",
-    "settings.uilang": "App language"
+    /* per-variation status cells */
+    "vstat.done": "✓ Done",
+    "vstat.paused": "⏸ Paused",
+    "vstat.failed": "⚠ Failed",
+    "vstat.queued": "Queued",
+    /* book row */
+    "book.being_queried": "Being queried…",
+    "book.choose_copy": "Choose a copy",
+    "book.check_download": "Check download",
+    "book.not_found": "Not found",
+    "book.failed": "Failed",
+    "book.next_up": "⤴ Next up",
+    "book.queued_query": "Queued for query",
+    /* row action buttons */
+    "rowbtn.choose": "Choose…",
+    "rowbtn.review": "Review…",
+    "rowbtn.top_on": "✓ Top",
+    "rowbtn.top": "⤒ Top",
+    /* detail panel */
+    "detail.edit_btn": "✎ Edit title/author & re-query",
+    "detail.remove_book": "🗑 Remove from list",
+    "detail.edit_hint": "Edit title/author, then re-query",
+    "detail.save_requery": "Save & re-query",
+    "detail.k_status": "Status",
+    "detail.k_why": "Why",
+    "detail.k_downloaded": "Downloaded",
+    "detail.k_recommended": "Recommended",
+    "detail.k_language": "Language",
+    "detail.k_pages": "Pages",
+    "detail.k_year": "Year",
+    "detail.k_publisher": "Publisher",
+    "detail.being_queried_chip": "Being queried…",
+    "detail.querying_why": "Searching mirrors for matches.",
+    "detail.review_why": "The downloaded copy may not match this book — a better match was found on re-query.",
+    "detail.notfound_chip": "Not found",
+    "detail.notfound_why": "No mirror returned a match.",
+    "detail.needs_chip": "Needs you",
+    "detail.needs_why": "No single match cleared the auto-download threshold — choose which variation(s) to download.",
+    "detail.done_chip": "Done",
+    "detail.cantdl_chip": "Cannot download",
+    "detail.next_up_chip": "Next up",
+    "detail.queued_chip": "Queued",
+    "detail.downloading_chip": "Downloading",
+    "detail.download_recommended": "⤓ Download recommended & Trash old",
+    "detail.accept_copy": "✓ Accept current copy",
+    "detail.accept_title": "Keep the copy you already downloaded",
+    "detail.search_again": "Search again",
+    "detail.enter_manually": "Enter manually",
+    "detail.manual_hint": "Paste an md5 or a libgen URL (e.g. <code>…/ads.php?md5=…</code>):",
+    "detail.manual_ph": "32-char md5 or libgen URL",
+    "detail.manual_download": "⤓ Download this md5",
+    "detail.mark_not_found": "✗ Mark as not found",
+    "detail.marknf_title": "None of these are right — move to Cannot download",
+    "detail.move_top": "⤒ Move to top of queue",
+    "detail.remove_top": "Remove from top",
+    "detail.show_history": "🕑 Show history",
+    "detail.download_series": "Download whole series →",
+    "detail.series_title": "Find this book's series on Open Library and download every entry",
+    "detail.close_title": "Collapse detail",
+    "detail.edit_title_ph": "Title",
+    "detail.edit_author_ph": "Author(s), comma-separated",
+    "detail.cancel_edit": "Cancel",
+    /* variation manager */
+    "vm.variations": "Variations",
+    "vm.downloaded": "✓ Downloaded",
+    "vm.reveal": "Reveal",
+    "vm.reveal_part_title": "Reveal the .part file (or its folder) in Finder",
+    "vm.reveal_part": "📁 Reveal .part",
+    "vm.writing_to": "writing to",
+    "vm.redownload": "Re-download",
+    "vm.remove_trash": "🗑 Remove",
+    "vm.remove_btn": "✕ Remove",
+    "vm.remove_title": "Remove this copy from the book",
+    "vm.remove_dl_title": "Move the file to Trash and remove this download",
+    "vm.pause": "❚❚ Pause",
+    "vm.cancel": "Cancel",
+    "vm.resume": "▶ Resume",
+    "vm.download": "Download",
+    "vm.retry": "Retry",
+    "vm.paused_state": "Paused",
+    "vm.cancelled_state": "Cancelled",
+    "vm.failed_state": "Failed",
+    "vm.available_state": "Available",
+    "vm.recommended_badge": "★ Recommended",
+    "vm.recommended_title": "Recommended replacement",
+    "vm.match": "match",
+    "vm.low_pages_title": "this file may be a sample, incomplete, or the wrong book",
+    /* history */
+    "history.title": "History",
+    "history.no_events": "No events yet.",
+    "history.modal_prefix": "History — ",
+    /* active panel */
+    "ap.title": "Active work",
+    "ap.being_queried_sec": "Being queried",
+    "ap.nothing_queried": "Nothing being queried.",
+    "ap.downloading_sec": "Downloading",
+    "ap.no_downloads": "No active downloads.",
+    "ap.searching": "searching…",
+    "ap.connecting": "connecting via",
+    "ap.resuming": "resuming",
+    "ap.querying_sum": "querying",
+    "ap.downloading_sum": "downloading",
+    "ap.connecting_sum": "connecting",
+    "ap.paused_sum": "paused",
+    "ap.paused_stat": "paused",
+    /* import sheet */
+    "import.title": "Import a reading list",
+    "import.tab_file": "Upload file",
+    "import.tab_manual": "Manual entry",
+    "import.dz_title": "Choose a Markdown or JSON file",
+    "import.dz_sub": "or drag & drop it here · .md / .json",
+    "import.field_title": "Title",
+    "import.field_author": "Author(s)",
+    "import.field_fmt": "Preferred format",
+    "import.ph_title": "Treasure Island",
+    "import.ph_author": "Robert Louis Stevenson",
+    "import.ph_fmt": "epub",
+    "import.btn_add": "Add to list",
+    "import.preview_choose": "Choose a file to preview its books.",
+    "import.preview_parse_err": "Could not parse: ",
+    "import.preview_summary": "Preview",
+    "import.preview_groups": "group(s),",
+    "import.preview_books": "book(s)",
+    "import.manual_default_group": "Manual",
+    /* settings */
+    "settings.title": "Settings",
+    "settings.perlist": "Per-list settings",
+    "settings.pref_formats": "Preferred formats",
+    "settings.pref_formats_hint": "most-preferred first",
+    "settings.auto_threshold": "Auto-download threshold",
+    "settings.auto_threshold_hint": "auto-download at/above this confidence",
+    "settings.near_threshold": "Near-match threshold",
+    "settings.near_threshold_hint": "below this is treated as not-found",
+    "settings.filename_tpl": "Filename template",
+    "settings.filename_tpl_hint": "tokens: {seq:02} {authors} {title} {ext}",
+    "settings.keep_top": "Variations kept per book",
+    "settings.seq_numbering": "Sequence numbering",
+    "settings.seq_per_batch": "per-batch",
+    "settings.seq_per_list": "per-list",
+    "settings.pref_language": "Preferred language",
+    "settings.pref_language_hint": "matches each book's title language",
+    "settings.app": "App settings",
+    "settings.uilang": "App language",
+    "settings.dl_folder": "Default download folder",
+    "settings.choose_folder": "Choose…",
+    "settings.max_concurrent": "Max concurrent downloads",
+    "settings.max_concurrent_hint": "total across all mirrors",
+    "settings.concurrent_queries": "Concurrent queries",
+    "settings.max_retries": "Max retry attempts",
+    "settings.speculative_dl": "Speculative download",
+    "settings.speculative_dl_hint": "race slow mirrors",
+    "settings.mirrors": "Search mirrors",
+    "settings.mirrors_readonly": "Read-only — edit <code>mirrors.toml</code> to change search mirrors.",
+    "settings.health": "Mirror health",
+    "settings.health_hint": "live availability via open-slum.org",
+    "settings.live_status": "Live mirror status",
+    "settings.refresh_now": "Refresh now",
+    "settings.refreshing": "Refreshing…",
+    "settings.fetching_status": "Fetching live status…",
+    "settings.click_refresh": "Click \"Refresh now\" to fetch live mirror availability.",
+    "settings.refresh_failed": "Refresh failed: ",
+    "settings.last_refreshed": "Last refreshed ",
+    "settings.sec_files": "Files",
+    "settings.sec_files_hint": "on-disk maintenance",
+    "settings.reorganize": "Reorganize downloaded files",
+    "settings.reorganize_in_place": "all files are already in place",
+    "settings.reorganize_hint_suffix": "not at the current &lt;list&gt;/&lt;group&gt;/&lt;seq&gt; - name",
+    "settings.file_singular": "file",
+    "settings.files_plural": "files",
+    "settings.details_btn": "Details",
+    "settings.hide_btn": "Hide",
+    "settings.reorganize_now": "Reorganize now",
+    "settings.no_mismatches": "No mismatches — nothing to move.",
+    "settings.cleanup_parts": "Clean up partial downloads",
+    "settings.cleanup_parts_hint": "move leftover <code>.part</code> files (incomplete/abandoned downloads) to Trash",
+    "settings.cleanup_btn": "Clean up .part files",
+    "settings.all_formats_added": "All formats added",
+    "settings.all_device_formats_added": "All device formats added",
+    "settings.show_fewer": "Show fewer",
+    "settings.show_all_formats": "Show all formats",
+    "settings.formats_add": "Add",
+    "settings.formats_default_hint": "Default is what Kindle &amp; iPad both accept (EPUB, PDF). Add others if you want.",
+    "settings.rank_higher": "Rank higher",
+    "settings.rank_lower": "Rank lower",
+    "settings.remove": "Remove",
+    "settings.reorganizing": "Reorganizing…",
+    "settings.cleaning": "Cleaning…",
+    /* common buttons */
+    "btn.cancel": "Cancel",
+    "btn.done": "Done",
+    "btn.save": "Save",
+    /* context menu */
+    "ctx.start_downloads": "▶ Start downloads",
+    "ctx.pause_downloads": "❚❚ Pause downloads",
+    "ctx.requery": "↻ Re-query this list",
+    "ctx.remove_list": "🗑 Remove list",
+    /* misc JS-composed strings */
+    "misc.app_only": "(only available in the app)",
+    "misc.done": "Done.",
+    "misc.failed_prefix": "Failed: ",
+    "misc.moving_parts": "Moving .part files to Trash…",
+    "misc.reorganizing": "Reorganizing…",
+    "misc.series_loading": "Looking up the series on Open Library… (a few seconds)",
+    "misc.series_created": "Series list created — downloading its books.",
+    "misc.series_failed": "Could not download the series.",
+    "misc.lists_subtitle": "lists",
+    "misc.books_subtitle": "books",
+    "misc.autofill_title": "Auto-filled from the downloaded copy — edit to override",
+    "misc.drag_resize": "Drag to resize",
+    "misc.manual_empty": "Paste an md5 or libgen URL first.",
+    "misc.failed_unknown": "unknown error"
   },
   zh: {
+    /* sidebar */
     "side.library": "书库",
+    "side.all_downloads": "全部下载",
+    /* empty state */
     "empty.side": "暂无列表。",
     "empty.title": "暂无列表",
     "empty.sub": "导入 Markdown/JSON 文件，或添加一本书即可开始。",
-    "status.queued": "排队中", "status.active": "下载中", "status.done": "已完成",
-    "status.needs": "需要处理", "status.review": "检查下载", "status.cantdl": "无法下载",
-    "settings.perlist": "列表设置", "settings.app": "应用设置",
-    "settings.mirrors": "搜索镜像", "settings.health": "镜像状态",
-    "settings.uilang": "界面语言"
+    "empty.nothing_yet": "暂无下载任务。",
+    "empty.import_prompt": "＋ 导入书单",
+    "empty.filter": "此筛选条件下暂无内容。",
+    /* toolbar */
+    "toolbar.import": "＋ 导入文件",
+    "toolbar.start_all": "▶ 开始下载全部书单",
+    "toolbar.stop_all": "❚❚ 全部停止",
+    "toolbar.done_of": "已完成",
+    /* filter chips */
+    "filter.all": "全部",
+    "filter.needs": "待确认",
+    "filter.review": "请检查",
+    "filter.cantdl": "无法下载",
+    "filter.active": "进行中",
+    "filter.done": "已完成",
+    "filter.queued": "等待中",
+    /* per-book roll-up status labels */
+    "status.queued": "等待中", "status.active": "下载中", "status.done": "已完成",
+    "status.needs": "待确认", "status.review": "请检查", "status.cantdl": "无法下载",
+    /* per-variation status cells */
+    "vstat.done": "✓ 已完成",
+    "vstat.paused": "⏸ 已暂停",
+    "vstat.failed": "⚠ 失败",
+    "vstat.queued": "等待中",
+    /* book row */
+    "book.being_queried": "正在查询…",
+    "book.choose_copy": "选择版本",
+    "book.check_download": "请检查",
+    "book.not_found": "未找到",
+    "book.failed": "失败",
+    "book.next_up": "⤴ 即将下载",
+    "book.queued_query": "等待查询",
+    /* row action buttons */
+    "rowbtn.choose": "选择…",
+    "rowbtn.review": "检查…",
+    "rowbtn.top_on": "✓ 已置顶",
+    "rowbtn.top": "⤒ 置顶",
+    /* detail panel */
+    "detail.edit_btn": "✎ 编辑标题/作者并重新查询",
+    "detail.remove_book": "🗑 从书单中移除",
+    "detail.edit_hint": "编辑标题/作者后重新查询",
+    "detail.save_requery": "保存并重新查询",
+    "detail.k_status": "状态",
+    "detail.k_why": "原因",
+    "detail.k_downloaded": "已下载",
+    "detail.k_recommended": "推荐",
+    "detail.k_language": "语言",
+    "detail.k_pages": "页数",
+    "detail.k_year": "年份",
+    "detail.k_publisher": "出版社",
+    "detail.being_queried_chip": "正在查询…",
+    "detail.querying_why": "正在搜索镜像站以匹配结果。",
+    "detail.review_why": "已下载的版本可能与本书不符 — 重新查询后发现了更佳匹配。",
+    "detail.notfound_chip": "未找到",
+    "detail.notfound_why": "所有镜像站均未返回匹配结果。",
+    "detail.needs_chip": "待确认",
+    "detail.needs_why": "无版本的置信度达到自动下载阈值 — 请手动选择要下载的版本。",
+    "detail.done_chip": "已完成",
+    "detail.cantdl_chip": "无法下载",
+    "detail.next_up_chip": "即将下载",
+    "detail.queued_chip": "等待中",
+    "detail.downloading_chip": "下载中",
+    "detail.download_recommended": "⤓ 下载推荐版本并移除旧文件",
+    "detail.accept_copy": "✓ 保留当前版本",
+    "detail.accept_title": "保留已下载的版本",
+    "detail.search_again": "重新搜索",
+    "detail.enter_manually": "手动输入",
+    "detail.manual_hint": "粘贴 md5 或 libgen URL（如 <code>…/ads.php?md5=…</code>）：",
+    "detail.manual_ph": "32位 md5 或 libgen URL",
+    "detail.manual_download": "⤓ 下载此 md5",
+    "detail.mark_not_found": "✗ 标记为未找到",
+    "detail.marknf_title": "以上均不匹配 — 标记为无法下载",
+    "detail.move_top": "⤒ 移至队列顶部",
+    "detail.remove_top": "取消置顶",
+    "detail.show_history": "🕑 查看历史",
+    "detail.download_series": "下载整个系列 →",
+    "detail.series_title": "在 Open Library 上查找此书所属系列并下载所有条目",
+    "detail.close_title": "收起详情",
+    "detail.edit_title_ph": "标题",
+    "detail.edit_author_ph": "作者（多位用英文逗号分隔）",
+    "detail.cancel_edit": "取消",
+    /* variation manager */
+    "vm.variations": "版本",
+    "vm.downloaded": "✓ 已下载",
+    "vm.reveal": "在文件夹中显示",
+    "vm.reveal_part_title": "在 Finder 中显示 .part 文件（或其所在文件夹）",
+    "vm.reveal_part": "📁 显示 .part",
+    "vm.writing_to": "写入到",
+    "vm.redownload": "重新下载",
+    "vm.remove_trash": "🗑 删除",
+    "vm.remove_btn": "✕ 移除",
+    "vm.remove_title": "从书目中移除此版本",
+    "vm.remove_dl_title": "将文件移至废纸篓并移除此下载",
+    "vm.pause": "❚❚ 暂停",
+    "vm.cancel": "取消",
+    "vm.resume": "▶ 继续",
+    "vm.download": "下载",
+    "vm.retry": "重试",
+    "vm.paused_state": "已暂停",
+    "vm.cancelled_state": "已取消",
+    "vm.failed_state": "失败",
+    "vm.available_state": "可下载",
+    "vm.recommended_badge": "★ 推荐",
+    "vm.recommended_title": "推荐替换版本",
+    "vm.match": "匹配",
+    "vm.low_pages_title": "此文件可能是样本、不完整或书目有误",
+    /* history */
+    "history.title": "历史记录",
+    "history.no_events": "暂无事件。",
+    "history.modal_prefix": "历史记录 — ",
+    /* active panel */
+    "ap.title": "活跃任务",
+    "ap.being_queried_sec": "正在查询",
+    "ap.nothing_queried": "暂无正在查询的内容。",
+    "ap.downloading_sec": "下载中",
+    "ap.no_downloads": "暂无活跃下载。",
+    "ap.searching": "搜索中…",
+    "ap.connecting": "连接中，via",
+    "ap.resuming": "续传",
+    "ap.querying_sum": "查询中",
+    "ap.downloading_sum": "下载中",
+    "ap.connecting_sum": "连接中",
+    "ap.paused_sum": "已暂停",
+    "ap.paused_stat": "已暂停",
+    /* import sheet */
+    "import.title": "导入书单",
+    "import.tab_file": "上传文件",
+    "import.tab_manual": "手动输入",
+    "import.dz_title": "选择 Markdown 或 JSON 文件",
+    "import.dz_sub": "或将文件拖放至此 · .md / .json",
+    "import.field_title": "标题",
+    "import.field_author": "作者",
+    "import.field_fmt": "首选格式",
+    "import.ph_title": "金银岛",
+    "import.ph_author": "罗伯特·路易斯·史蒂文森",
+    "import.ph_fmt": "epub",
+    "import.btn_add": "添加到书单",
+    "import.preview_choose": "选择文件后预览其中的书目。",
+    "import.preview_parse_err": "解析失败：",
+    "import.preview_summary": "预览",
+    "import.preview_groups": "个分组，",
+    "import.preview_books": "本书",
+    "import.manual_default_group": "手动",
+    /* settings */
+    "settings.title": "设置",
+    "settings.perlist": "书单设置",
+    "settings.pref_formats": "首选格式",
+    "settings.pref_formats_hint": "越靠前优先级越高",
+    "settings.auto_threshold": "自动下载阈值",
+    "settings.auto_threshold_hint": "置信度达到或超过此值时自动下载",
+    "settings.near_threshold": "近似匹配阈值",
+    "settings.near_threshold_hint": "低于此值视为未找到",
+    "settings.filename_tpl": "文件名模板",
+    "settings.filename_tpl_hint": "可用变量：{seq:02} {authors} {title} {ext}",
+    "settings.keep_top": "每本书保留的版本数",
+    "settings.seq_numbering": "序号编排方式",
+    "settings.seq_per_batch": "按批次编排",
+    "settings.seq_per_list": "按书单编排",
+    "settings.pref_language": "首选语言",
+    "settings.pref_language_hint": "根据书名语言自动匹配",
+    "settings.app": "应用设置",
+    "settings.uilang": "界面语言",
+    "settings.dl_folder": "默认下载文件夹",
+    "settings.choose_folder": "选择…",
+    "settings.max_concurrent": "最大并发下载数",
+    "settings.max_concurrent_hint": "所有镜像站共享",
+    "settings.concurrent_queries": "并发查询数",
+    "settings.max_retries": "最大重试次数",
+    "settings.speculative_dl": "投机下载",
+    "settings.speculative_dl_hint": "对慢速镜像站同时发起竞速下载",
+    "settings.mirrors": "搜索镜像",
+    "settings.mirrors_readonly": "只读 — 请编辑 <code>mirrors.toml</code> 修改搜索镜像。",
+    "settings.health": "镜像健康状态",
+    "settings.health_hint": "通过 open-slum.org 获取实时可用性",
+    "settings.live_status": "实时镜像状态",
+    "settings.refresh_now": "立即刷新",
+    "settings.refreshing": "刷新中…",
+    "settings.fetching_status": "正在获取实时状态…",
+    "settings.click_refresh": "点击「立即刷新」获取镜像可用性。",
+    "settings.refresh_failed": "刷新失败：",
+    "settings.last_refreshed": "上次刷新：",
+    "settings.sec_files": "文件",
+    "settings.sec_files_hint": "磁盘维护",
+    "settings.reorganize": "整理已下载文件",
+    "settings.reorganize_in_place": "所有文件均已就位",
+    "settings.reorganize_hint_suffix": "不在当前 &lt;列表&gt;/&lt;分组&gt;/&lt;序号&gt; - 名称 路径下",
+    "settings.file_singular": "个文件",
+    "settings.files_plural": "个文件",
+    "settings.details_btn": "详情",
+    "settings.hide_btn": "隐藏",
+    "settings.reorganize_now": "立即整理",
+    "settings.no_mismatches": "无需移动 — 所有文件已就位。",
+    "settings.cleanup_parts": "清理未完成下载",
+    "settings.cleanup_parts_hint": "将残留的 <code>.part</code> 文件（未完成/已放弃的下载）移至废纸篓",
+    "settings.cleanup_btn": "清理 .part 文件",
+    "settings.all_formats_added": "已添加所有格式",
+    "settings.all_device_formats_added": "已添加所有设备格式",
+    "settings.show_fewer": "收起",
+    "settings.show_all_formats": "显示所有格式",
+    "settings.formats_add": "添加",
+    "settings.formats_default_hint": "默认支持 Kindle 和 iPad 均可读取的格式（EPUB、PDF）。如需其他格式可自行添加。",
+    "settings.rank_higher": "提高优先级",
+    "settings.rank_lower": "降低优先级",
+    "settings.remove": "移除",
+    "settings.reorganizing": "整理中…",
+    "settings.cleaning": "清理中…",
+    /* common buttons */
+    "btn.cancel": "取消",
+    "btn.done": "完成",
+    "btn.save": "保存",
+    /* context menu */
+    "ctx.start_downloads": "▶ 开始下载",
+    "ctx.pause_downloads": "❚❚ 暂停下载",
+    "ctx.requery": "↻ 重新查询此书单",
+    "ctx.remove_list": "🗑 移除书单",
+    /* misc JS-composed strings */
+    "misc.app_only": "（仅在应用内可用）",
+    "misc.done": "已完成。",
+    "misc.failed_prefix": "失败：",
+    "misc.moving_parts": "正在将 .part 文件移至废纸篓…",
+    "misc.reorganizing": "整理中…",
+    "misc.series_loading": "正在 Open Library 上查找系列信息…（需要几秒钟）",
+    "misc.series_created": "系列书单已创建 — 正在下载其中的书目。",
+    "misc.series_failed": "无法下载该系列。",
+    "misc.lists_subtitle": "个书单",
+    "misc.books_subtitle": "本书",
+    "misc.autofill_title": "从已下载版本自动填充 — 可编辑覆盖",
+    "misc.drag_resize": "拖动以调整大小",
+    "misc.manual_empty": "请先粘贴 md5 或 libgen URL。",
+    "misc.failed_unknown": "未知错误"
   }
 };
 function detectLang() {
@@ -1121,8 +1577,8 @@ function renderEmpty() {
   document.getElementById("progNum").textContent = "";
   document.getElementById("filters").innerHTML = "";
   document.getElementById("listwrap").innerHTML =
-    '<div class="empty">Nothing to download yet.<br>' +
-    '<button class="tbtn primary" data-action="open-import" style="margin-top:14px">＋ Import a list</button></div>';
+    '<div class="empty">' + esc(t("empty.nothing_yet")) + '<br>' +
+    '<button class="tbtn primary" data-action="open-import" style="margin-top:14px">' + esc(t("empty.import_prompt")) + '</button></div>';
   // Active-work + detail panels (renamed from the old #activity/#drawer): keep
   // them collapsed/empty in the empty state.
   document.getElementById("activePanel").classList.add("collapsed");
@@ -1141,23 +1597,23 @@ function renderFormatRank() {
   FORMATS.forEach(function (f, i) {
     if (i > 0) html += '<span class="sep">›</span>';
     html += '<span class="frank"><span class="rk">' + (i + 1) + '</span>' + f.toUpperCase() +
-      '<button class="mv" data-fmtmv="' + i + ':up" title="Rank higher"' + (i === 0 ? " disabled" : "") + '>▲</button>' +
-      '<button class="mv" data-fmtmv="' + i + ':down" title="Rank lower"' + (i === FORMATS.length - 1 ? " disabled" : "") + '>▼</button>' +
-      '<button class="mv rm" data-fmtrm="' + f + '" title="Remove"' + (FORMATS.length <= 1 ? " disabled" : "") + '>×</button>' +
+      '<button class="mv" data-fmtmv="' + i + ':up" title="' + esc(t("settings.rank_higher")) + '"' + (i === 0 ? " disabled" : "") + '>▲</button>' +
+      '<button class="mv" data-fmtmv="' + i + ':down" title="' + esc(t("settings.rank_lower")) + '"' + (i === FORMATS.length - 1 ? " disabled" : "") + '>▼</button>' +
+      '<button class="mv rm" data-fmtrm="' + f + '" title="' + esc(t("settings.remove")) + '"' + (FORMATS.length <= 1 ? " disabled" : "") + '>×</button>' +
       '</span>';
   });
   html += '</div>';
   var pool = (SHOW_ALL_FORMATS ? ALL_FORMATS : DEVICE_FORMATS).filter(function (f) { return FORMATS.indexOf(f) < 0; });
   html += '<div class="frank-add">';
   if (pool.length) {
-    html += '<span class="add-lbl">Add</span>';
+    html += '<span class="add-lbl">' + esc(t("settings.formats_add")) + '</span>';
     pool.forEach(function (f) { html += '<button class="addchip" data-fmtadd="' + f + '">+ ' + f.toUpperCase() + '</button>'; });
   } else {
-    html += '<span class="add-lbl" style="opacity:.6">' + (SHOW_ALL_FORMATS ? "All formats added" : "All device formats added") + '</span>';
+    html += '<span class="add-lbl" style="opacity:.6">' + esc(SHOW_ALL_FORMATS ? t("settings.all_formats_added") : t("settings.all_device_formats_added")) + '</span>';
   }
-  html += '<button class="addchip ghost" data-fmtshowall="1">' + (SHOW_ALL_FORMATS ? "Show fewer" : "Show all formats") + '</button>';
+  html += '<button class="addchip ghost" data-fmtshowall="1">' + esc(SHOW_ALL_FORMATS ? t("settings.show_fewer") : t("settings.show_all_formats")) + '</button>';
   html += '</div>';
-  html += '<div class="hint" style="margin-top:5px">Default is what Kindle &amp; iPad both accept (EPUB, PDF). Add others if you want.</div>';
+  html += '<div class="hint" style="margin-top:5px">' + t("settings.formats_default_hint") + '</div>';
   el.innerHTML = html;
 }
 
@@ -1169,23 +1625,23 @@ function renderSettings() {
 
   // --- Per-list settings ---
   html += '<div class="set-sec"><h3>' + esc(t("settings.perlist")) + '</h3>';
-  html += '<div class="set-row"><div class="lab">Preferred formats<span class="hint">most-preferred first</span></div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.pref_formats")) + '<span class="hint">' + esc(t("settings.pref_formats_hint")) + '</span></div>' +
     '<div class="set-ctl"><div class="fmt-rank" id="fmtRank"></div></div></div>';
-  html += '<div class="set-row"><div class="lab">Auto-download threshold<span class="hint">auto-download at/above this confidence</span></div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.auto_threshold")) + '<span class="hint">' + esc(t("settings.auto_threshold_hint")) + '</span></div>' +
     '<div class="set-ctl"><input type="range" id="setAuto" min="0" max="1" step="0.01" value="' + SETTINGS.auto_threshold + '">' +
     '<span class="rangeval" id="setAutoVal">' + SETTINGS.auto_threshold.toFixed(2) + '</span></div></div>';
-  html += '<div class="set-row"><div class="lab">Near-match threshold<span class="hint">below this is treated as not-found</span></div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.near_threshold")) + '<span class="hint">' + esc(t("settings.near_threshold_hint")) + '</span></div>' +
     '<div class="set-ctl"><input type="range" id="setNear" min="0" max="1" step="0.01" value="' + SETTINGS.near_threshold + '">' +
     '<span class="rangeval" id="setNearVal">' + SETTINGS.near_threshold.toFixed(2) + '</span></div></div>';
-  html += '<div class="set-row"><div class="lab">Filename template<span class="hint">tokens: {seq:02} {authors} {title} {ext}</span></div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.filename_tpl")) + '<span class="hint">' + esc(t("settings.filename_tpl_hint")) + '</span></div>' +
     '<div class="set-ctl"><input type="text" id="setTpl" value="' + esc(SETTINGS.naming_template) + '"></div></div>';
-  html += '<div class="set-row"><div class="lab">Variations kept per book</div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.keep_top")) + '</div>' +
     '<div class="set-ctl"><input type="number" id="setKeep" min="1" max="20" value="' + SETTINGS.keep_top + '"></div></div>';
-  html += '<div class="set-row"><div class="lab">Sequence numbering<span class="hint">' +
-    (SETTINGS.seq_per_group ? "per-batch" : "per-list") + '</span></div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.seq_numbering")) + '<span class="hint">' +
+    esc(SETTINGS.seq_per_group ? t("settings.seq_per_batch") : t("settings.seq_per_list")) + '</span></div>' +
     '<div class="set-ctl"><button class="toggle' + (SETTINGS.seq_per_group ? " on" : "") + '" id="setSeq" data-toggle-set="seq" aria-label="per-batch numbering"><i></i></button></div></div>';
   var curLang = langValue(SETTINGS.language);
-  html += '<div class="set-row"><div class="lab">Preferred language<span class="hint">matches each book\'s title language</span></div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.pref_language")) + '<span class="hint">' + esc(t("settings.pref_language_hint")) + '</span></div>' +
     '<div class="set-ctl"><select id="setLang">' +
     LANGUAGES.map(function (l) { return '<option value="' + esc(l) + '"' + (curLang === l ? " selected" : "") + '>' + langLabel(l) + '</option>'; }).join("") +
     '</select></div></div>';
@@ -1198,16 +1654,16 @@ function renderSettings() {
     '<button class="tbtn" data-setlang="en">English' + (LANG === "en" ? " ✓" : "") + '</button> ' +
     '<button class="tbtn" data-setlang="zh">中文（简体）' + (LANG === "zh" ? " ✓" : "") + '</button>' +
     '</div></div>';
-  html += '<div class="set-row"><div class="lab">Default download folder</div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.dl_folder")) + '</div>' +
     '<div class="set-ctl"><input type="text" id="setOut" value="' + esc(APPCFG.out_dir) + '">' +
-    '<button class="tbtn" data-action="choose-folder">Choose…</button></div></div>';
-  html += '<div class="set-row"><div class="lab">Max concurrent downloads<span class="hint">total across all mirrors</span></div>' +
+    '<button class="tbtn" data-action="choose-folder">' + esc(t("settings.choose_folder")) + '</button></div></div>';
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.max_concurrent")) + '<span class="hint">' + esc(t("settings.max_concurrent_hint")) + '</span></div>' +
     '<div class="set-ctl"><input type="number" id="setMaxDl" min="1" max="64" value="' + (APPCFG.max_concurrent_downloads || 5) + '"></div></div>';
-  html += '<div class="set-row"><div class="lab">Concurrent queries</div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.concurrent_queries")) + '</div>' +
     '<div class="set-ctl"><input type="number" id="setQConc" min="1" max="32" value="' + APPCFG.query_concurrency + '"></div></div>';
-  html += '<div class="set-row"><div class="lab">Max retry attempts</div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.max_retries")) + '</div>' +
     '<div class="set-ctl"><input type="number" id="setAttempts" min="1" max="10" value="' + APPCFG.max_attempts + '"></div></div>';
-  html += '<div class="set-row"><div class="lab">Speculative download<span class="hint">race slow mirrors</span></div>' +
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.speculative_dl")) + '<span class="hint">' + esc(t("settings.speculative_dl_hint")) + '</span></div>' +
     '<div class="set-ctl"><input type="checkbox" id="setHedge"' + (APPCFG.hedge_enabled ? ' checked' : '') + '></div></div>';
   html += '</div>';
 
@@ -1215,32 +1671,32 @@ function renderSettings() {
   html += '<div class="set-sec"><h3>' + esc(t("settings.mirrors")) + '</h3>';
   html += '<div class="set-ctl" style="display:block">' +
     SEARCH_MIRRORS.map(function (h) { return '<span class="mirror-host">' + esc(h) + '</span>'; }).join("") +
-    '<div class="mirror-note">Read-only — edit <code>mirrors.toml</code> to change search mirrors.</div></div>';
+    '<div class="mirror-note">' + t("settings.mirrors_readonly") + '</div></div>';
   html += '</div>';
 
   // --- Mirror health (live, from open-slum.org) ---
   html += '<div class="set-sec"><h3>' + esc(t("settings.health")) +
-    '<span class="hint">live availability via open-slum.org</span></h3>';
-  html += '<div class="set-row"><div class="lab">Live mirror status</div>' +
+    '<span class="hint">' + esc(t("settings.health_hint")) + '</span></h3>';
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.live_status")) + '</div>' +
     '<div class="set-ctl"><button class="tbtn" data-action="refresh-mirrors"' +
     (MIRROR_HEALTH_BUSY ? ' disabled' : '') + '>' +
-    (MIRROR_HEALTH_BUSY ? 'Refreshing…' : 'Refresh now') + '</button></div></div>';
+    esc(MIRROR_HEALTH_BUSY ? t("settings.refreshing") : t("settings.refresh_now")) + '</button></div></div>';
   html += '<div class="set-ctl" style="display:block" id="mirrorHealth"></div>';
   html += '</div>';
 
   // --- Files (maintenance) ---
-  html += '<div class="set-sec"><h3>Files<span class="hint">on-disk maintenance</span></h3>';
-  html += '<div class="set-row"><div class="lab">Reorganize downloaded files' +
+  html += '<div class="set-sec"><h3>' + esc(t("settings.sec_files")) + '<span class="hint">' + esc(t("settings.sec_files_hint")) + '</span></h3>';
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.reorganize")) +
     '<span class="hint">' + (REORG_COUNT > 0
-      ? REORG_COUNT + ' file' + (REORG_COUNT === 1 ? '' : 's') + ' not at the current &lt;list&gt;/&lt;group&gt;/&lt;seq&gt; - name'
-      : 'all files are already in place') + '</span></div>' +
+      ? REORG_COUNT + ' ' + esc(REORG_COUNT === 1 ? t("settings.file_singular") : t("settings.files_plural")) + ' ' + t("settings.reorganize_hint_suffix")
+      : esc(t("settings.reorganize_in_place"))) + '</span></div>' +
     '<div class="set-ctl">' +
-    (REORG_COUNT > 0 ? '<button class="tbtn" data-action="reorganize-details">' + (REORG_DIFF ? 'Hide' : 'Details') + '</button> ' : '') +
+    (REORG_COUNT > 0 ? '<button class="tbtn" data-action="reorganize-details">' + esc(REORG_DIFF ? t("settings.hide_btn") : t("settings.details_btn")) + '</button> ' : '') +
     '<button class="tbtn" data-action="reorganize-files"' +
-    (REORG_COUNT > 0 ? '' : ' disabled') + '>Reorganize now' + (REORG_COUNT > 0 ? ' (' + REORG_COUNT + ')' : '') + '</button></div></div>';
+    (REORG_COUNT > 0 ? '' : ' disabled') + '>' + esc(t("settings.reorganize_now")) + (REORG_COUNT > 0 ? ' (' + REORG_COUNT + ')' : '') + '</button></div></div>';
   if (REORG_DIFF) {
     if (!REORG_DIFF.length) {
-      html += '<div class="mirror-note">No mismatches — nothing to move.</div>';
+      html += '<div class="mirror-note">' + esc(t("settings.no_mismatches")) + '</div>';
     } else {
       // Each misplaced file: its current path → where it should go. Tail-shortened
       // for readability; hover shows the full path.
@@ -1253,9 +1709,9 @@ function renderSettings() {
     }
   }
   html += '<div class="mirror-note" id="reorgStatus"></div>';
-  html += '<div class="set-row"><div class="lab">Clean up partial downloads' +
-    '<span class="hint">move leftover <code>.part</code> files (incomplete/abandoned downloads) to Trash</span></div>' +
-    '<div class="set-ctl"><button class="tbtn" data-action="cleanup-parts">Clean up .part files</button></div></div>';
+  html += '<div class="set-row"><div class="lab">' + esc(t("settings.cleanup_parts")) +
+    '<span class="hint">' + t("settings.cleanup_parts_hint") + '</span></div>' +
+    '<div class="set-ctl"><button class="tbtn" data-action="cleanup-parts">' + esc(t("settings.cleanup_btn")) + '</button></div></div>';
   html += '<div class="mirror-note" id="partStatus"></div>';
   html += '</div>';
 
@@ -1267,8 +1723,8 @@ function renderSettings() {
 /* The "Mirror health" panel: per-site up/down · ping · 24h uptime, grouped by
    SLUM group, populated on demand by the `refresh-mirrors` action. */
 function mirrorRefreshedNote() {
-  if (MIRROR_HEALTH_ERR) return '<div class="mirror-note" style="color:#c0392b">Refresh failed: ' + esc(MIRROR_HEALTH_ERR) + '</div>';
-  if (MIRROR_HEALTH_AT) return '<div class="mirror-note">Last refreshed ' + esc(fmtEventTime(MIRROR_HEALTH_AT)) + '</div>';
+  if (MIRROR_HEALTH_ERR) return '<div class="mirror-note" style="color:#c0392b">' + esc(t("settings.refresh_failed")) + esc(MIRROR_HEALTH_ERR) + '</div>';
+  if (MIRROR_HEALTH_AT) return '<div class="mirror-note">' + esc(t("settings.last_refreshed")) + esc(fmtEventTime(MIRROR_HEALTH_AT)) + '</div>';
   return '';
 }
 function renderMirrorHealth() {
@@ -1276,8 +1732,8 @@ function renderMirrorHealth() {
   if (!el) return;
   if (!MIRROR_HEALTH.length) {
     el.innerHTML = mirrorRefreshedNote() + '<div class="mirror-note">' +
-      (MIRROR_HEALTH_BUSY ? 'Fetching live status…'
-        : 'Click “Refresh now” to fetch live mirror availability.') + '</div>';
+      esc(MIRROR_HEALTH_BUSY ? t("settings.fetching_status")
+        : t("settings.click_refresh")) + '</div>';
     return;
   }
   // Group rows by their SLUM group, preserving first-seen order.
@@ -1322,23 +1778,23 @@ function onReorganizeDetails() {
 /* Move all leftover .part files to Trash (incomplete/abandoned downloads). */
 function onCleanupParts(btn) {
   var status = document.getElementById("partStatus");
-  if (!hasTauri()) { if (status) status.textContent = "(only available in the app)"; return; }
-  if (btn) { btn.disabled = true; btn.textContent = "Cleaning…"; }
-  if (status) status.textContent = "Moving .part files to Trash…";
+  if (!hasTauri()) { if (status) status.textContent = t("misc.app_only"); return; }
+  if (btn) { btn.disabled = true; btn.textContent = t("settings.cleaning"); }
+  if (status) status.textContent = t("misc.moving_parts");
   invoke("cleanup_part_files")
-    .then(function (summary) { if (status) status.textContent = summary || "Done."; })
-    .catch(function (e) { if (status) status.textContent = "Failed: " + (e && (e.message || e)); })
-    .then(function () { if (btn) { btn.disabled = false; btn.textContent = "Clean up .part files"; } });
+    .then(function (summary) { if (status) status.textContent = summary || t("misc.done"); })
+    .catch(function (e) { if (status) status.textContent = t("misc.failed_prefix") + (e && (e.message || e)); })
+    .then(function () { if (btn) { btn.disabled = false; btn.textContent = t("settings.cleanup_btn"); } });
 }
 
 function onReorganizeFiles(btn) {
   var status = document.getElementById("reorgStatus");
-  if (!hasTauri()) { if (status) status.textContent = "(only available in the app)"; return; }
-  if (btn) { btn.disabled = true; btn.textContent = "Reorganizing…"; }
-  if (status) status.textContent = "Reorganizing…";
+  if (!hasTauri()) { if (status) status.textContent = t("misc.app_only"); return; }
+  if (btn) { btn.disabled = true; btn.textContent = t("settings.reorganizing"); }
+  if (status) status.textContent = t("misc.reorganizing");
   invoke("reorganize_files")
     .then(function (summary) {
-      if (status) status.textContent = summary || "Done.";
+      if (status) status.textContent = summary || t("misc.done");
       REORG_DIFF = null; // the moves just happened — the old diff is stale
       // Refresh the library so revealed paths reflect the moves.
       if (hasTauri()) invoke("library").then(applyLibrary).catch(function () {});
@@ -1346,10 +1802,10 @@ function onReorganizeFiles(btn) {
       if (hasTauri()) invoke("reorganize_needed").then(function (n) { REORG_COUNT = n | 0; renderSettings(); }).catch(function () {});
     })
     .catch(function (e) {
-      if (status) status.textContent = "Failed: " + (e && (e.message || e));
+      if (status) status.textContent = t("misc.failed_prefix") + (e && (e.message || e));
     })
     .then(function () {
-      if (btn && REORG_COUNT > 0) { btn.disabled = false; btn.textContent = "Reorganize now (" + REORG_COUNT + ")"; }
+      if (btn && REORG_COUNT > 0) { btn.disabled = false; btn.textContent = t("settings.reorganize_now") + " (" + REORG_COUNT + ")"; }
     });
 }
 
@@ -1384,10 +1840,10 @@ function onRefreshMirrors() {
 function renderSidebar() {
   var el = document.getElementById("sidebar");
   var g = globalCounts();
-  var html = '<div class="side-h">Library</div>';
+  var html = '<div class="side-h">' + esc(t("side.library")) + '</div>';
   // Aggregate view across all lists.
   html += '<button class="side-item' + (CURRENT === "__all__" ? " active" : "") + '" data-list="__all__">' +
-    '<span class="ic">🗂</span><span class="lbl">All downloads</span>' +
+    '<span class="ic">🗂</span><span class="lbl">' + esc(t("side.all_downloads")) + '</span>' +
     statusBadge(everyBook()) +
     '<span class="ct">' + g.done + "/" + g.all + '</span></button>';
   // One entry per list, with a live status badge (active/paused), attention dot,
@@ -1406,7 +1862,9 @@ function renderSidebar() {
 function renderToolbar() {
   var title, subtitle, c;
   if (CURRENT === "__all__") {
-    title = "All downloads"; subtitle = LISTS.length + " lists · " + globalCounts().all + " books"; c = globalCounts();
+    title = t("side.all_downloads");
+    subtitle = LISTS.length + " " + t("misc.lists_subtitle") + " · " + globalCounts().all + " " + t("misc.books_subtitle");
+    c = globalCounts();
   } else {
     var l = currentList(); title = l.title; subtitle = l.subtitle; c = countsOf(listBooks(l));
   }
@@ -1419,7 +1877,7 @@ function renderToolbar() {
     '<div class="seg active" style="width:' + pct(c.active) + '"></div>' +
     '<div class="seg attn" style="width:' + pct(c.needs) + '"></div>' +
     '<div class="seg cantdl" style="width:' + pct(c.cantdl) + '"></div>';
-  document.getElementById("progNum").textContent = c.done + " / " + total + " done";
+  document.getElementById("progNum").textContent = c.done + " / " + total + " " + t("toolbar.done_of");
 }
 
 function renderFilters() {
@@ -1465,13 +1923,13 @@ function renderFilters() {
       }).join("")
     : "";
   el.innerHTML =
-    chip("all", "All", c.all) +
-    chip("needs", "Needs you", c.needs) +
-    chip("review", "Check download", c.review) +
-    chip("cantdl", "Cannot download", c.cantdl) +
-    chip("active", "In progress", c.active) +
-    chip("done", "Done", c.done) +
-    chip("queued", "Queued", c.queued) +
+    chip("all", t("filter.all"), c.all) +
+    chip("needs", t("filter.needs"), c.needs) +
+    chip("review", t("filter.review"), c.review) +
+    chip("cantdl", t("filter.cantdl"), c.cantdl) +
+    chip("active", t("filter.active"), c.active) +
+    chip("done", t("filter.done"), c.done) +
+    chip("queued", t("filter.queued"), c.queued) +
     fmtChips;
 }
 
@@ -1502,7 +1960,7 @@ function renderList() {
       if (!g.collapsed) visible.forEach(function (bk) { shown++; html += bookRow(bk); });
     });
   }
-  if (shown === 0) html = '<div class="empty">Nothing here for this filter.</div>';
+  if (shown === 0) html = '<div class="empty">' + esc(t("empty.filter")) + '</div>';
   // Diff-guard: only touch the DOM when the (progress-free) markup actually changed,
   // so a reload that finds nothing structurally different doesn't re-replace the list
   // (re-decoding covers, flickering). Live download bars are filled in place below.
@@ -1655,13 +2113,13 @@ function downloadPct(bk) {
 /* One variation's status cell. An ANIMATED hourglass = actively downloading; a
    still hourglass = queued/waiting — so the two are visually distinct. */
 function varStatusCell(v) {
-  if (v.state === "done") return '<span class="vstat" style="color:var(--green)">✓ Done</span>';
+  if (v.state === "done") return '<span class="vstat" style="color:var(--green)">' + esc(t("vstat.done")) + '</span>';
   if (v.state === "downloading")
     return '<span class="vstat" style="color:var(--accent)"><span class="hourglass run">⏳</span> <span class="vpct">…</span></span>';
   if (v.state === "paused")
-    return '<span class="vstat">⏸ Paused' + (v.progress ? ' ' + v.progress + '%' : '') + '</span>';
-  if (v.state === "failed") return '<span class="vstat" style="color:var(--red)">⚠ Failed</span>';
-  if (v.state === "queued") return '<span class="vstat"><span class="hourglass">⏳</span> Queued</span>';
+    return '<span class="vstat">' + esc(t("vstat.paused")) + (v.progress ? ' ' + v.progress + '%' : '') + '</span>';
+  if (v.state === "failed") return '<span class="vstat" style="color:var(--red)">' + esc(t("vstat.failed")) + '</span>';
+  if (v.state === "queued") return '<span class="vstat"><span class="hourglass">⏳</span> ' + esc(t("vstat.queued")) + '</span>';
   return '<span class="vstat">' + esc(v.state) + '</span>';
 }
 /* One variation's progress bar. Live (downloading) rows bake width:0% so the list
@@ -1678,7 +2136,7 @@ function varLine(bk, v) {
   // Too-few-pages guard: a verified file with a suspiciously low page count is likely
   // a sample/wrong/corrupt copy — flag it (the file is kept; this is a warning).
   var warn = v.low_pages
-    ? '<span class="vwarn" title="Only ' + v.counted_pages + ' pages — this file may be a sample, incomplete, or the wrong book">⚠ ' + v.counted_pages + 'p</span>'
+    ? '<span class="vwarn" title="' + esc("Only " + v.counted_pages + " pages — " + t("vm.low_pages_title")) + '">⚠ ' + v.counted_pages + 'p</span>'
     : '';
   return '<div class="vline"' + dp + '>' +
     '<span class="vt" style="color:' + fmtColor(v.fmt) + '">' + esc(v.fmt) + '</span>' +
@@ -1693,11 +2151,11 @@ function variationLines(bk) {
   var req = requestedVersions(bk).filter(function (v) { return v.state !== "cancelled"; });
   if (req.length === 0) {
     var es = effectiveStatus(bk), txt, cls;
-    if (es === "querying") { txt = '<span class="hourglass run">⟳</span> Being queried…'; cls = "s-active"; }
-    else if (es === "needs") { txt = "Choose a copy"; cls = "s-attn"; }
-    else if (es === "review") { txt = "Check download"; cls = "s-attn"; }
-    else if (es === "cantdl") { txt = bk.discovery === "not_found" ? "Not found" : "Failed"; cls = "s-fail"; }
-    else { txt = bk.priority ? "⤴ Next up" : "Queued for query"; cls = bk.priority ? "s-active" : "s-queued"; }
+    if (es === "querying") { txt = '<span class="hourglass run">⟳</span> ' + esc(t("book.being_queried")); cls = "s-active"; }
+    else if (es === "needs") { txt = esc(t("book.choose_copy")); cls = "s-attn"; }
+    else if (es === "review") { txt = esc(t("book.check_download")); cls = "s-attn"; }
+    else if (es === "cantdl") { txt = esc(bk.discovery === "not_found" ? t("book.not_found") : t("book.failed")); cls = "s-fail"; }
+    else { txt = esc(bk.priority ? t("book.next_up") : t("book.queued_query")); cls = bk.priority ? "s-active" : "s-queued"; }
     return '<div class="vlist"><div class="vline bookline"><span class="chip-s ' + cls + '">' + txt + '</span></div></div>';
   }
   return '<div class="vlist">' + req.map(function (v) { return varLine(bk, v); }).join("") + '</div>';
@@ -1706,11 +2164,11 @@ function variationLines(bk) {
    row's action column. Empty otherwise. */
 function rowAction(bk) {
   var es = effectiveStatus(bk);
-  if (es === "needs") return '<button class="rowbtn amber" data-open="' + bk.id + '">Choose…</button>';
-  if (es === "review") return '<button class="rowbtn amber" data-open="' + bk.id + '">Review…</button>';
+  if (es === "needs") return '<button class="rowbtn amber" data-open="' + bk.id + '">' + esc(t("rowbtn.choose")) + '</button>';
+  if (es === "review") return '<button class="rowbtn amber" data-open="' + bk.id + '">' + esc(t("rowbtn.review")) + '</button>';
   if (es === "queued" && (bk.versions && bk.versions.length)) {
     return '<button class="rowbtn' + (bk.priority ? " amber" : "") + '" data-top="' + bk.id +
-      '" title="Move to top of queue">' + (bk.priority ? "✓ Top" : "⤒ Top") + '</button>';
+      '" title="' + esc(t("detail.move_top")) + '">' + esc(bk.priority ? t("rowbtn.top_on") : t("rowbtn.top")) + '</button>';
   }
   return '<span></span>';
 }
@@ -1718,7 +2176,7 @@ function rowAction(bk) {
 /* The book's list meta line: author · year (page count is detail-only — space is
    tight here and the year is what readers scan for). Auto-filled author/year
    (back-filled from the downloaded copy, not user-entered) are subtly marked. */
-function autoMark(s) { return '<span class="bf" title="Auto-filled from the downloaded copy — edit to override">' + s + '</span>'; }
+function autoMark(s) { return '<span class="bf" title="' + esc(t("misc.autofill_title")) + '">' + s + '</span>'; }
 function bookMetaLine(bk) {
   var bf = bk.backfilled || [], parts = [];
   if (bk.author) parts.push(bf.indexOf("authors") >= 0 ? autoMark(esc(bk.author)) : esc(bk.author));
@@ -1869,9 +2327,9 @@ function renderActivePanel() {
   // counted as CONNECTING. Connecting is uncapped (bounded only by total download
   // concurrency), so it is deliberately NOT folded into the "downloading" number.
   document.getElementById("apSummary").textContent =
-    querying.length + " querying · " + active + " downloading" +
-    (connecting ? " · " + connecting + " connecting" : "") +
-    (paused ? " · " + paused + " paused" : "");
+    querying.length + " " + t("ap.querying_sum") + " · " + active + " " + t("ap.downloading_sum") +
+    (connecting ? " · " + connecting + " " + t("ap.connecting_sum") : "") +
+    (paused ? " · " + paused + " " + t("ap.paused_sum") : "");
 
   // Per-host slots: filled by ACTIVELY-transferring legs (capped at the host
   // concurrency); connecting/paused legs shown as a parenthetical, not as "on" slots.
@@ -1897,29 +2355,29 @@ function renderActivePanel() {
 
   if (ACTIVE_COLLAPSED) return; // body hidden — skip building it
 
-  var html = '<div class="ap-sec">Being queried (' + querying.length + ')</div>';
-  if (!querying.length) html += '<div class="ap-empty">Nothing being queried.</div>';
+  var html = '<div class="ap-sec">' + esc(t("ap.being_queried_sec")) + ' (' + querying.length + ')</div>';
+  if (!querying.length) html += '<div class="ap-empty">' + esc(t("ap.nothing_queried")) + '</div>';
   querying.forEach(function (b) {
     html += '<div class="ap-row"><span class="nm">' + esc(b.title) +
       ' <small>' + esc(b.author) + '</small></span>' +
       '<span class="ap-bar"><i style="width:40%"></i></span>' +
-      '<span class="ap-stats">searching…</span></div>';
+      '<span class="ap-stats">' + esc(t("ap.searching")) + '</span></div>';
   });
 
   // List every active leg with WHAT it's doing: the mirror it's on, and either
   // "connecting…" (slot held, resolving/opening the stream — no bytes yet) or a
   // live progress bar + speed/ETA once bytes flow. (Genuinely-queued books with
   // no worker aren't here — they read "Queued" in the main list.)
-  html += '<div class="ap-sec">Downloading (' + active +
-    (connecting ? ' · ' + connecting + ' connecting' : '') +
-    (paused ? ' · ' + paused + ' paused' : '') + ')</div>';
-  if (!legList.length) html += '<div class="ap-empty">No active downloads.</div>';
+  html += '<div class="ap-sec">' + esc(t("ap.downloading_sec")) + ' (' + active +
+    (connecting ? ' · ' + connecting + ' ' + t("ap.connecting_sum") : '') +
+    (paused ? ' · ' + paused + ' ' + t("ap.paused_sum") : '') + ')</div>';
+  if (!legList.length) html += '<div class="ap-empty">' + esc(t("ap.no_downloads")) + '</div>';
   legList.forEach(function (item) {
     var v = item.v, leg = item.leg;
     var pct, stats, barCls = "", host = leg.host ? ' <small>· ' + esc(leg.host) + '</small>' : '';
     if (v.state === "paused") {
       pct = leg.progress || 0;
-      stats = "paused";
+      stats = t("ap.paused_stat");
     } else if (legTransferring(v, leg)) {
       pct = leg.progress || 0;
       stats = fmtSpeed(leg.speed) + " · " + fmtEta(leg.eta);
@@ -1928,9 +2386,9 @@ function renderActivePanel() {
       // A partial already on disk (a resume) shows its %, never a 0% restart bar.
       pct = leg.progress || 0;
       if (pct > 0) {
-        stats = "resuming " + pct + "% · connecting via " + (leg.host || "mirror");
+        stats = t("ap.resuming") + " " + pct + "% · " + t("ap.connecting") + " " + (leg.host || "mirror");
       } else {
-        stats = "connecting via " + (leg.host || "mirror");
+        stats = t("ap.connecting") + " " + (leg.host || "mirror");
         barCls = " indet";
       }
       host = ""; // already named in the stats — don't repeat it
@@ -1958,48 +2416,48 @@ function renderActivePanel() {
 function partInfo(v) {
   if ((v.state !== "downloading" && v.state !== "paused") || !v.output_path) return "";
   var p = v.output_path + ".part";
-  return '<div class="cmeta partpath"><span>writing to <code>' + esc(p) + '</code></span>' +
-    '<button class="tbtn" data-reveal="' + esc(p) + '" title="Reveal the .part file (or its folder) in Finder">📁 Reveal .part</button></div>';
+  return '<div class="cmeta partpath"><span>' + esc(t("vm.writing_to")) + ' <code>' + esc(p) + '</code></span>' +
+    '<button class="tbtn" data-reveal="' + esc(p) + '" title="' + esc(t("vm.reveal_part_title")) + '">' + esc(t("vm.reveal_part")) + '</button></div>';
 }
 function renderVariationManager(bk) {
   if (!bk.versions || !bk.versions.length) return "";
-  var html = '<div class="sec-t">Variations (' + bk.versions.length + ')</div>';
+  var html = '<div class="sec-t">' + esc(t("vm.variations")) + ' (' + bk.versions.length + ')</div>';
   bk.versions.forEach(function (v, idx) {
     var label = "", action;
     // Drop a copy that doesn't belong (e.g. a wrong-book file picked by mistake).
     // remove_variation drops the candidate AND dismisses the md5 so a re-query won't
     // resurface it. Only Done copies have a file to Trash; here there's none.
     var removeBtn = ' <button class="tbtn" data-remove="' + bk.id + ':' + v.md5 +
-      '" title="Remove this copy from the book">✕ Remove</button>';
+      '" title="' + esc(t("vm.remove_title")) + '">' + esc(t("vm.remove_btn")) + '</button>';
     if (v.state === "done") {
-      label = '<span class="chip-s s-done">✓ Downloaded</span>';
-      action = '<button class="tbtn" data-reveal="' + esc(v.output_path || "") + '">Reveal</button>' +
-        '<button class="tbtn" data-dl="' + bk.id + ':' + idx + '">Re-download</button>' +
-        '<button class="tbtn" data-remove="' + bk.id + ':' + v.md5 + '" title="Move the file to Trash and remove this download">🗑 Remove</button>';
+      label = '<span class="chip-s s-done">' + esc(t("vm.downloaded")) + '</span>';
+      action = '<button class="tbtn" data-reveal="' + esc(v.output_path || "") + '">' + esc(t("vm.reveal")) + '</button>' +
+        '<button class="tbtn" data-dl="' + bk.id + ':' + idx + '">' + esc(t("vm.redownload")) + '</button>' +
+        '<button class="tbtn" data-remove="' + bk.id + ':' + v.md5 + '" title="' + esc(t("vm.remove_dl_title")) + '">' + esc(t("vm.remove_trash")) + '</button>';
     } else if (v.state === "downloading" || v.state === "queued") {
-      label = '<span class="chip-s s-active">' + (v.state === "queued" ? "Queued" : v.progress + "%") + '</span>';
+      label = '<span class="chip-s s-active">' + (v.state === "queued" ? esc(t("vstat.queued")) : v.progress + "%") + '</span>';
       // An in-flight/queued variation can be paused (resumable) or cancelled.
       action =
-        '<button class="tbtn" data-pausev="' + bk.id + ':' + idx + '">❚❚ Pause</button>' +
-        '<button class="tbtn" data-canceldl="' + bk.id + ':' + idx + '">Cancel</button>';
+        '<button class="tbtn" data-pausev="' + bk.id + ':' + idx + '">' + esc(t("vm.pause")) + '</button>' +
+        '<button class="tbtn" data-canceldl="' + bk.id + ':' + idx + '">' + esc(t("vm.cancel")) + '</button>';
     } else if (v.state === "paused") {
-      label = '<span class="chip-s s-queued">Paused' + (v.progress ? " · " + v.progress + "%" : "") + '</span>';
+      label = '<span class="chip-s s-queued">' + esc(t("vm.paused_state")) + (v.progress ? " · " + v.progress + "%" : "") + '</span>';
       action =
-        '<button class="tbtn primary" data-resumev="' + bk.id + ':' + idx + '">▶ Resume</button>' +
-        '<button class="tbtn" data-canceldl="' + bk.id + ':' + idx + '">Cancel</button>';
+        '<button class="tbtn primary" data-resumev="' + bk.id + ':' + idx + '">' + esc(t("vm.resume")) + '</button>' +
+        '<button class="tbtn" data-canceldl="' + bk.id + ':' + idx + '">' + esc(t("vm.cancel")) + '</button>';
     } else if (v.state === "cancelled") {
-      label = '<span class="chip-s s-queued">Cancelled</span>';
-      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">Download</button>' + removeBtn;
+      label = '<span class="chip-s s-queued">' + esc(t("vm.cancelled_state")) + '</span>';
+      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">' + esc(t("vm.download")) + '</button>' + removeBtn;
     } else if (v.state === "failed") {
       var why = v.last_error ? ' <small style="opacity:.7">· ' + esc(v.last_error) + '</small>' : '';
-      label = '<span class="chip-s s-fail">Failed</span>' + why;
-      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">Retry</button>' + removeBtn;
+      label = '<span class="chip-s s-fail">' + esc(t("vm.failed_state")) + '</span>' + why;
+      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">' + esc(t("vm.retry")) + '</button>' + removeBtn;
     } else {
       // Not requested for download (a search result the user hasn't chosen, or a
       // chosen copy that was cancelled before starting). Label it so no variation
       // ever renders "without status".
-      label = '<span class="chip-s s-avail">Available</span>';
-      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">Download</button>' + removeBtn;
+      label = '<span class="chip-s s-avail">' + esc(t("vm.available_state")) + '</span>';
+      action = '<button class="tbtn primary" data-dl="' + bk.id + ':' + idx + '">' + esc(t("vm.download")) + '</button>' + removeBtn;
     }
     // The candidate's OWN title/author (what the mirror returned) so the user
     // can judge whether the result is the right book.
@@ -2009,9 +2467,9 @@ function renderVariationManager(bk) {
     var lang = v.language ? '<span>' + esc(v.language) + '</span>' : '';
     var pp = (v.pages != null) ? '<span>' + v.pages + ' pp</span>' : '';
     var recBadge = (bk.recommended_md5 && v.md5 === bk.recommended_md5)
-      ? ' <span class="chip-s s-attn" title="Recommended replacement">★ Recommended</span>' : '';
+      ? ' <span class="chip-s s-attn" title="' + esc(t("vm.recommended_title")) + '">' + esc(t("vm.recommended_badge")) + '</span>' : '';
     var matchPct = (v.score != null)
-      ? '<span title="match confidence (title + author ranking)" style="font-weight:600">match ' + Math.round(v.score * 100) + '%</span>'
+      ? '<span title="match confidence (title + author ranking)" style="font-weight:600">' + esc(t("vm.match")) + ' ' + Math.round(v.score * 100) + '%</span>'
       : '';
     html += '<div class="cand' + (v.state === "done" ? " best" : "") + (recBadge ? " rec" : "") + '">' +
       '<div class="ct">' + fmtLabel(v.fmt) + ' · ' + v.size + ' MB ' + label + recBadge + '</div>' +
@@ -2038,10 +2496,10 @@ function primaryVariation(bk) {
 function detailMeta(bk) {
   var pv = primaryVariation(bk);
   if (!pv) return "";
-  var rows = '<div class="kv"><span class="k">Language</span><span class="v">' + esc(pv.language || "—") + '</span></div>' +
-    '<div class="kv"><span class="k">Pages</span><span class="v">' + (pv.pages != null ? pv.pages : "—") + '</span></div>';
-  if (pv.year) rows += '<div class="kv"><span class="k">Year</span><span class="v">' + pv.year + '</span></div>';
-  if (pv.publisher) rows += '<div class="kv"><span class="k">Publisher</span><span class="v">' + esc(pv.publisher) + '</span></div>';
+  var rows = '<div class="kv"><span class="k">' + esc(t("detail.k_language")) + '</span><span class="v">' + esc(pv.language || "—") + '</span></div>' +
+    '<div class="kv"><span class="k">' + esc(t("detail.k_pages")) + '</span><span class="v">' + (pv.pages != null ? pv.pages : "—") + '</span></div>';
+  if (pv.year) rows += '<div class="kv"><span class="k">' + esc(t("detail.k_year")) + '</span><span class="v">' + pv.year + '</span></div>';
+  if (pv.publisher) rows += '<div class="kv"><span class="k">' + esc(t("detail.k_publisher")) + '</span><span class="v">' + esc(pv.publisher) + '</span></div>';
   return rows;
 }
 
@@ -2090,9 +2548,9 @@ function fillHistoryFrom(bk) {
   var sig = (bk.history || []).length + ":" + ((bk.history || [])[(bk.history || []).length - 1] || {}).at_ms;
   if (sig === HIST_SIG) return; // nothing new → don't rebuild (keeps selection)
   HIST_SIG = sig;
-  document.getElementById("histTitle").textContent = "History — " + bk.title;
+  document.getElementById("histTitle").textContent = t("history.modal_prefix") + bk.title;
   document.getElementById("histBody").innerHTML =
-    '<div class="hist">' + (historyRows(bk) || '<div class="ap-empty">No events yet.</div>') + '</div>';
+    '<div class="hist">' + (historyRows(bk) || '<div class="ap-empty">' + esc(t("history.no_events")) + '</div>') + '</div>';
 }
 function refreshHistory() {
   if (!HIST_BOOK) return;
@@ -2144,80 +2602,80 @@ function renderDetail() {
   // only as "Greek Myths D'Aulaires'"). Inline so it's discoverable on the book.
   if (EDIT_BOOK === bk.id) {
     html += '<div style="margin:0 0 12px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--panel-2)">' +
-      '<div style="font-size:12px;opacity:.7;margin-bottom:6px">Edit title/author, then re-query</div>' +
-      '<input id="editTitle" type="text" placeholder="Title" value="' + esc(bk.title) + '" style="width:100%;margin-bottom:6px;padding:6px;box-sizing:border-box">' +
-      '<input id="editAuthor" type="text" placeholder="Author(s), comma-separated" value="' + esc(bk.author || "") + '" style="width:100%;padding:6px;box-sizing:border-box">' +
+      '<div style="font-size:12px;opacity:.7;margin-bottom:6px">' + esc(t("detail.edit_hint")) + '</div>' +
+      '<input id="editTitle" type="text" placeholder="' + esc(t("detail.edit_title_ph")) + '" value="' + esc(bk.title) + '" style="width:100%;margin-bottom:6px;padding:6px;box-sizing:border-box">' +
+      '<input id="editAuthor" type="text" placeholder="' + esc(t("detail.edit_author_ph")) + '" value="' + esc(bk.author || "") + '" style="width:100%;padding:6px;box-sizing:border-box">' +
       '<div style="display:flex;gap:8px;margin-top:8px">' +
-        '<button class="tbtn primary" data-editsave="' + bk.id + '">Save &amp; re-query</button>' +
-        '<button class="tbtn" data-editcancel="1">Cancel</button>' +
+        '<button class="tbtn primary" data-editsave="' + bk.id + '">' + esc(t("detail.save_requery")) + '</button>' +
+        '<button class="tbtn" data-editcancel="1">' + esc(t("detail.cancel_edit")) + '</button>' +
       '</div></div>';
   } else {
-    html += '<div style="margin:0 0 10px"><button class="tbtn" data-editbook="' + bk.id + '">✎ Edit title/author &amp; re-query</button>' +
-      (isManualBook(bk) ? ' <button class="tbtn" data-removebook="' + bk.id + '">🗑 Remove from list</button>' : '') +
+    html += '<div style="margin:0 0 10px"><button class="tbtn" data-editbook="' + bk.id + '">' + esc(t("detail.edit_btn")) + '</button>' +
+      (isManualBook(bk) ? ' <button class="tbtn" data-removebook="' + bk.id + '">' + esc(t("detail.remove_book")) + '</button>' : '') +
       '</div>';
   }
 
   if (bk.discovery === "querying") {
-    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-active">Being queried…</span></span></div>' +
-      '<div class="kv"><span class="k">Why</span><span class="v">Searching mirrors for matches.</span></div>';
+    html += '<div class="kv"><span class="k">' + esc(t("detail.k_status")) + '</span><span class="v"><span class="chip-s s-active">' + esc(t("detail.being_queried_chip")) + '</span></span></div>' +
+      '<div class="kv"><span class="k">' + esc(t("detail.k_why")) + '</span><span class="v">' + esc(t("detail.querying_why")) + '</span></div>';
   } else if (bk.review) {
     // Downloaded, but a better match was found on re-query.
     var rec = (bk.versions || []).filter(function (v) { return v.md5 === bk.recommended_md5; })[0];
     var dl = (bk.versions || []).filter(function (v) { return v.state === "done"; })[0];
-    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-attn">Check download</span></span></div>' +
-      '<div class="kv"><span class="k">Why</span><span class="v">The downloaded copy may not match this book — a better match was found on re-query.</span></div>';
-    if (dl) html += '<div class="kv"><span class="k">Downloaded</span><span class="v">' + esc(dl.title || "—") + ' · ' + dl.fmt.toUpperCase() + ' · ' + dl.size + ' MB</span></div>';
-    if (rec) html += '<div class="kv"><span class="k">Recommended</span><span class="v">' + esc(rec.title || "—") + ' · ' + rec.fmt.toUpperCase() + ' · ' + rec.size + ' MB</span></div>';
+    html += '<div class="kv"><span class="k">' + esc(t("detail.k_status")) + '</span><span class="v"><span class="chip-s s-attn">' + esc(t("status.review")) + '</span></span></div>' +
+      '<div class="kv"><span class="k">' + esc(t("detail.k_why")) + '</span><span class="v">' + esc(t("detail.review_why")) + '</span></div>';
+    if (dl) html += '<div class="kv"><span class="k">' + esc(t("detail.k_downloaded")) + '</span><span class="v">' + esc(dl.title || "—") + ' · ' + dl.fmt.toUpperCase() + ' · ' + dl.size + ' MB</span></div>';
+    if (rec) html += '<div class="kv"><span class="k">' + esc(t("detail.k_recommended")) + '</span><span class="v">' + esc(rec.title || "—") + ' · ' + rec.fmt.toUpperCase() + ' · ' + rec.size + ' MB</span></div>';
     html += '<div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap">';
-    if (rec) html += '<button class="tbtn primary" data-replace="' + bk.id + ':' + bk.recommended_md5 + '">⤓ Download recommended &amp; Trash old</button>';
-    if (dl) html += '<button class="tbtn" data-accept="' + bk.id + '" title="Keep the copy you already downloaded">✓ Accept current copy</button>';
+    if (rec) html += '<button class="tbtn primary" data-replace="' + bk.id + ':' + bk.recommended_md5 + '">' + esc(t("detail.download_recommended")) + '</button>';
+    if (dl) html += '<button class="tbtn" data-accept="' + bk.id + '" title="' + esc(t("detail.accept_title")) + '">' + esc(t("detail.accept_copy")) + '</button>';
     html += '</div>';
     html += detailMeta(bk) + renderVariationManager(bk);
   } else if (bk.discovery === "not_found") {
-    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-fail">Not found</span></span></div>' +
-      '<div class="kv"><span class="k">Why</span><span class="v">No mirror returned a match.</span></div>';
+    html += '<div class="kv"><span class="k">' + esc(t("detail.k_status")) + '</span><span class="v"><span class="chip-s s-fail">' + esc(t("detail.notfound_chip")) + '</span></span></div>' +
+      '<div class="kv"><span class="k">' + esc(t("detail.k_why")) + '</span><span class="v">' + esc(t("detail.notfound_why")) + '</span></div>';
     if (MANUAL_FOR === bk.id) {
       html += '<div style="margin-top:12px">' +
-        '<div class="hint" style="margin-bottom:6px">Paste an md5 or a libgen URL (e.g. <code>…/ads.php?md5=…</code>):</div>' +
-        '<input id="manualMd5" type="text" placeholder="32-char md5 or libgen URL" ' +
+        '<div class="hint" style="margin-bottom:6px">' + t("detail.manual_hint") + '</div>' +
+        '<input id="manualMd5" type="text" placeholder="' + esc(t("detail.manual_ph")) + '" ' +
         'style="width:100%;box-sizing:border-box;padding:7px 9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text)">' +
         '<div id="manualErr" class="hint" style="color:#c0392b;margin-top:4px"></div>' +
         '<div style="margin-top:8px;display:flex;gap:8px">' +
-        '<button class="tbtn primary" data-manualgo="' + bk.id + '">⤓ Download this md5</button>' +
-        '<button class="tbtn" data-manualcancel="1">Cancel</button></div></div>';
+        '<button class="tbtn primary" data-manualgo="' + bk.id + '">' + esc(t("detail.manual_download")) + '</button>' +
+        '<button class="tbtn" data-manualcancel="1">' + esc(t("btn.cancel")) + '</button></div></div>';
     } else {
       html += '<div style="margin-top:12px;display:flex;gap:8px">' +
-        '<button class="tbtn" data-requery="' + bk.id + '">Search again</button>' +
-        '<button class="tbtn" data-manual="' + bk.id + '">Enter manually</button></div>';
+        '<button class="tbtn" data-requery="' + bk.id + '">' + esc(t("detail.search_again")) + '</button>' +
+        '<button class="tbtn" data-manual="' + bk.id + '">' + esc(t("detail.enter_manually")) + '</button></div>';
     }
   } else if (bk.discovery === "needs_selection" && requestedVersions(bk).length === 0) {
-    html += '<div class="kv"><span class="k">Status</span><span class="v"><span class="chip-s s-attn">Needs you</span></span></div>' +
-      '<div class="kv"><span class="k">Why</span><span class="v">No single match cleared the auto-download threshold — choose which variation(s) to download.</span></div>' +
+    html += '<div class="kv"><span class="k">' + esc(t("detail.k_status")) + '</span><span class="v"><span class="chip-s s-attn">' + esc(t("detail.needs_chip")) + '</span></span></div>' +
+      '<div class="kv"><span class="k">' + esc(t("detail.k_why")) + '</span><span class="v">' + esc(t("detail.needs_why")) + '</span></div>' +
       detailMeta(bk) +
       renderVariationManager(bk) +
-      '<div style="margin:12px 0 2px"><button class="tbtn" data-marknf="' + bk.id + '" title="None of these are right — move to Cannot download">✗ Mark as not found</button></div>';
+      '<div style="margin:12px 0 2px"><button class="tbtn" data-marknf="' + bk.id + '" title="' + esc(t("detail.marknf_title")) + '">' + esc(t("detail.mark_not_found")) + '</button></div>';
   } else {
     var a = rollup(bk);
-    var summary = es === "done" ? '<span class="chip-s s-done">Done</span>'
-      : es === "active" ? '<span class="chip-s s-active">Downloading ' + a.done + "/" + a.requested + '</span>'
-      : es === "cantdl" ? '<span class="chip-s s-fail">Cannot download</span>'
-      : '<span class="chip-s s-queued">' + (bk.priority ? "Next up" : "Queued") + '</span>';
-    html += '<div class="kv"><span class="k">Status</span><span class="v">' + summary + '</span></div>';
+    var summary = es === "done" ? '<span class="chip-s s-done">' + esc(t("detail.done_chip")) + '</span>'
+      : es === "active" ? '<span class="chip-s s-active">' + esc(t("detail.downloading_chip")) + ' ' + a.done + "/" + a.requested + '</span>'
+      : es === "cantdl" ? '<span class="chip-s s-fail">' + esc(t("detail.cantdl_chip")) + '</span>'
+      : '<span class="chip-s s-queued">' + esc(bk.priority ? t("detail.next_up_chip") : t("detail.queued_chip")) + '</span>';
+    html += '<div class="kv"><span class="k">' + esc(t("detail.k_status")) + '</span><span class="v">' + summary + '</span></div>';
     if (es === "queued") {
       html += '<div style="margin:10px 0"><button class="tbtn' + (bk.priority ? "" : " primary") +
-        '" data-top="' + bk.id + '">' + (bk.priority ? "Remove from top" : "⤒ Move to top of queue") + '</button></div>';
+        '" data-top="' + bk.id + '">' + esc(bk.priority ? t("detail.remove_top") : t("detail.move_top")) + '</button></div>';
     }
     html += detailMeta(bk) + renderVariationManager(bk);
   }
   // History: a button that opens the chronicle in a modal (not inline).
   if (bk.history && bk.history.length) {
     html += '<div style="margin-top:14px"><button class="tbtn" data-history="' + bk.id +
-      '">🕑 Show history (' + bk.history.length + ')</button></div>';
+      '">' + esc(t("detail.show_history")) + ' (' + bk.history.length + ')</button></div>';
   }
   // "Download whole series →": look the book's series up on Open Library and
   // seed a fresh list with its ordered members (download_series under Tauri).
   html += '<div class="series-actions" style="margin-top:14px;border-top:1px solid var(--line,#2a2a2a);padding-top:12px">' +
-    '<button class="tbtn" data-series="' + bk.id + '" title="Find this book&#39;s series on Open Library and download every entry">Download whole series →</button>' +
+    '<button class="tbtn" data-series="' + bk.id + '" title="' + esc(t("detail.series_title")) + '">' + esc(t("detail.download_series")) + '</button>' +
     '</div>';
   b.innerHTML = html;
 }
@@ -2263,7 +2721,7 @@ document.addEventListener("click", function (e) {
   if (t.dataset.manualgo) { // submit the pasted md5/URL for download
     var inp = document.getElementById("manualMd5"), errEl = document.getElementById("manualErr");
     var val = inp ? inp.value.trim() : "";
-    if (!val) { if (errEl) errEl.textContent = "Paste an md5 or libgen URL first."; return; }
+    if (!val) { if (errEl) errEl.textContent = t("misc.manual_empty"); return; }
     onAddManual(t.dataset.manualgo, val, errEl);
     return;
   }
@@ -2510,12 +2968,12 @@ function onRequestVariation(bookId, md5, listId) {
 /* "Enter manually": send a user-pasted md5 (or libgen URL) for a not-found book.
    `bookId` is the composite UI id; the backend needs the per-list bid + list. */
 function onAddManual(bookId, input, errEl) {
-  if (!hasTauri()) { if (errEl) errEl.textContent = "(only available in the app)"; return; }
+  if (!hasTauri()) { if (errEl) errEl.textContent = t("misc.app_only"); return; }
   var bk = bookById(bookId);
   if (!bk) return;
   invoke("add_manual_download", { listId: listArg(bk.list), bookId: bk.bid, input: input })
     .then(function (lib) { MANUAL_FOR = null; applyLibrary(lib); })
-    .catch(function (err) { if (errEl) errEl.textContent = "Failed: " + (errText(err) || "unknown error"); });
+    .catch(function (err) { if (errEl) errEl.textContent = t("misc.failed_prefix") + (errText(err) || t("misc.failed_unknown")); });
 }
 /* Replace a wrong download with the recommended copy: queues the recommended
    variation; the old file is moved to Trash once the new one finishes. */
@@ -2606,17 +3064,17 @@ function onDownloadSeries(bookId, listId) {
   if (!hasTauri()) return;
   // Sticky loading toast — the Open Library lookup can take several seconds, so
   // keep the indicator up until it resolves (removed in both then/catch).
-  var loading = toast("Looking up the series on Open Library… (a few seconds)", { sticky: true });
+  var loading = toast(t("misc.series_loading"), { sticky: true });
   invoke("download_series", { listId: listArg(listId), bookId: bookId })
     .then(function (lib) {
       loading.remove();
       if (lib && lib.current) { CURRENT = lib.current; SELECTED = null; }
-      toast("Series list created — downloading its books.");
+      toast(t("misc.series_created"));
       return applyLibrary(lib);
     })
     .catch(function (err) {
       loading.remove();
-      toast(errText(err) || "Could not download the series.");
+      toast(errText(err) || t("misc.series_failed"));
     });
 }
 function onCancelDownload(bookId, md5, listId) {
@@ -2636,7 +3094,7 @@ function onReveal(path) {
    (stop_all). The engine drives discovery+download in the background. */
 function onToggleRun() {
   RUNNING = !RUNNING;
-  document.getElementById("runBtn").textContent = RUNNING ? "❚❚ Stop all" : "▶ Start downloading for all lists";
+  document.getElementById("runBtn").textContent = RUNNING ? t("toolbar.stop_all") : t("toolbar.start_all");
   if (hasTauri()) {
     var cmd = RUNNING ? "start_all" : "stop_all";
     invoke(cmd, {}).then(applyLibrary)
@@ -2761,14 +3219,14 @@ function updateImportPreview() {
   var groups = [];
   try {
     if (IMPORT_TAB === "file") {
-      if (!IMPORT_FILE) { pv.innerHTML = '<span style="color:var(--text-faint)">Choose a file to preview its books.</span>'; return; }
+      if (!IMPORT_FILE) { pv.innerHTML = '<span style="color:var(--text-faint)">' + esc(t("import.preview_choose")) + '</span>'; return; }
       groups = IMPORT_FILE.isJson ? parseJsonPreview(IMPORT_FILE.text) : parseMdPreview(IMPORT_FILE.text);
     } else {
-      groups = [{ name: "Manual", books: [ (document.getElementById("mTitle").value || "—") + " — " + (document.getElementById("mAuthor").value || "—") ] }];
+      groups = [{ name: t("import.manual_default_group"), books: [ (document.getElementById("mTitle").value || "—") + " — " + (document.getElementById("mAuthor").value || "—") ] }];
     }
-  } catch (err) { pv.innerHTML = '<span style="color:var(--red)">Could not parse: ' + esc(err.message) + '</span>'; return; }
+  } catch (err) { pv.innerHTML = '<span style="color:var(--red)">' + esc(t("import.preview_parse_err")) + esc(err.message) + '</span>'; return; }
   var n = groups.reduce(function (a, g) { return a + g.books.length; }, 0);
-  var html = '<div style="color:var(--text-dim);margin-bottom:6px">Preview · ' + groups.length + ' group(s), ' + n + ' book(s)</div>';
+  var html = '<div style="color:var(--text-dim);margin-bottom:6px">' + esc(t("import.preview_summary")) + ' · ' + groups.length + ' ' + esc(t("import.preview_groups")) + ' ' + n + ' ' + esc(t("import.preview_books")) + '</div>';
   groups.forEach(function (g) {
     html += '<div class="pg">' + esc(g.name) + '</div>';
     g.books.forEach(function (b) { html += '<div class="pb">' + esc(b) + '</div>'; });
@@ -3027,7 +3485,7 @@ function wireProgress() {
     var p = e.payload || {};
     if (p.kind === "all_done") {
       RUNNING = false;
-      document.getElementById("runBtn").textContent = "▶ Start queue";
+      document.getElementById("runBtn").textContent = t("toolbar.start_all");
       refresh(); return;
     }
     noteLeg(p); // track per-leg (md5+host) state so hedge legs get their own panel line
@@ -3170,10 +3628,10 @@ function showCtxMenu(x, y, listId, listName) {
   var m = document.getElementById("ctxMenu");
   m.innerHTML =
     '<div class="ctx-head">' + esc(listName || "List") + '</div>' +
-    '<button data-ctx="start">▶ Start downloads</button>' +
-    '<button data-ctx="pause">❚❚ Pause downloads</button>' +
-    '<button data-ctx="requery">↻ Re-query this list</button>' +
-    '<button data-ctx="remove" class="ctx-danger">🗑 Remove list</button>';
+    '<button data-ctx="start">' + esc(t("ctx.start_downloads")) + '</button>' +
+    '<button data-ctx="pause">' + esc(t("ctx.pause_downloads")) + '</button>' +
+    '<button data-ctx="requery">' + esc(t("ctx.requery")) + '</button>' +
+    '<button data-ctx="remove" class="ctx-danger">' + esc(t("ctx.remove_list")) + '</button>';
   m.classList.remove("hide");
   // Keep the menu on-screen.
   var w = m.offsetWidth || 180, h = m.offsetHeight || 120;
