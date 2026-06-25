@@ -567,6 +567,8 @@ mod unit {
             ..Default::default()
         });
         let mut c = cand(); // reports pages = Some(233)
+        // A PDF: its counted page_count is real PAGES → wins over the mirror's report.
+        c.extension = Some(libgen_core::model::Format::Pdf);
         c.job = Some(DownloadJob {
             state: JobState::Done,
             page_count: Some(231),
@@ -576,7 +578,7 @@ mod unit {
         req.candidates = vec![c];
         req.selected = Some("a".repeat(32));
         let book = build_book(&req, 0, 1);
-        assert_eq!(book.pages, Some(231), "counted pages preferred");
+        assert_eq!(book.pages, Some(231), "PDF counted pages preferred");
         // Year is surfaced on the book.
         assert_eq!(book.year, Some(2000));
 
@@ -584,6 +586,13 @@ mod unit {
         req.candidates[0].job.as_mut().unwrap().page_count = None;
         let book = build_book(&req, 0, 1);
         assert_eq!(book.pages, Some(233), "falls back to reported pages");
+
+        // An EPUB: page_count is spine SECTIONS, never surfaced as pages — only the
+        // mirror's reported pages.
+        req.candidates[0].extension = Some(libgen_core::model::Format::Epub);
+        req.candidates[0].job.as_mut().unwrap().page_count = Some(9999);
+        let book = build_book(&req, 0, 1);
+        assert_eq!(book.pages, Some(233), "epub spine count never shown as pages");
 
         // No acquiring copy → no page count.
         req.candidates[0].job = None;
