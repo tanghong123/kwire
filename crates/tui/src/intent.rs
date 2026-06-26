@@ -108,4 +108,8 @@ pub enum Intent {
 
     /// Resume/retry a paused or cancelled transfer by md5 (Activity pane `r`).
     ResumeTransfer { md5: String },
+
+    /// Apply the previewed reorganize: move already-downloaded files on disk into
+    /// the canonical layout for the current naming/folder/sub-grouping scheme.
+    ApplyReorganize,
 }

@@ -216,6 +216,7 @@ const COMMANDS: &[&str] = &[
     "delete",
     "refresh-mirrors",
     "cleanup",
+    "reorganize",
     "quit",
     "help",
 ];
@@ -335,6 +336,15 @@ pub enum Modal {
     },
     /// Confirm removing a book from the list: [y/n].
     ConfirmBookRemove { book_flat_index: usize },
+    /// Reorganize-files preview: the (current path → correct path) pairs that
+    /// would move under the saved naming-template / download-folder / sub-grouping
+    /// scheme. Scrollable; `[y] apply  [n / esc] cancel`.
+    Reorganize {
+        /// (old path → new path) pairs across all loaded lists.
+        diff: Vec<(String, String)>,
+        /// Highlighted/scroll row within the diff list.
+        selected: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1435,6 +1445,43 @@ impl AppState {
                         | KeyCode::Esc
                         | KeyCode::Char('q') => {
                             self.modal = None;
+                            Intent::Redraw
+                        }
+                        _ => Intent::Redraw,
+                    },
+                    _ => Intent::Redraw,
+                }
+            }
+
+            Modal::Reorganize { diff, selected } => {
+                let len = diff.len();
+                let cur = *selected;
+                match ev {
+                    Event::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            self.modal = None;
+                            Intent::ApplyReorganize
+                        }
+                        KeyCode::Char('n')
+                        | KeyCode::Char('N')
+                        | KeyCode::Esc
+                        | KeyCode::Char('q') => {
+                            self.modal = None;
+                            Intent::Redraw
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            let next = (cur + 1).min(len.saturating_sub(1));
+                            self.modal = Some(Modal::Reorganize {
+                                diff: diff.clone(),
+                                selected: next,
+                            });
+                            Intent::Redraw
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            self.modal = Some(Modal::Reorganize {
+                                diff: diff.clone(),
+                                selected: cur.saturating_sub(1),
+                            });
                             Intent::Redraw
                         }
                         _ => Intent::Redraw,

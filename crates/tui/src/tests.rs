@@ -2915,4 +2915,101 @@ mod tests {
         app.activity_selected = 2;
         assert_eq!(app.focused_transfer_md5(), Some("z".repeat(32)));
     }
+
+    // -----------------------------------------------------------------------
+    // #52 Reorganize modal — open/scroll/confirm/cancel state machine + render
+    // -----------------------------------------------------------------------
+
+    /// A few synthetic old→new path pairs for driving the Reorganize modal.
+    fn sample_reorg_diff() -> Vec<(String, String)> {
+        vec![
+            (
+                "/books/Old Title.epub".into(),
+                "/books/List/01 - Author - Title.epub".into(),
+            ),
+            (
+                "/books/Another.pdf".into(),
+                "/books/List/02 - Author - Another.pdf".into(),
+            ),
+            (
+                "/books/Third.mobi".into(),
+                "/books/List/03 - Author - Third.mobi".into(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn reorganize_modal_scroll_clamps_within_bounds() {
+        let mut app = AppState::new();
+        app.modal = Some(Modal::Reorganize {
+            diff: sample_reorg_diff(),
+            selected: 0,
+        });
+
+        // Up at the top stays at 0.
+        let intent = app.on_input(key(KeyCode::Up));
+        assert_eq!(intent, Intent::Redraw);
+        match &app.modal {
+            Some(Modal::Reorganize { selected, .. }) => assert_eq!(*selected, 0),
+            other => panic!("expected Reorganize modal, got {other:?}"),
+        }
+
+        // Two downs → index 2 (last of three).
+        app.on_input(key(KeyCode::Down));
+        app.on_input(key(KeyCode::Char('j')));
+        match &app.modal {
+            Some(Modal::Reorganize { selected, .. }) => assert_eq!(*selected, 2),
+            other => panic!("expected Reorganize modal, got {other:?}"),
+        }
+
+        // Another down clamps at the last row (len - 1).
+        app.on_input(key(KeyCode::Down));
+        match &app.modal {
+            Some(Modal::Reorganize { selected, .. }) => assert_eq!(*selected, 2),
+            other => panic!("expected Reorganize modal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reorganize_modal_apply_dispatches_intent_and_closes() {
+        let mut app = AppState::new();
+        app.modal = Some(Modal::Reorganize {
+            diff: sample_reorg_diff(),
+            selected: 1,
+        });
+        let intent = app.on_input(key(KeyCode::Char('y')));
+        assert_eq!(intent, Intent::ApplyReorganize);
+        assert!(app.modal.is_none(), "apply should close the modal");
+    }
+
+    #[test]
+    fn reorganize_modal_cancel_closes_without_apply() {
+        for cancel in [KeyCode::Char('n'), KeyCode::Esc, KeyCode::Char('q')] {
+            let mut app = AppState::new();
+            app.modal = Some(Modal::Reorganize {
+                diff: sample_reorg_diff(),
+                selected: 0,
+            });
+            let intent = app.on_input(key(cancel));
+            assert_eq!(intent, Intent::Redraw, "cancel must not apply");
+            assert!(app.modal.is_none(), "cancel should close the modal");
+        }
+    }
+
+    #[test]
+    fn render_reorganize_modal_shows_paths_and_count() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Reorganize {
+            diff: sample_reorg_diff(),
+            selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(buf.contains("Reorganize"), "title should render");
+        assert!(buf.contains("would move"), "count subheader should render");
+        assert!(buf.contains("apply"), "apply/cancel hint should render");
+    }
 }

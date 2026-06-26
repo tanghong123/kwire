@@ -463,6 +463,9 @@ async fn dispatch_intent(
         Intent::ResumeTransfer { md5 } => {
             resume_transfer(app, handles, md5).await;
         }
+        Intent::ApplyReorganize => {
+            apply_reorganize(app, handles).await;
+        }
         Intent::Redraw => {}
     }
     Ok(false)
@@ -539,6 +542,9 @@ async fn handle_command_async(
         }
         "cleanup" => {
             cleanup_cmd(app, handles).await;
+        }
+        "reorganize" => {
+            reorganize_cmd(app, handles).await;
         }
         "add-md5" => {
             if arg.is_empty() {
@@ -1444,6 +1450,85 @@ async fn cleanup_cmd(app: &mut AppState, handles: &EngineHandles) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// #52 — reorganize already-downloaded files to the current naming/folder scheme
+// ---------------------------------------------------------------------------
+
+/// The cross-list reorganize diff: every `(current path → correct path)` pair a
+/// reorganize would move, gathered over all loaded lists. Mirrors the desktop's
+/// `reorganize_diff` command. Empty ⇒ the on-disk layout is already canonical.
+async fn reorganize_diff_all(handles: &EngineHandles) -> Vec<(String, String)> {
+    let arcs = {
+        let lib = handles.library.lock().await;
+        lib.all_arcs()
+    };
+    let mut out = Vec::new();
+    for (_, orch) in &arcs {
+        let mut g = orch.lock().await;
+        if let Ok(diff) = g.reorganize_plan_diff() {
+            out.extend(diff);
+        }
+    }
+    out
+}
+
+/// Apply the reorganize across all loaded lists, mirroring the desktop's
+/// `reorganize_files`: each list's own download folder is passed as a *sibling
+/// root* to the others, so a book shared by two lists is duplicated (copied) into
+/// each rather than moved back and forth. Returns `(moved, skipped, errors)`.
+async fn reorganize_apply_all(handles: &EngineHandles) -> (usize, usize, usize) {
+    let arcs = {
+        let lib = handles.library.lock().await;
+        lib.all_arcs()
+    };
+    let mut folders: Vec<std::path::PathBuf> = Vec::with_capacity(arcs.len());
+    for (_, orch) in &arcs {
+        let g = orch.lock().await;
+        folders.push(g.list_folder().unwrap_or_default());
+    }
+    let (mut moved, mut skipped, mut errors) = (0usize, 0usize, 0usize);
+    for (i, (_, orch)) in arcs.iter().enumerate() {
+        let siblings: Vec<std::path::PathBuf> = folders
+            .iter()
+            .enumerate()
+            .filter(|(j, f)| *j != i && !f.as_os_str().is_empty())
+            .map(|(_, f)| f.clone())
+            .collect();
+        let mut g = orch.lock().await;
+        if let Ok((m, s, e)) = g.relocate_downloads_to_current_scheme(&siblings) {
+            moved += m;
+            skipped += s;
+            errors += e;
+        }
+    }
+    (moved, skipped, errors)
+}
+
+/// `:reorganize` — preview the moves that would bring already-downloaded files
+/// into the current naming/folder/sub-grouping layout, opening the Reorganize
+/// modal. If nothing is misplaced, just sets a status message.
+async fn reorganize_cmd(app: &mut AppState, handles: &EngineHandles) {
+    let diff = reorganize_diff_all(handles).await;
+    if diff.is_empty() {
+        app.status_msg = Some("Nothing to reorganize — layout is already current.".into());
+    } else {
+        let n = diff.len();
+        info!("reorganize: {n} file(s) would move");
+        app.modal = Some(crate::app::Modal::Reorganize { diff, selected: 0 });
+    }
+}
+
+/// Apply a previewed reorganize (the user pressed `y` in the modal), move files
+/// on disk, then refresh the view and report the outcome.
+async fn apply_reorganize(app: &mut AppState, handles: &EngineHandles) {
+    let (moved, skipped, errors) = reorganize_apply_all(handles).await;
+    info!("reorganize applied: moved={moved} skipped={skipped} errors={errors}");
+    refresh_active_view(app, handles).await;
+    app.status_msg = Some(format!(
+        "Reorganized: {moved} moved, {skipped} skipped, {errors} error(s)."
+    ));
+}
+
 /// `:add-md5 <md5>` — inject an MD5 as a manual candidate for the currently
 /// selected book in the active list, then set its goal to Complete.
 async fn add_md5_cmd(app: &mut AppState, handles: &EngineHandles, md5: &str) {
@@ -1485,7 +1570,10 @@ async fn save_settings(app: &mut AppState, handles: &EngineHandles) {
     };
 
     // ── 1. Per-list settings ────────────────────────────────────────────────
-    let list_settings = {
+    // Capture the layout-affecting fields *before* this save so we can tell
+    // whether the on-disk layout (naming template / sub-grouping) just changed —
+    // and, if so, offer to reorganize already-downloaded files (#52).
+    let (list_settings, old_naming, old_seq) = {
         let fmt_pref: Vec<Format> = draft.format_pref.iter().map(|s| Format::parse(s)).collect();
         let language = if draft.language.is_empty() || draft.language == "any" {
             None
@@ -1503,7 +1591,9 @@ async fn save_settings(app: &mut AppState, handles: &EngineHandles) {
         } else {
             ListSettings::default()
         };
-        ListSettings {
+        let old_naming = base.naming_template.clone();
+        let old_seq = base.seq_per_group;
+        let settings = ListSettings {
             format_pref: fmt_pref,
             language,
             auto_threshold: draft.auto_threshold,
@@ -1512,7 +1602,8 @@ async fn save_settings(app: &mut AppState, handles: &EngineHandles) {
             naming_template: draft.naming_template.clone(),
             seq_per_group: draft.seq_per_group,
             ..base
-        }
+        };
+        (settings, old_naming, old_seq)
     };
 
     if let Some(orch_arc) = active_orch(handles).await {
@@ -1527,6 +1618,10 @@ async fn save_settings(app: &mut AppState, handles: &EngineHandles) {
         let cfg = handles.config.lock().unwrap();
         cfg.db_path.parent().unwrap_or(Path::new(".")).to_path_buf()
     };
+    let old_out_dir = {
+        let cfg = handles.config.lock().unwrap();
+        cfg.app.out_dir.clone()
+    };
     {
         let mut cfg = handles.config.lock().unwrap();
         cfg.app.out_dir = draft.out_dir.clone();
@@ -1540,6 +1635,22 @@ async fn save_settings(app: &mut AppState, handles: &EngineHandles) {
 
     // ── 3. Refresh view to reflect the new settings ───────────────────────────
     refresh_active_view(app, handles).await;
+
+    // ── 4. If a layout-affecting setting changed (naming template, download
+    //       folder, or sub-grouping), check whether already-downloaded files are
+    //       now out of place and, if so, prompt to reorganize them (#52). ───────
+    let layout_changed = draft.naming_template != old_naming
+        || draft.seq_per_group != old_seq
+        || draft.out_dir != old_out_dir;
+    if layout_changed {
+        let n = reorganize_diff_all(handles).await.len();
+        if n > 0 {
+            info!("save_settings: layout changed, {n} file(s) can be reorganized");
+            app.status_msg = Some(format!(
+                "Layout changed: {n} downloaded file(s) can be moved — run :reorganize"
+            ));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

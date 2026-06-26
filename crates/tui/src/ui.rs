@@ -119,6 +119,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             Modal::ConfirmBookRemove { book_flat_index } => {
                 render_confirm_book_remove_modal(frame, app, book_flat_index)
             }
+            Modal::Reorganize { diff, selected } => render_reorganize_modal(frame, &diff, selected),
         }
     }
 }
@@ -1892,6 +1893,7 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
         make_key_line(":add-md5 <md5>", "inject MD5 for selection"),
         make_key_line(":refresh-mirrors", "refresh mirror status"),
         make_key_line(":cleanup", "remove .part files"),
+        make_key_line(":reorganize", "move files to current layout"),
     ];
 
     let right_list: Vec<ListItem> = right_lines.into_iter().map(|l| ListItem::new(l)).collect();
@@ -1934,6 +1936,84 @@ fn render_confirm_modal(frame: &mut Frame, title: &str, n_books: usize) {
         .style(style_normal())
         .alignment(Alignment::Left);
     frame.render_widget(para, padded);
+}
+
+// ---------------------------------------------------------------------------
+// #52 Reorganize preview modal — old → new path moves, [y] apply / [n] cancel
+// ---------------------------------------------------------------------------
+
+/// Render the reorganize preview: a scrollable list of `old/path → new/path`
+/// pairs, a count, and the apply/cancel hint. `selected` highlights one row and
+/// anchors the visible window so the list can scroll past the modal height.
+fn render_reorganize_modal(frame: &mut Frame, diff: &[(String, String)], selected: usize) {
+    let area = centered_rect(100, 28, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(C_NEEDS_YOU))
+        .title(Span::styled(" Reorganize downloaded files ", style_title()))
+        .style(style_normal());
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+
+    // subheader (1) + list (Min) + hint (1)
+    let split = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(padded);
+
+    let subhead = format!(
+        "{} file(s) would move into the current naming / folder layout",
+        diff.len()
+    );
+    frame.render_widget(Paragraph::new(Span::styled(subhead, style_dim())), split[0]);
+
+    // Scroll so the highlighted row stays visible. Each pair takes 2 lines
+    // (old path, then the indented arrow → new path).
+    let rows_visible = (split[1].height as usize / 2).max(1);
+    let first = selected.saturating_sub(rows_visible.saturating_sub(1));
+    let items: Vec<ListItem> = diff
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(rows_visible)
+        .map(|(i, (old, new))| {
+            let is_sel = i == selected;
+            let marker = if is_sel { "\u{25b6} " } else { "  " };
+            let old_style = if is_sel {
+                style_selected()
+            } else {
+                style_dim()
+            };
+            let new_style = if is_sel {
+                style_selected()
+            } else {
+                Style::default().fg(C_DONE)
+            };
+            ListItem::new(vec![
+                Line::from(Span::styled(format!("{marker}{old}"), old_style)),
+                Line::from(Span::styled(format!("    \u{2192} {new}"), new_style)),
+            ])
+        })
+        .collect();
+    frame.render_widget(List::new(items), split[1]);
+
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "\u{2191}/\u{2193} scroll   [y] apply   [n / esc] cancel",
+            style_hint(),
+        )),
+        split[2],
+    );
 }
 
 // ---------------------------------------------------------------------------
