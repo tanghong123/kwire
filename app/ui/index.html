@@ -2575,8 +2575,13 @@ function renderVariationManager(bk) {
     var matchPct = (v.score != null)
       ? '<span title="match confidence (title + author ranking)" style="font-weight:600">' + esc(t("vm.match")) + ' ' + Math.round(v.score * 100) + '%</span>'
       : '';
+    // Too-few-pages guard: a verified file with a suspiciously low page count is
+    // likely a sample/wrong/corrupt copy — flag it (the file is kept; a warning).
+    var warn = v.low_pages
+      ? ' <span class="vwarn" title="' + esc("Only " + v.counted_pages + " pages — " + t("vm.low_pages_title")) + '">⚠ ' + v.counted_pages + 'p</span>'
+      : '';
     html += '<div class="cand' + (v.state === "done" ? " best" : "") + (recBadge ? " rec" : "") + '">' +
-      '<div class="ct">' + fmtLabel(v.fmt) + ' · ' + v.size + ' MB ' + label + recBadge + '</div>' +
+      '<div class="ct">' + fmtLabel(v.fmt) + ' · ' + v.size + ' MB ' + label + recBadge + warn + '</div>' +
       idline +
       '<div class="cmeta">' + matchPct + '<span>' + (v.year || "—") + '</span>' + lang + pp + '<span>' + esc(v.publisher) + '</span>' +
       '<span style="opacity:.6">md5 ' + v.md5 + '</span></div>' +
@@ -3422,6 +3427,8 @@ function vmToList(vm) {
                 fmt: v.fmt, size: v.size, year: v.year, publisher: v.publisher || "",
                 title: v.title || "", author: v.author || "",
                 language: v.language || "", pages: (v.pages != null ? v.pages : null),
+                counted_pages: (v.counted_pages != null ? v.counted_pages : null),
+                low_pages: !!v.low_pages,
                 md5: v.md5, state: v.state, progress: v.progress || 0, host: v.host || null,
                 output_path: v.output_path || null,
                 cover_url: v.cover_url || null, score: (v.score != null ? v.score : null),

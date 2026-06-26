@@ -597,6 +597,9 @@ check("book row: not-found cover is neutral + a low_pages variation flags ⚠", 
     versions: [{ md5: "y".repeat(32), fmt: "pdf", state: "done", progress: 100, counted_pages: 3, low_pages: true }] };
   const vh = ctx.varLine(lp, lp.versions[0]);
   if (!/vwarn/.test(vh) || !/3p/.test(vh)) throw new Error("low_pages should show ⚠ Np: " + vh);
+  // The DETAIL view (variation manager) must ALSO flag a downloaded low_pages copy.
+  const dh = ctx.renderVariationManager(lp);
+  if (!/vwarn/.test(dh) || !/3p/.test(dh)) throw new Error("detail view low_pages should show ⚠ Np: " + dh);
 });
 
 check("book row: meta line shows author · year (no pages), marks back-filled author/year", () => {
