@@ -119,8 +119,8 @@ impl Default for SettingsEditor {
 /// Staged settings edits while the Settings modal is open.
 ///
 /// Initialised from the current `ViewModel` + `AppSettings` when the modal
-/// opens.  On save (`Esc`) emitted as `Intent::SaveSettings`; on discard
-/// (`q` / `Ctrl-G`) the modal closes without touching the engine.
+/// opens.  On save (`s`) emitted as `Intent::SaveSettings`; on discard
+/// (`Esc` / `q` / `Ctrl-G`) the modal closes without touching the engine.
 #[derive(Debug, Clone)]
 pub struct SettingsDraft {
     // ── Per-list settings ────────────────────────────────────────────────────
@@ -1504,14 +1504,14 @@ impl AppState {
             Event::Key(KeyEvent {
                 code, modifiers, ..
             }) => match code {
-                // Esc or 's' → save & close (modal closed here; draft consumed by dispatcher)
-                KeyCode::Esc | KeyCode::Char('s') => {
+                // 's' → save & close (modal closed here; draft consumed by dispatcher)
+                KeyCode::Char('s') => {
                     self.modal = None;
                     // Keep settings_draft alive for the dispatcher to read.
                     Intent::SaveSettings
                 }
-                // 'q' or Ctrl-G → discard & close
-                KeyCode::Char('q') => {
+                // Esc | 'q' | Ctrl-G → discard & close
+                KeyCode::Esc | KeyCode::Char('q') => {
                     self.settings_draft = None;
                     self.modal = None;
                     Intent::DiscardSettings

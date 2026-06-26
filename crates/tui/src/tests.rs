@@ -1994,20 +1994,35 @@ mod tests {
         );
     }
 
-    // ── Discard restores original values ────────────────────────────────────
+    // ── Save / Discard key mapping ───────────────────────────────────────────
 
     #[test]
-    fn esc_in_viewing_returns_save_settings_intent() {
+    fn s_in_viewing_returns_save_settings_intent() {
         let mut app = AppState::new();
         open_settings_with_draft(&mut app);
-        let intent = app.on_input(key(KeyCode::Esc));
-        // Esc → save & close (modal is closed, intent is SaveSettings).
+        let intent = app.on_input(key(KeyCode::Char('s')));
+        // 's' → save & close (modal is closed, intent is SaveSettings).
         assert_eq!(intent, Intent::SaveSettings);
-        assert!(app.modal.is_none(), "modal must be closed after Esc");
+        assert!(app.modal.is_none(), "modal must be closed after s");
         // Draft is kept alive for the dispatcher.
         assert!(
             app.settings_draft.is_some(),
             "draft must remain until dispatcher processes SaveSettings"
+        );
+    }
+
+    #[test]
+    fn esc_in_viewing_returns_discard_settings_intent() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_draft.as_mut().unwrap().auto_threshold = 0.99;
+        let intent = app.on_input(key(KeyCode::Esc));
+        // Esc → discard & close (draft cleared, intent is DiscardSettings).
+        assert_eq!(intent, Intent::DiscardSettings);
+        assert!(app.modal.is_none(), "modal must be closed after Esc");
+        assert!(
+            app.settings_draft.is_none(),
+            "draft must be cleared on Esc discard"
         );
     }
 

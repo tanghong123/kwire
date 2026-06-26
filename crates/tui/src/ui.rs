@@ -1092,7 +1092,7 @@ fn render_picker_modal(
             let is_sel = i == picker_selected;
             let sel_indicator = if is_sel { "\u{25b8} " } else { "  " };
             let fmt_cell = format!("{}{}", sel_indicator, v.fmt);
-            // Title · Source combined (publisher·language)
+            // Title · Author · Source combined (publisher·language)
             let source = {
                 let pub_ = v.publisher.as_str();
                 let lang = v.language.as_str();
@@ -1103,10 +1103,15 @@ fn render_picker_modal(
                     (false, false) => format!("{}\u{00b7}{}", pub_, lang),
                 }
             };
-            let title_source = if source.is_empty() {
-                v.title.clone()
+            let author_part = if v.author.is_empty() {
+                String::new()
             } else {
-                format!("{} {}", v.title, source)
+                format!(" \u{00b7} {}", v.author)
+            };
+            let title_source = if source.is_empty() {
+                format!("{}{}", v.title, author_part)
+            } else {
+                format!("{}{} {}", v.title, author_part, source)
             };
             let style_row = if is_sel {
                 style_selected()
@@ -1344,9 +1349,11 @@ fn render_detail_modal(
     // Variation rows as a table (no outer border — inline with block)
     let var_header = Row::new([
         Cell::from("").style(style_header()), // checkmark col
+        Cell::from("Title \u{00b7} Author").style(style_header()),
         Cell::from("Fmt").style(style_header()),
         Cell::from("Size").style(style_header()),
-        Cell::from("Source").style(style_header()),
+        Cell::from("Src").style(style_header()),
+        Cell::from("Match").style(style_header()),
         Cell::from("State").style(style_header()),
         Cell::from("Progress").style(style_header()),
     ])
@@ -1386,6 +1393,11 @@ fn render_detail_modal(
                 other => other.to_string(),
             };
             let host = v.host.as_deref().unwrap_or("\u{2014}");
+            let title_author = if v.author.is_empty() {
+                v.title.clone()
+            } else {
+                format!("{} \u{00b7} {}", v.title, v.author)
+            };
             let row_style = if is_sel {
                 style_selected()
             } else {
@@ -1396,6 +1408,11 @@ fn render_detail_modal(
                     style_selected()
                 } else {
                     theme::style_for_state(&v.state)
+                }),
+                Cell::from(title_author).style(if is_sel {
+                    style_selected()
+                } else {
+                    style_title()
                 }),
                 Cell::from(v.fmt.clone()).style(if is_sel {
                     style_selected()
@@ -1416,6 +1433,11 @@ fn render_detail_modal(
                     style_selected()
                 } else {
                     style_dim()
+                }),
+                Cell::from(format!("{:.2}", v.score)).style(if is_sel {
+                    style_selected()
+                } else {
+                    Style::default().fg(score_color(v.score.into()))
                 }),
                 Cell::from(state_cell).style(if is_sel {
                     style_selected()
@@ -1441,12 +1463,14 @@ fn render_detail_modal(
     let var_table = Table::new(
         var_rows,
         [
-            Constraint::Length(2),
-            Constraint::Length(6),
-            Constraint::Length(9),
-            Constraint::Length(12),
-            Constraint::Min(20),
-            Constraint::Length(10),
+            Constraint::Length(2),  // check
+            Constraint::Min(20),    // Title · Author
+            Constraint::Length(6),  // Fmt
+            Constraint::Length(8),  // Size
+            Constraint::Length(10), // Src (host)
+            Constraint::Length(6),  // Match (score)
+            Constraint::Min(14),    // State
+            Constraint::Length(9),  // Progress
         ],
     )
     .header(var_header)
@@ -1756,7 +1780,7 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
         SettingsEditor::Viewing => Line::from(vec![
             Span::styled("\u{2191}\u{2193} field", style_hint()),
             Span::styled(
-                "  \u{23ce} edit  spc toggle  \u{2190}\u{2192} nudge  esc save  q discard",
+                "   \u{23ce} edit   space toggle   s save   esc cancel",
                 style_hint(),
             ),
         ]),
