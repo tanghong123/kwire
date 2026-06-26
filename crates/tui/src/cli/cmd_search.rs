@@ -120,6 +120,10 @@ pub fn format_candidate(index: usize, c: &Candidate) -> String {
     if let Some(ref src) = c.source_host {
         meta.push(src.clone());
     }
+    // md5 — the identifier to pass to `kwire get <md5>`.
+    if !c.md5.is_empty() {
+        meta.push(format!("md5 {}", c.md5));
+    }
 
     let line2 = if meta.is_empty() {
         String::new()
@@ -210,10 +214,10 @@ mod tests {
         assert!(lines[1].contains("312pg"), "pages: {}", lines[1]);
         assert!(lines[1].contains("0.95"), "score: {}", lines[1]);
         assert!(lines[1].contains("libgen.li"), "source: {}", lines[1]);
-        // md5 must NOT appear in the output
+        // md5 is shown for `kwire get <md5>`
         assert!(
-            !s.contains("1df204c78842ffe549166ffcb984babc"),
-            "md5 must not be in output"
+            s.contains("md5 1df204c78842ffe549166ffcb984babc"),
+            "md5 must be in output: {s}"
         );
     }
 
