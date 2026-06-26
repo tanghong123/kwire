@@ -230,8 +230,13 @@ const COMMANDS: &[&str] = &[
 /// Which panel currently has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Focus {
+    /// The Header pane: list strip + status-filter row.
+    /// `←/→` navigate filter chips (and apply them); Tab cycles to List.
+    Header,
+    /// The book-list pane (the hero pane).  Default on launch.
     #[default]
     List,
+    /// The docked downloads pane.
     Activity,
 }
 
@@ -264,7 +269,7 @@ impl StatusFilter {
         }
     }
 
-    /// Cycle through filters in order.
+    /// Cycle through filters in order (right arrow).
     pub fn next(self) -> StatusFilter {
         match self {
             StatusFilter::All => StatusFilter::NeedsYou,
@@ -273,6 +278,18 @@ impl StatusFilter {
             StatusFilter::Cannot => StatusFilter::InProgress,
             StatusFilter::InProgress => StatusFilter::Done,
             StatusFilter::Done => StatusFilter::All,
+        }
+    }
+
+    /// Cycle through filters in reverse order (left arrow).
+    pub fn prev(self) -> StatusFilter {
+        match self {
+            StatusFilter::All => StatusFilter::Done,
+            StatusFilter::NeedsYou => StatusFilter::All,
+            StatusFilter::Check => StatusFilter::NeedsYou,
+            StatusFilter::Cannot => StatusFilter::Check,
+            StatusFilter::InProgress => StatusFilter::Cannot,
+            StatusFilter::Done => StatusFilter::InProgress,
         }
     }
 }
@@ -667,16 +684,35 @@ impl AppState {
                             }
                         } else {
                             match self.focus {
-                                Focus::List => self.move_selection(1),
+                                Focus::List => {
+                                    // #65 arrow-cross: ↓ at bottom → focus Activity
+                                    if !self.flat.is_empty() && self.selected >= self.flat.len() - 1
+                                    {
+                                        self.focus = Focus::Activity;
+                                        self.activity_selected = 0;
+                                    } else {
+                                        self.move_selection(1);
+                                    }
+                                }
                                 Focus::Activity => self.scroll_activity(1),
+                                Focus::Header => {} // ←/→ navigate chips; ↓ is no-op
                             }
                         }
                         Intent::Redraw
                     }
                     KeyCode::Char('j') => {
                         match self.focus {
-                            Focus::List => self.move_selection(1),
+                            Focus::List => {
+                                // #65 arrow-cross: j at bottom → focus Activity
+                                if !self.flat.is_empty() && self.selected >= self.flat.len() - 1 {
+                                    self.focus = Focus::Activity;
+                                    self.activity_selected = 0;
+                                } else {
+                                    self.move_selection(1);
+                                }
+                            }
                             Focus::Activity => self.scroll_activity(1),
+                            Focus::Header => {}
                         }
                         Intent::Redraw
                     }
@@ -695,7 +731,15 @@ impl AppState {
                         } else {
                             match self.focus {
                                 Focus::List => self.move_selection_up(),
-                                Focus::Activity => self.scroll_activity_up(),
+                                Focus::Activity => {
+                                    // #65 arrow-cross: ↑ at top → focus List
+                                    if self.activity_selected == 0 {
+                                        self.focus = Focus::List;
+                                    } else {
+                                        self.scroll_activity_up();
+                                    }
+                                }
+                                Focus::Header => {}
                             }
                         }
                         Intent::Redraw
@@ -703,7 +747,15 @@ impl AppState {
                     KeyCode::Char('k') => {
                         match self.focus {
                             Focus::List => self.move_selection_up(),
-                            Focus::Activity => self.scroll_activity_up(),
+                            Focus::Activity => {
+                                // #65 arrow-cross: k at top → focus List
+                                if self.activity_selected == 0 {
+                                    self.focus = Focus::List;
+                                } else {
+                                    self.scroll_activity_up();
+                                }
+                            }
+                            Focus::Header => {}
                         }
                         Intent::Redraw
                     }
@@ -714,9 +766,20 @@ impl AppState {
                         }
                         Intent::Redraw
                     }
+                    // Tab: Header → List → Activity → (wrap back to Header).
                     KeyCode::Tab => {
                         self.focus = match self.focus {
+                            Focus::Header => Focus::List,
                             Focus::List => Focus::Activity,
+                            Focus::Activity => Focus::Header,
+                        };
+                        Intent::Redraw
+                    }
+                    // Shift-Tab: reverse cycle  Activity → List → Header → (wrap back to Activity).
+                    KeyCode::BackTab => {
+                        self.focus = match self.focus {
+                            Focus::Header => Focus::Activity,
+                            Focus::List => Focus::Header,
                             Focus::Activity => Focus::List,
                         };
                         Intent::Redraw
@@ -798,6 +861,7 @@ impl AppState {
                                 Intent::Redraw
                             }
                         }
+                        Focus::Header => Intent::Redraw,
                     },
                     KeyCode::Char('p') => match self.focus {
                         Focus::Activity => {
@@ -817,6 +881,7 @@ impl AppState {
                                 Intent::Redraw
                             }
                         }
+                        Focus::Header => Intent::Redraw,
                     },
                     KeyCode::Char('c') => match self.focus {
                         Focus::Activity => {
@@ -836,6 +901,7 @@ impl AppState {
                                 Intent::Redraw
                             }
                         }
+                        Focus::Header => Intent::Redraw,
                     },
                     KeyCode::Char('o') => {
                         if let Some(fb) = self.flat.get(self.selected) {
@@ -858,7 +924,8 @@ impl AppState {
                         Intent::Redraw
                     }
                     KeyCode::Char('?') => Intent::OpenHelp,
-                    KeyCode::Left => {
+                    // `[` / `]` — GLOBAL list cycle: works from any pane, never changes focus.
+                    KeyCode::Char('[') => {
                         if self.all_lists.len() > 1 {
                             let new_idx = self
                                 .active_list_idx
@@ -870,12 +937,28 @@ impl AppState {
                         }
                         Intent::Redraw
                     }
-                    KeyCode::Right => {
+                    KeyCode::Char(']') => {
                         if self.all_lists.len() > 1 {
                             let new_idx = (self.active_list_idx + 1) % self.all_lists.len();
                             self.active_list_idx = new_idx;
                             let id = self.all_lists[new_idx].id.clone();
                             return Intent::SwitchList { id };
+                        }
+                        Intent::Redraw
+                    }
+                    // `←/→` — filter chips, ONLY when Header pane is active.
+                    // No-op when List or Activity is focused.
+                    KeyCode::Left => {
+                        if self.focus == Focus::Header {
+                            self.filter = self.filter.prev();
+                            self.rebuild_flat();
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Right => {
+                        if self.focus == Focus::Header {
+                            self.filter = self.filter.next();
+                            self.rebuild_flat();
                         }
                         Intent::Redraw
                     }
@@ -929,6 +1012,7 @@ impl AppState {
                     match self.focus {
                         Focus::List => self.move_selection(1),
                         Focus::Activity => self.scroll_activity(1),
+                        Focus::Header => {}
                     }
                     Intent::Redraw
                 }
@@ -936,6 +1020,7 @@ impl AppState {
                     match self.focus {
                         Focus::List => self.move_selection_up(),
                         Focus::Activity => self.scroll_activity_up(),
+                        Focus::Header => {}
                     }
                     Intent::Redraw
                 }
@@ -1094,13 +1179,22 @@ impl AppState {
                                         .get(flat_index)
                                         .map(|fb| fb.book.versions.len().saturating_sub(1))
                                         .unwrap_or(0);
-                                    let new_sel = (sel + 1).min(max);
-                                    self.modal = Some(Modal::Detail {
-                                        book_flat_index: flat_index,
-                                        selected: new_sel,
-                                        sub_focus: sf,
-                                        history_selected: hist_sel,
-                                    });
+                                    if sel >= max {
+                                        // #65 arrow-cross: ↓ at bottom of Variations → History
+                                        self.modal = Some(Modal::Detail {
+                                            book_flat_index: flat_index,
+                                            selected: sel,
+                                            sub_focus: DetailSubFocus::History,
+                                            history_selected: 0,
+                                        });
+                                    } else {
+                                        self.modal = Some(Modal::Detail {
+                                            book_flat_index: flat_index,
+                                            selected: sel + 1,
+                                            sub_focus: sf,
+                                            history_selected: hist_sel,
+                                        });
+                                    }
                                 }
                                 DetailSubFocus::History => {
                                     let max = self
@@ -1131,13 +1225,27 @@ impl AppState {
                                     });
                                 }
                                 DetailSubFocus::History => {
-                                    let new_hist = hist_sel.saturating_sub(1);
-                                    self.modal = Some(Modal::Detail {
-                                        book_flat_index: flat_index,
-                                        selected: sel,
-                                        sub_focus: sf,
-                                        history_selected: new_hist,
-                                    });
+                                    if hist_sel == 0 {
+                                        // #65 arrow-cross: ↑ at top of History → Variations (bottom)
+                                        let var_max = self
+                                            .flat
+                                            .get(flat_index)
+                                            .map(|fb| fb.book.versions.len().saturating_sub(1))
+                                            .unwrap_or(0);
+                                        self.modal = Some(Modal::Detail {
+                                            book_flat_index: flat_index,
+                                            selected: var_max,
+                                            sub_focus: DetailSubFocus::Variations,
+                                            history_selected: 0,
+                                        });
+                                    } else {
+                                        self.modal = Some(Modal::Detail {
+                                            book_flat_index: flat_index,
+                                            selected: sel,
+                                            sub_focus: sf,
+                                            history_selected: hist_sel - 1,
+                                        });
+                                    }
                                 }
                             }
                             Intent::Redraw

@@ -241,14 +241,355 @@ mod tests {
         assert_eq!(app.selected, 1, "selection must not exceed last row");
     }
 
+    // Updated: Tab now cycles 3 panes: List → Activity → Header → List.
     #[test]
-    fn tab_toggles_focus() {
+    fn tab_cycles_three_panes_forward() {
         let mut app = AppState::new();
         assert_eq!(app.focus, Focus::List);
         app.on_input(key(KeyCode::Tab));
-        assert_eq!(app.focus, Focus::Activity);
+        assert_eq!(app.focus, Focus::Activity, "Tab: List → Activity");
         app.on_input(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Header, "Tab: Activity → Header");
+        app.on_input(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::List, "Tab: Header → List (wrap)");
+    }
+
+    #[test]
+    fn backtab_cycles_three_panes_reverse() {
+        let mut app = AppState::new();
         assert_eq!(app.focus, Focus::List);
+        app.on_input(key(KeyCode::BackTab));
+        assert_eq!(app.focus, Focus::Header, "Shift-Tab: List → Header");
+        app.on_input(key(KeyCode::BackTab));
+        assert_eq!(app.focus, Focus::Activity, "Shift-Tab: Header → Activity");
+        app.on_input(key(KeyCode::BackTab));
+        assert_eq!(app.focus, Focus::List, "Shift-Tab: Activity → List (wrap)");
+    }
+
+    // -----------------------------------------------------------------------
+    // #44 / #65 / #66 — 3-pane focus model, global list cycle, arrow-cross
+    // -----------------------------------------------------------------------
+
+    /// `[` / `]` switch the active list from ANY pane without changing focus.
+    #[test]
+    fn bracket_list_cycle_from_list_focus() {
+        let mut app = AppState::new();
+        app.all_lists = vec![
+            crate::app::ListSummary {
+                id: "L1".into(),
+                title: "List 1".into(),
+                done: 0,
+                total: 1,
+            },
+            crate::app::ListSummary {
+                id: "L2".into(),
+                title: "List 2".into(),
+                done: 0,
+                total: 1,
+            },
+        ];
+        app.active_list_idx = 0;
+        assert_eq!(app.focus, Focus::List);
+
+        // `]` from List focus → next list, focus stays List.
+        let intent = app.on_input(key(KeyCode::Char(']')));
+        assert!(
+            matches!(intent, Intent::SwitchList { ref id } if id == "L2"),
+            "expected SwitchList L2, got {:?}",
+            intent
+        );
+        assert_eq!(
+            app.focus,
+            Focus::List,
+            "focus must not change on ] from List"
+        );
+        assert_eq!(app.active_list_idx, 1);
+
+        // `[` from List focus → prev list, focus stays List.
+        let intent2 = app.on_input(key(KeyCode::Char('[')));
+        assert!(
+            matches!(intent2, Intent::SwitchList { ref id } if id == "L1"),
+            "expected SwitchList L1, got {:?}",
+            intent2
+        );
+        assert_eq!(
+            app.focus,
+            Focus::List,
+            "focus must not change on [ from List"
+        );
+        assert_eq!(app.active_list_idx, 0);
+    }
+
+    #[test]
+    fn bracket_list_cycle_from_activity_focus() {
+        let mut app = AppState::new();
+        app.all_lists = vec![
+            crate::app::ListSummary {
+                id: "L1".into(),
+                title: "List 1".into(),
+                done: 0,
+                total: 1,
+            },
+            crate::app::ListSummary {
+                id: "L2".into(),
+                title: "List 2".into(),
+                done: 0,
+                total: 1,
+            },
+        ];
+        app.active_list_idx = 0;
+        app.focus = Focus::Activity;
+
+        // `]` from Activity focus → next list, focus stays Activity.
+        let intent = app.on_input(key(KeyCode::Char(']')));
+        assert!(matches!(intent, Intent::SwitchList { .. }));
+        assert_eq!(
+            app.focus,
+            Focus::Activity,
+            "focus must not change on ] from Activity"
+        );
+    }
+
+    #[test]
+    fn bracket_list_cycle_from_header_focus() {
+        let mut app = AppState::new();
+        app.all_lists = vec![
+            crate::app::ListSummary {
+                id: "L1".into(),
+                title: "List 1".into(),
+                done: 0,
+                total: 1,
+            },
+            crate::app::ListSummary {
+                id: "L2".into(),
+                title: "List 2".into(),
+                done: 0,
+                total: 1,
+            },
+        ];
+        app.active_list_idx = 0;
+        app.focus = Focus::Header;
+
+        let intent = app.on_input(key(KeyCode::Char(']')));
+        assert!(matches!(intent, Intent::SwitchList { .. }));
+        assert_eq!(
+            app.focus,
+            Focus::Header,
+            "focus must not change on ] from Header"
+        );
+    }
+
+    /// `←/→` navigate filter chips ONLY when Header is focused.
+    #[test]
+    fn left_right_filter_chips_header_pane_only() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        assert_eq!(app.filter, StatusFilter::All);
+
+        // When List is focused, ←/→ must be no-ops.
+        app.focus = Focus::List;
+        app.on_input(key(KeyCode::Right));
+        assert_eq!(
+            app.filter,
+            StatusFilter::All,
+            "→ in List pane must not move filter"
+        );
+        app.on_input(key(KeyCode::Left));
+        assert_eq!(
+            app.filter,
+            StatusFilter::All,
+            "← in List pane must not move filter"
+        );
+
+        // When Activity is focused, also no-op.
+        app.focus = Focus::Activity;
+        app.on_input(key(KeyCode::Right));
+        assert_eq!(
+            app.filter,
+            StatusFilter::All,
+            "→ in Activity pane must not move filter"
+        );
+
+        // When Header is focused, → moves the chip.
+        app.focus = Focus::Header;
+        app.on_input(key(KeyCode::Right));
+        assert_eq!(
+            app.filter,
+            StatusFilter::NeedsYou,
+            "→ in Header pane must advance filter"
+        );
+        app.on_input(key(KeyCode::Left));
+        assert_eq!(
+            app.filter,
+            StatusFilter::All,
+            "← in Header pane must retreat filter"
+        );
+    }
+
+    /// `↓` at the bottom of the book list crosses focus into Activity.
+    #[test]
+    fn down_at_list_bottom_crosses_to_activity() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // 2 books
+        assert_eq!(app.focus, Focus::List);
+        // Move to the last book.
+        app.selected = app.flat.len() - 1;
+        // ↓ at the bottom should cross to Activity.
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(
+            app.focus,
+            Focus::Activity,
+            "↓ at list bottom must focus Activity"
+        );
+        assert_eq!(
+            app.activity_selected, 0,
+            "Activity selection resets to 0 on cross"
+        );
+    }
+
+    #[test]
+    fn j_at_list_bottom_crosses_to_activity() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.selected = app.flat.len() - 1;
+        app.on_input(key(KeyCode::Char('j')));
+        assert_eq!(
+            app.focus,
+            Focus::Activity,
+            "'j' at list bottom must focus Activity"
+        );
+    }
+
+    /// `↑` at the top of Activity crosses focus back into List.
+    #[test]
+    fn up_at_activity_top_crosses_to_list() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Activity;
+        app.activity_selected = 0;
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(app.focus, Focus::List, "↑ at activity top must focus List");
+    }
+
+    #[test]
+    fn k_at_activity_top_crosses_to_list() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Activity;
+        app.activity_selected = 0;
+        app.on_input(key(KeyCode::Char('k')));
+        assert_eq!(
+            app.focus,
+            Focus::List,
+            "'k' at activity top must focus List"
+        );
+    }
+
+    /// `↑` at a non-zero Activity position scrolls without crossing.
+    #[test]
+    fn up_in_activity_non_top_does_not_cross() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = (0..5)
+            .map(|i| make_downloading_flat_book(&format!("Book {}", i), 0, i))
+            .collect();
+        app.focus = Focus::Activity;
+        app.activity_selected = 2;
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(
+            app.focus,
+            Focus::Activity,
+            "↑ not at top must stay in Activity"
+        );
+        assert_eq!(app.activity_selected, 1, "↑ must retreat activity_selected");
+    }
+
+    /// Detail modal: ↓ at bottom of Variations crosses to History.
+    #[test]
+    fn detail_down_at_variations_bottom_crosses_to_history() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection()); // first book has 2 versions
+                                                    // Put modal at the last variation (index 1 of 2).
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 1, // at bottom (max = 1 for 2 versions)
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 1,
+                sub_focus: DetailSubFocus::History,
+                history_selected: 0,
+            }),
+            "↓ at Variations bottom must cross to History"
+        );
+    }
+
+    /// Detail modal: ↑ at top of History crosses back to Variations.
+    #[test]
+    fn detail_up_at_history_top_crosses_to_variations() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        // Modal in History sub-focus at history row 0.
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::History,
+            history_selected: 0,
+        });
+        app.on_input(key(KeyCode::Up));
+        // Should cross to Variations at its bottom.
+        if let Some(Modal::Detail { sub_focus, .. }) = &app.modal {
+            assert_eq!(
+                *sub_focus,
+                DetailSubFocus::Variations,
+                "↑ at History top must cross to Variations"
+            );
+        } else {
+            panic!("modal must still be Detail");
+        }
+    }
+
+    /// Render: inactive book-list selection shows a dim ▌ when Activity/Header focused.
+    #[test]
+    fn render_inactive_list_selection_shows_dim_accent() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.selected = 0;
+        // Focus Activity — list selection becomes inactive.
+        app.focus = Focus::Activity;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        // The dim ▌ (U+258C) should appear (for the inactive selection).
+        assert!(
+            content.contains('\u{258c}'),
+            "inactive list selection must show a dim ▌ accent"
+        );
+    }
+
+    /// Render: Header-focused filter row shows the pane accent ▌.
+    #[test]
+    fn render_header_focus_shows_pane_accent() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Header;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        // The pane accent ▌ must appear in the filter row.
+        assert!(
+            content.contains('\u{258c}'),
+            "Header-focused filter row must show ▌ pane accent"
+        );
     }
 
     #[test]
@@ -1327,8 +1668,9 @@ mod tests {
         );
     }
 
+    // #65: ↓ at the bottom of Variations now crosses to History instead of clamping.
     #[test]
-    fn detail_modal_down_clamps_at_last_version() {
+    fn detail_modal_down_at_last_version_crosses_to_history() {
         let mut app = AppState::new();
         app.set_view(fixture_vm_needs_selection());
         // Already at the last variation (index 1 of 2).
@@ -1339,15 +1681,16 @@ mod tests {
             history_selected: 0,
         });
         app.on_input(key(KeyCode::Down));
+        // Per #65: ↓ at the bottom of Variations crosses to History.
         assert_eq!(
             app.modal,
             Some(Modal::Detail {
                 book_flat_index: 0,
                 selected: 1,
-                sub_focus: crate::app::DetailSubFocus::Variations,
+                sub_focus: crate::app::DetailSubFocus::History,
                 history_selected: 0,
             }),
-            "Down must not go past the last variation"
+            "↓ at last variation must cross to History (#65)"
         );
     }
 

@@ -424,7 +424,7 @@ fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
         segs.push(Seg { text, style });
     }
 
-    let nav = "   \u{2190} \u{2192}";
+    let nav = "   [ ]";
     let nav_len = nav.chars().count();
     let total_width = cumulative + nav_len;
     segs.push(Seg {
@@ -524,11 +524,13 @@ fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
 fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
     let counts = app.status_counts();
     let active_filter = app.filter;
+    let header_focused = app.focus == Focus::Header;
 
     // Clear filter_chips so we can rebuild.
     app.last_rects.filter_chips.clear();
 
     // Build chips and track their rects for mouse hit-testing.
+    // When the Header pane is active, prepend a bright ▌ accent as a pane indicator.
     // We approximate chip positions based on cumulative text width.
     let chip_data: Vec<(StatusFilter, String)> = [
         (StatusFilter::All, counts.total),
@@ -542,10 +544,24 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
     .map(|(filter, count)| (filter, format!(" {} {} ", filter.label(), count)))
     .collect();
 
-    let mut x_offset = area.x;
-    let mut spans: Vec<Span> = Vec::new();
+    // Pane accent: ▌ when Header is active, space otherwise.
+    let pane_accent = if header_focused {
+        Span::styled("\u{258c}", Style::default().fg(C_DONE))
+    } else {
+        Span::styled(" ", style_dim())
+    };
+
+    let mut x_offset = area.x + 1; // +1 for pane accent char
+    let mut spans: Vec<Span> = vec![pane_accent];
     for (filter, label) in &chip_data {
-        let style = if *filter == active_filter {
+        let is_active_chip = *filter == active_filter;
+        let style = if is_active_chip && header_focused {
+            // Header focused + active chip: bright bold underlined (cursor here)
+            Style::default()
+                .fg(C_BRIGHT)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else if is_active_chip {
+            // Active chip, Header not focused: normal bold underlined
             Style::default()
                 .fg(C_TEXT)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
@@ -592,7 +608,10 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
 
     for (i, fb) in app.flat.iter().enumerate() {
         let book = &fb.book;
+        // Active selection only when the List pane has focus.
         let is_selected = i == app.selected && app.focus == Focus::List;
+        // Dim selection marker when List pane is inactive (any other pane focused).
+        let is_inactive_selected = i == app.selected && app.focus != Focus::List;
 
         // Emit a group-header row whenever the owning group changes (matches the
         // wireframe's "LIFT-OFF  4/12" section bands).
@@ -703,9 +722,12 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             style_normal()
         };
 
-        // Left accent cell: ▌ in accent green on selected bg; seq number otherwise.
+        // Left accent cell: ▌ in accent green on selected bg (active); dim ▌ (inactive); seq # otherwise.
         let seq_cell = if is_selected {
             Cell::from("\u{258c}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
+        } else if is_inactive_selected {
+            // Dim accent when List pane is inactive — reminds user of the remembered position.
+            Cell::from("\u{258c}").style(Style::default().fg(C_FAINT))
         } else {
             Cell::from(format!("{:>3}", book.seq)).style(Style::default().fg(C_FAINT))
         };
@@ -880,8 +902,14 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
     // capacity: area.height - 1 (header) lines available for transfer rows.
     let capacity = area.height.saturating_sub(1) as usize;
 
+    // Whether Activity pane currently holds focus — used for selection styling.
+    let activity_active = app.focus == Focus::Activity;
+
     // Build content lines (to be windowed by scroll offset).
+    // leg_idx counts download-book rows so activity_selected maps to them.
+    // (#66: legs are ALWAYS selectable — no overflow condition.)
     let mut all_content: Vec<Line> = Vec::new();
+    let mut leg_idx: usize = 0;
 
     if !use_telemetry {
         if host_groups.is_empty() {
@@ -920,16 +948,46 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                 )));
 
                 for (title, pct, fmt, eta_secs) in versions {
+                    let is_leg_sel = activity_active && leg_idx == app.activity_selected;
+                    let is_leg_dim = !activity_active && leg_idx == app.activity_selected;
                     let bar = theme::progress_bar((*pct).into(), 6);
                     let eta = eta_secs.map(|s| format!("  {}s", s)).unwrap_or_default();
-                    all_content.push(Line::from(vec![
-                        Span::styled(format!("  {} ", theme::spinner(app.tick)), style_muted()),
-                        Span::styled(title.clone(), style_normal()),
-                        Span::styled(
-                            format!("  {}  {}%  {}{}", fmt, pct, bar, eta),
-                            style_muted(),
-                        ),
-                    ]));
+                    if is_leg_sel {
+                        // Active selection: bright highlight
+                        all_content.push(Line::from(vec![
+                            Span::styled(
+                                format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                                Style::default().fg(C_DONE).bg(C_SELECTED),
+                            ),
+                            Span::styled(
+                                format!("{}  {}  {}%  {}{}", title, fmt, pct, bar, eta),
+                                style_selected(),
+                            ),
+                        ]));
+                    } else if is_leg_dim {
+                        // Inactive selection: dim marker
+                        all_content.push(Line::from(vec![
+                            Span::styled(
+                                format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                                style_dim(),
+                            ),
+                            Span::styled(title.clone(), style_muted()),
+                            Span::styled(
+                                format!("  {}  {}%  {}{}", fmt, pct, bar, eta),
+                                style_dim(),
+                            ),
+                        ]));
+                    } else {
+                        all_content.push(Line::from(vec![
+                            Span::styled(format!("  {} ", theme::spinner(app.tick)), style_muted()),
+                            Span::styled(title.clone(), style_normal()),
+                            Span::styled(
+                                format!("  {}  {}%  {}{}", fmt, pct, bar, eta),
+                                style_muted(),
+                            ),
+                        ]));
+                    }
+                    leg_idx += 1;
                 }
             }
         }
@@ -958,12 +1016,34 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                 Style::default().fg(C_WARM),
             )));
             for (title, pct, _) in transfers {
+                let is_leg_sel = activity_active && leg_idx == app.activity_selected;
+                let is_leg_dim = !activity_active && leg_idx == app.activity_selected;
                 let bar = theme::progress_bar((*pct).into(), 6);
-                all_content.push(Line::from(vec![
-                    Span::styled(format!("  {} ", theme::spinner(app.tick)), style_muted()),
-                    Span::styled(title.clone(), style_normal()),
-                    Span::styled(format!("  {}%  {}", pct, bar), style_muted()),
-                ]));
+                if is_leg_sel {
+                    all_content.push(Line::from(vec![
+                        Span::styled(
+                            format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                            Style::default().fg(C_DONE).bg(C_SELECTED),
+                        ),
+                        Span::styled(format!("{}  {}%  {}", title, pct, bar), style_selected()),
+                    ]));
+                } else if is_leg_dim {
+                    all_content.push(Line::from(vec![
+                        Span::styled(
+                            format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                            style_dim(),
+                        ),
+                        Span::styled(title.clone(), style_muted()),
+                        Span::styled(format!("  {}%  {}", pct, bar), style_dim()),
+                    ]));
+                } else {
+                    all_content.push(Line::from(vec![
+                        Span::styled(format!("  {} ", theme::spinner(app.tick)), style_muted()),
+                        Span::styled(title.clone(), style_normal()),
+                        Span::styled(format!("  {}%  {}", pct, bar), style_muted()),
+                    ]));
+                }
+                leg_idx += 1;
             }
         }
     }
@@ -1039,11 +1119,14 @@ fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
         Line::from(Span::styled(msg.as_str(), Style::default().fg(C_BRIGHT)))
     } else {
         let hint = match app.focus {
+            Focus::Header => {
+                "\u{2190}\u{2192} filter chip  tab list  [ ] prev/next list  ? help  q quit"
+            }
             Focus::List => {
-                "\u{2191}\u{2193} move  \u{2190}\u{2192} list  \u{23ce} open  d detail  / filter  : command  tab downloads  ? help  q quit"
+                "\u{2191}\u{2193} move  \u{23ce} open  d detail  / filter  [ ] list  : cmd  tab activity  ? help  q quit"
             }
             Focus::Activity => {
-                "\u{2191}\u{2193} select  p pause  c cancel  r resume  tab list  q quit"
+                "\u{2191}\u{2193} select  p pause  c cancel  r resume  [ ] list  tab header  q quit"
             }
         };
         Line::from(Span::styled(hint, style_hint()))
@@ -2002,15 +2085,25 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
     // Left column
     let left_lines: Vec<Line> = vec![
         Line::from(Span::styled("NAVIGATE", style_header())),
-        make_key_line("\u{2191} \u{2193} / j k", "move selection"),
-        make_key_line("\u{2190} \u{2192}", "switch reading list"),
-        make_key_line("\u{23ce}", "open \u{00b7} choose a copy"),
+        make_key_line(
+            "\u{2191} \u{2193} / j k",
+            "move \u{00b7} activity cross at edge",
+        ),
+        make_key_line("[ ]", "prev / next reading list  (any pane)"),
+        make_key_line(
+            "tab / S-tab",
+            "cycle panes: Header \u{2192} List \u{2192} Activity",
+        ),
+        make_key_line("\u{23ce}", "open \u{00b7} choose a copy  (List pane)"),
         make_key_line("d", "book detail & history"),
-        make_key_line("tab", "focus downloads pane"),
         make_key_line("esc \u{00b7} q", "back \u{00b7} quit"),
         Line::from(""),
-        Line::from(Span::styled("FILTER", style_header())),
-        make_key_line("/", "cycle status filter"),
+        Line::from(Span::styled(
+            "FILTER  (Header pane \u{2014} Tab to focus)",
+            style_header(),
+        )),
+        make_key_line("\u{2190} \u{2192}", "move filter chip  (Header pane only)"),
+        make_key_line("/", "cycle filter  (any pane)"),
         make_key_line(
             "1\u{2013}6",
             "all \u{00b7} needs \u{00b7} check \u{00b7} cannot \u{00b7} progress \u{00b7} done",
@@ -2022,12 +2115,25 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
 
     // Right column
     let right_lines: Vec<Line> = vec![
-        Line::from(Span::styled("ACT ON SELECTION", style_header())),
+        Line::from(Span::styled(
+            "ACT ON SELECTION  (List pane)",
+            style_header(),
+        )),
         make_key_line("space", "mark a copy"),
         make_key_line("a", "fetch all preferred formats"),
         make_key_line("r", "retry \u{00b7} re-download"),
         make_key_line("p \u{00b7} c", "pause \u{00b7} cancel"),
         make_key_line("o \u{00b7} R", "open file \u{00b7} reveal in Finder"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "ACTIVITY PANE  (Tab to focus)",
+            style_header(),
+        )),
+        make_key_line("\u{2191}\u{2193}", "select transfer leg"),
+        make_key_line(
+            "p \u{00b7} c \u{00b7} r",
+            "pause \u{00b7} cancel \u{00b7} resume leg",
+        ),
         Line::from(""),
         Line::from(Span::styled("COMMAND LINE  (press :)", style_header())),
         make_key_line(":import <file>", "add a list"),
