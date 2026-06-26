@@ -387,6 +387,8 @@ async fn dispatch_intent(
             app.modal = Some(Modal::Detail {
                 book_flat_index: flat_index,
                 selected: 0,
+                sub_focus: crate::app::DetailSubFocus::Variations,
+                history_selected: 0,
             });
         }
         Intent::OpenPicker { flat_index } => {
@@ -424,6 +426,33 @@ async fn dispatch_intent(
         }
         Intent::ConfirmDelete { id } => {
             execute_delete_list(app, handles, &id).await;
+        }
+        Intent::ReQueryBook {
+            group_path,
+            book_index,
+            title,
+        } => {
+            requery_book(app, handles, group_path, book_index, title).await;
+        }
+        Intent::EditBook {
+            group_path,
+            book_index,
+            title,
+            authors,
+        } => {
+            edit_book(app, handles, group_path, book_index, title, authors).await;
+        }
+        Intent::RemoveBook {
+            group_path,
+            book_index,
+        } => {
+            remove_book(app, handles, group_path, book_index).await;
+        }
+        Intent::MarkNotFound {
+            group_path,
+            book_index,
+        } => {
+            mark_not_found(app, handles, group_path, book_index).await;
         }
         Intent::Redraw => {}
     }
@@ -1455,4 +1484,125 @@ async fn save_settings(app: &mut AppState, handles: &EngineHandles) {
 
     // ── 3. Refresh view to reflect the new settings ───────────────────────────
     refresh_active_view(app, handles).await;
+}
+
+// ---------------------------------------------------------------------------
+// #49 / #50 — book-level actions
+// ---------------------------------------------------------------------------
+
+/// Re-query a single book with a user-supplied corrected title.
+/// Calls `edit_book_input` to update the metadata + reset to Queued, then
+/// wakes the engine so it re-runs discovery on its next tick.
+async fn requery_book(
+    app: &mut AppState,
+    handles: &EngineHandles,
+    group_path: Vec<usize>,
+    book_index: usize,
+    title: String,
+) {
+    let Some(orch_arc) = active_orch(handles).await else {
+        app.status_msg = Some("No active list".into());
+        return;
+    };
+    {
+        let mut guard = orch_arc.lock().await;
+        match guard.edit_book_input(&group_path, book_index, &title, vec![]) {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("requery_book: edit_book_input: {e}");
+                app.status_msg = Some(format!("Re-query failed: {e}"));
+                return;
+            }
+        }
+        let _ = guard.set_goal_one(&group_path, book_index, Goal::Complete);
+    }
+    handles.engine_wake.notify_one();
+    refresh_active_view(app, handles).await;
+    app.status_msg = Some(format!("Re-querying '{title}'…"));
+}
+
+/// Edit a book's title/authors metadata and re-queue it for discovery.
+async fn edit_book(
+    app: &mut AppState,
+    handles: &EngineHandles,
+    group_path: Vec<usize>,
+    book_index: usize,
+    title: String,
+    authors: Vec<String>,
+) {
+    let Some(orch_arc) = active_orch(handles).await else {
+        app.status_msg = Some("No active list".into());
+        return;
+    };
+    {
+        let mut guard = orch_arc.lock().await;
+        match guard.edit_book_input(&group_path, book_index, &title, authors) {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("edit_book: edit_book_input: {e}");
+                app.status_msg = Some(format!("Edit failed: {e}"));
+                return;
+            }
+        }
+        let _ = guard.set_goal_one(&group_path, book_index, Goal::Complete);
+    }
+    handles.engine_wake.notify_one();
+    refresh_active_view(app, handles).await;
+    app.status_msg = Some(format!("Updated '{title}' — re-queuing…"));
+}
+
+/// Remove a book from the active list after user confirmation.
+async fn remove_book(
+    app: &mut AppState,
+    handles: &EngineHandles,
+    group_path: Vec<usize>,
+    book_index: usize,
+) {
+    let Some(orch_arc) = active_orch(handles).await else {
+        app.status_msg = Some("No active list".into());
+        return;
+    };
+    {
+        let mut guard = orch_arc.lock().await;
+        match guard.remove_book(&group_path, book_index) {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("remove_book: {e}");
+                app.status_msg = Some(format!("Remove failed: {e}"));
+                return;
+            }
+        }
+    }
+    // Clamp selection so we don't point past the end of the (now-shorter) list.
+    if app.selected > 0 {
+        app.selected -= 1;
+    }
+    refresh_active_view(app, handles).await;
+    app.status_msg = Some("Book removed".into());
+}
+
+/// Mark a book as not-found (user-initiated; the engine won't retry it).
+async fn mark_not_found(
+    app: &mut AppState,
+    handles: &EngineHandles,
+    group_path: Vec<usize>,
+    book_index: usize,
+) {
+    let Some(orch_arc) = active_orch(handles).await else {
+        app.status_msg = Some("No active list".into());
+        return;
+    };
+    {
+        let mut guard = orch_arc.lock().await;
+        match guard.mark_not_found(&group_path, book_index) {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("mark_not_found: {e}");
+                app.status_msg = Some(format!("Mark failed: {e}"));
+                return;
+            }
+        }
+    }
+    refresh_active_view(app, handles).await;
+    app.status_msg = Some("Marked as not found".into());
 }

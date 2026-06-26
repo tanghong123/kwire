@@ -21,7 +21,9 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AppState, Focus, Modal, SettingsEditor, StatusFilter};
+use crate::app::{
+    AppState, DetailSubFocus, EditBookField, Focus, Modal, SettingsEditor, StatusFilter,
+};
 use crate::theme::{
     self, history_kind_color, score_color, style_dim, style_header, style_hint, style_normal,
     style_selected, style_title, C_BACKDROP, C_BG, C_BRIGHT, C_DIM, C_DONE, C_FAINT, C_NEEDS_YOU,
@@ -85,7 +87,16 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             Modal::Detail {
                 book_flat_index,
                 selected,
-            } => render_detail_modal(frame, app, book_flat_index, selected),
+                sub_focus,
+                history_selected,
+            } => render_detail_modal(
+                frame,
+                app,
+                book_flat_index,
+                selected,
+                &sub_focus,
+                history_selected,
+            ),
             Modal::Settings => render_settings_modal(frame, app),
             Modal::Help => render_help_modal(frame, frame.area()),
             Modal::Confirm {
@@ -93,6 +104,21 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
                 n_books,
                 target_id: _,
             } => render_confirm_modal(frame, &title, n_books),
+            Modal::ReQuery {
+                book_flat_index,
+                buf,
+            } => render_requery_modal(frame, app, book_flat_index, &buf),
+            Modal::EditBook {
+                book_flat_index,
+                title_buf,
+                author_buf,
+                field,
+            } => {
+                render_edit_book_modal(frame, app, book_flat_index, &title_buf, &author_buf, &field)
+            }
+            Modal::ConfirmBookRemove { book_flat_index } => {
+                render_confirm_book_remove_modal(frame, app, book_flat_index)
+            }
         }
     }
 }
@@ -1142,6 +1168,8 @@ fn render_detail_modal(
     app: &AppState,
     book_flat_index: usize,
     detail_selected: usize,
+    sub_focus: &DetailSubFocus,
+    history_selected: usize,
 ) {
     let area = centered_rect(92, 30, frame.area());
     frame.render_widget(Clear, area);
@@ -1263,13 +1291,18 @@ fn render_detail_modal(
         split[1],
     );
 
-    // VARIATIONS header
+    // VARIATIONS header — accent when Variations is focused.
     let var_summary = format!(
         "\u{25be} VARIATIONS  {} requested \u{00b7} {} done \u{00b7} {} active",
         n_requested, n_done, n_active
     );
+    let var_header_style = if *sub_focus == DetailSubFocus::Variations {
+        style_title()
+    } else {
+        style_dim()
+    };
     frame.render_widget(
-        Paragraph::new(Span::styled(var_summary, style_dim())),
+        Paragraph::new(Span::styled(var_summary, var_header_style)),
         split[3],
     );
 
@@ -1387,20 +1420,39 @@ fn render_detail_modal(
     frame.render_stateful_widget(var_table, split[4], &mut var_table_state);
 
     // Output path for done variations shown below (if any)
-    // HISTORY header
+    // HISTORY header — accent when History is focused.
+    let hist_header_style = if *sub_focus == DetailSubFocus::History {
+        style_title()
+    } else {
+        style_dim()
+    };
     frame.render_widget(
-        Paragraph::new(Span::styled("\u{25be} HISTORY", style_dim())),
+        Paragraph::new(Span::styled("\u{25be} HISTORY", hist_header_style)),
         split[6],
     );
 
-    // History list — rows: time · kind · detail
+    // History list — windowed so it can scroll; highlight the selected row.
+    let n_hist = fb.book.history.len();
+    let win_h = split[7].height as usize;
+    // history_selected is 0 = most-recent (top of the reversed list).
+    let hist_sel = history_selected.min(n_hist.saturating_sub(1));
+    // Compute scroll offset so hist_sel stays inside the visible window.
+    let scroll_offset = if win_h == 0 || n_hist == 0 {
+        0
+    } else {
+        let raw = hist_sel.saturating_sub(win_h.saturating_sub(1));
+        raw.min(n_hist.saturating_sub(win_h))
+    };
     let history_items: Vec<Line> = fb
         .book
         .history
         .iter()
         .rev()
-        .take(split[7].height as usize)
-        .map(|e| {
+        .enumerate()
+        .skip(scroll_offset)
+        .take(win_h)
+        .map(|(i, e)| {
+            let is_hist_sel = *sub_focus == DetailSubFocus::History && i == hist_sel;
             // Format time as HH:MM:SS from ms timestamp
             let secs = e.at_ms / 1000;
             let time_str = format!(
@@ -1410,25 +1462,34 @@ fn render_detail_modal(
                 secs % 60
             );
             let kind_color = history_kind_color(&e.kind);
+            let base_style = if is_hist_sel {
+                style_selected()
+            } else {
+                style_dim()
+            };
             Line::from(vec![
-                Span::styled(format!("{:<10}  ", time_str), style_dim()),
+                Span::styled(format!("{:<10}  ", time_str), base_style),
                 Span::styled(
                     format!("{:<14}  ", e.kind),
-                    Style::default().fg(kind_color).add_modifier(Modifier::BOLD),
+                    if is_hist_sel {
+                        style_selected()
+                    } else {
+                        Style::default().fg(kind_color).add_modifier(Modifier::BOLD)
+                    },
                 ),
-                Span::styled(e.detail.clone(), style_dim()),
+                Span::styled(e.detail.clone(), base_style),
             ])
         })
         .collect();
 
     frame.render_widget(List::new(history_items), split[7]);
 
-    // Hint
+    // Hint — includes new actions.
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("\u{2191}\u{2193} variation", style_hint()),
+            Span::styled("tab sub-focus", style_hint()),
             Span::styled(
-                "  o open file  R reveal  r re-download  esc back",
+                "  \u{2191}\u{2193} navigate  s re-query  e edit  x remove  m not-found  o open  r retry  esc back",
                 style_hint(),
             ),
         ])),
@@ -1855,6 +1916,188 @@ fn render_confirm_modal(frame: &mut Frame, title: &str, n_books: usize) {
     let body_text = format!(
         "Delete \"{title}\" and its {n_books} book(s)?\n\n  [y] Confirm    [n / Esc] Cancel"
     );
+    let para = Paragraph::new(body_text)
+        .style(style_normal())
+        .alignment(Alignment::Left);
+    frame.render_widget(para, padded);
+}
+
+// ---------------------------------------------------------------------------
+// #49 Re-query inline input modal
+// ---------------------------------------------------------------------------
+
+fn render_requery_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize, buf: &str) {
+    let area = centered_rect(72, 7, frame.area());
+    frame.render_widget(Clear, area);
+
+    let title_label = app
+        .flat
+        .get(book_flat_index)
+        .map(|fb| format!(" re-query: {} ", fb.book.title))
+        .unwrap_or_else(|| " re-query ".into());
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(C_NEEDS_YOU))
+        .title(Span::styled(title_label, style_title()))
+        .style(style_normal());
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+
+    let display_buf = format!("{buf}\u{258f}"); // block cursor at end
+    let split = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(padded);
+
+    frame.render_widget(
+        Paragraph::new(Span::styled("Search title:", style_dim())),
+        split[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(display_buf, style_normal())),
+        split[1],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "  \u{23ce} search    esc cancel",
+            style_hint(),
+        )),
+        split[2],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #50 Edit-book inline input modal
+// ---------------------------------------------------------------------------
+
+fn render_edit_book_modal(
+    frame: &mut Frame,
+    _app: &AppState,
+    _book_flat_index: usize,
+    title_buf: &str,
+    author_buf: &str,
+    field: &EditBookField,
+) {
+    let area = centered_rect(72, 10, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(C_NEEDS_YOU))
+        .title(Span::styled(" edit book ", style_title()))
+        .style(style_normal());
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+
+    let split = Layout::vertical([
+        Constraint::Length(1), // "Title:" label
+        Constraint::Length(1), // title field
+        Constraint::Length(1), // blank
+        Constraint::Length(1), // "Author:" label
+        Constraint::Length(1), // author field
+        Constraint::Length(1), // blank
+        Constraint::Min(0),    // hint
+    ])
+    .split(padded);
+
+    let title_display = if *field == EditBookField::Title {
+        format!("{title_buf}\u{258f}")
+    } else {
+        title_buf.to_string()
+    };
+    let author_display = if *field == EditBookField::Author {
+        format!("{author_buf}\u{258f}")
+    } else {
+        author_buf.to_string()
+    };
+
+    let title_label_style = if *field == EditBookField::Title {
+        style_title()
+    } else {
+        style_dim()
+    };
+    let author_label_style = if *field == EditBookField::Author {
+        style_title()
+    } else {
+        style_dim()
+    };
+
+    frame.render_widget(
+        Paragraph::new(Span::styled("Title:", title_label_style)),
+        split[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(title_display, style_normal())),
+        split[1],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "Author(s) — comma-separated:",
+            author_label_style,
+        )),
+        split[3],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(author_display, style_normal())),
+        split[4],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "tab switch field    \u{23ce} save    esc cancel",
+            style_hint(),
+        )),
+        split[6],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #50 Confirm book-remove modal
+// ---------------------------------------------------------------------------
+
+fn render_confirm_book_remove_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize) {
+    let area = centered_rect(60, 7, frame.area());
+    frame.render_widget(Clear, area);
+
+    let book_title = app
+        .flat
+        .get(book_flat_index)
+        .map(|fb| fb.book.title.as_str())
+        .unwrap_or("this book");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(C_NEEDS_YOU))
+        .title(Span::styled(" Remove book? ", style_title()))
+        .style(style_normal());
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+
+    let body_text =
+        format!("Remove \"{book_title}\" from the list?\n\n  [y] Confirm    [n / Esc] Cancel");
     let para = Paragraph::new(body_text)
         .style(style_normal())
         .alignment(Alignment::Left);

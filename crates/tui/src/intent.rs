@@ -71,4 +71,32 @@ pub enum Intent {
 
     /// The user confirmed the delete-list modal; delete list with this id.
     ConfirmDelete { id: String },
+
+    /// Re-query a single book with a user-supplied corrected title.
+    ReQueryBook {
+        group_path: Vec<usize>,
+        book_index: usize,
+        /// The corrected title to search for.
+        title: String,
+    },
+
+    /// Edit a book's title and/or authors and re-queue it for discovery.
+    EditBook {
+        group_path: Vec<usize>,
+        book_index: usize,
+        title: String,
+        authors: Vec<String>,
+    },
+
+    /// Remove a book from its list (user confirmed).
+    RemoveBook {
+        group_path: Vec<usize>,
+        book_index: usize,
+    },
+
+    /// Mark a book as not-found (user gives up on it).
+    MarkNotFound {
+        group_path: Vec<usize>,
+        book_index: usize,
+    },
 }

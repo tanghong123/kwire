@@ -277,6 +277,20 @@ impl StatusFilter {
 // Modal
 // ---------------------------------------------------------------------------
 
+/// Which sub-pane is focused inside `Modal::Detail`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetailSubFocus {
+    Variations,
+    History,
+}
+
+/// Which field is being edited in `Modal::EditBook`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditBookField {
+    Title,
+    Author,
+}
+
 /// Overlay modals that take over keyboard input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Modal {
@@ -289,8 +303,12 @@ pub enum Modal {
     /// Book detail + history.
     Detail {
         book_flat_index: usize,
-        /// Which variation row is currently highlighted (↑/↓ in the detail modal).
+        /// Which variation row is currently highlighted (↑/↓ when Variations focused).
         selected: usize,
+        /// Which sub-pane is focused (Tab toggles).
+        sub_focus: DetailSubFocus,
+        /// Which history row is highlighted (↑/↓ when History focused).
+        history_selected: usize,
     },
     /// Settings key-value editor.
     Settings,
@@ -305,6 +323,17 @@ pub enum Modal {
         /// The engine id (`"listN"`) of the list to delete.
         target_id: String,
     },
+    /// Inline re-query: user types a corrected title for a single book.
+    ReQuery { book_flat_index: usize, buf: String },
+    /// Inline edit: user edits title and/or author for a single book.
+    EditBook {
+        book_flat_index: usize,
+        title_buf: String,
+        author_buf: String,
+        field: EditBookField,
+    },
+    /// Confirm removing a book from the list: [y/n].
+    ConfirmBookRemove { book_flat_index: usize },
 }
 
 // ---------------------------------------------------------------------------
@@ -814,6 +843,39 @@ impl AppState {
                         // Request all preferred format variations — UI-only stub for Stage 3.
                         Intent::Redraw
                     }
+                    // #50 book-level actions from list view.
+                    KeyCode::Char('e') => {
+                        if let Some(fb) = self.flat.get(self.selected) {
+                            let flat_idx = self.selected;
+                            let title_buf = fb.book.title.clone();
+                            let author_buf = fb.book.author.clone();
+                            self.modal = Some(Modal::EditBook {
+                                book_flat_index: flat_idx,
+                                title_buf,
+                                author_buf,
+                                field: EditBookField::Title,
+                            });
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Char('x') | KeyCode::Delete => {
+                        let flat_idx = self.selected;
+                        if self.flat.get(flat_idx).is_some() {
+                            self.modal = Some(Modal::ConfirmBookRemove {
+                                book_flat_index: flat_idx,
+                            });
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Char('m') => {
+                        if let Some(fb) = self.flat.get(self.selected) {
+                            return Intent::MarkNotFound {
+                                group_path: vec![fb.group_index],
+                                book_index: fb.book_index_in_group,
+                            };
+                        }
+                        Intent::Redraw
+                    }
                     _ => Intent::Redraw,
                 }
             }
@@ -958,34 +1020,86 @@ impl AppState {
             Modal::Detail {
                 book_flat_index,
                 selected,
+                sub_focus,
+                history_selected,
             } => {
                 let flat_index = *book_flat_index;
                 let sel = *selected;
+                let sf = sub_focus.clone();
+                let hist_sel = *history_selected;
                 match ev {
                     Event::Key(KeyEvent { code, .. }) => match code {
                         KeyCode::Esc => {
                             self.modal = None;
                             Intent::Redraw
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            let max = self
-                                .flat
-                                .get(flat_index)
-                                .map(|fb| fb.book.versions.len().saturating_sub(1))
-                                .unwrap_or(0);
-                            let new_sel = (sel + 1).min(max);
+                        KeyCode::Tab => {
+                            let new_sf = match sf {
+                                DetailSubFocus::Variations => DetailSubFocus::History,
+                                DetailSubFocus::History => DetailSubFocus::Variations,
+                            };
                             self.modal = Some(Modal::Detail {
                                 book_flat_index: flat_index,
-                                selected: new_sel,
+                                selected: sel,
+                                sub_focus: new_sf,
+                                history_selected: hist_sel,
                             });
                             Intent::Redraw
                         }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            match sf {
+                                DetailSubFocus::Variations => {
+                                    let max = self
+                                        .flat
+                                        .get(flat_index)
+                                        .map(|fb| fb.book.versions.len().saturating_sub(1))
+                                        .unwrap_or(0);
+                                    let new_sel = (sel + 1).min(max);
+                                    self.modal = Some(Modal::Detail {
+                                        book_flat_index: flat_index,
+                                        selected: new_sel,
+                                        sub_focus: sf,
+                                        history_selected: hist_sel,
+                                    });
+                                }
+                                DetailSubFocus::History => {
+                                    let max = self
+                                        .flat
+                                        .get(flat_index)
+                                        .map(|fb| fb.book.history.len().saturating_sub(1))
+                                        .unwrap_or(0);
+                                    let new_hist = (hist_sel + 1).min(max);
+                                    self.modal = Some(Modal::Detail {
+                                        book_flat_index: flat_index,
+                                        selected: sel,
+                                        sub_focus: sf,
+                                        history_selected: new_hist,
+                                    });
+                                }
+                            }
+                            Intent::Redraw
+                        }
                         KeyCode::Up | KeyCode::Char('k') => {
-                            let new_sel = sel.saturating_sub(1);
-                            self.modal = Some(Modal::Detail {
-                                book_flat_index: flat_index,
-                                selected: new_sel,
-                            });
+                            match sf {
+                                DetailSubFocus::Variations => {
+                                    let new_sel = sel.saturating_sub(1);
+                                    self.modal = Some(Modal::Detail {
+                                        book_flat_index: flat_index,
+                                        selected: new_sel,
+                                        sub_focus: sf,
+                                        history_selected: hist_sel,
+                                    });
+                                }
+                                DetailSubFocus::History => {
+                                    let new_hist = hist_sel.saturating_sub(1);
+                                    self.modal = Some(Modal::Detail {
+                                        book_flat_index: flat_index,
+                                        selected: sel,
+                                        sub_focus: sf,
+                                        history_selected: new_hist,
+                                    });
+                                }
+                            }
                             Intent::Redraw
                         }
                         KeyCode::Char('o') => {
@@ -1015,6 +1129,229 @@ impl AppState {
                                     book_index: fb.book_index_in_group,
                                 };
                             }
+                            Intent::Redraw
+                        }
+                        // #49 manual re-query: open inline search input.
+                        KeyCode::Char('s') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                let title = fb.book.title.clone();
+                                self.modal = Some(Modal::ReQuery {
+                                    book_flat_index: flat_index,
+                                    buf: title,
+                                });
+                            }
+                            Intent::Redraw
+                        }
+                        // #50 edit title/author.
+                        KeyCode::Char('e') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                let title_buf = fb.book.title.clone();
+                                let author_buf = fb.book.author.clone();
+                                self.modal = Some(Modal::EditBook {
+                                    book_flat_index: flat_index,
+                                    title_buf,
+                                    author_buf,
+                                    field: EditBookField::Title,
+                                });
+                            }
+                            Intent::Redraw
+                        }
+                        // #50 remove book with confirmation.
+                        KeyCode::Char('x') | KeyCode::Delete => {
+                            self.modal = Some(Modal::ConfirmBookRemove {
+                                book_flat_index: flat_index,
+                            });
+                            Intent::Redraw
+                        }
+                        // #50 mark not-found.
+                        KeyCode::Char('m') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                let intent = Intent::MarkNotFound {
+                                    group_path: vec![fb.group_index],
+                                    book_index: fb.book_index_in_group,
+                                };
+                                self.modal = None;
+                                return intent;
+                            }
+                            Intent::Redraw
+                        }
+                        _ => Intent::Redraw,
+                    },
+                    _ => Intent::Redraw,
+                }
+            }
+
+            Modal::ReQuery {
+                book_flat_index,
+                buf,
+            } => {
+                let flat_index = *book_flat_index;
+                let buf = buf.clone();
+                match ev {
+                    Event::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Esc => {
+                            // Return to the detail modal.
+                            self.modal = Some(Modal::Detail {
+                                book_flat_index: flat_index,
+                                selected: 0,
+                                sub_focus: DetailSubFocus::Variations,
+                                history_selected: 0,
+                            });
+                            Intent::Redraw
+                        }
+                        KeyCode::Enter => {
+                            let trimmed = buf.trim().to_string();
+                            if !trimmed.is_empty() {
+                                if let Some(fb) = self.flat.get(flat_index) {
+                                    let intent = Intent::ReQueryBook {
+                                        group_path: vec![fb.group_index],
+                                        book_index: fb.book_index_in_group,
+                                        title: trimmed,
+                                    };
+                                    self.modal = None;
+                                    return intent;
+                                }
+                            }
+                            self.modal = None;
+                            Intent::Redraw
+                        }
+                        KeyCode::Backspace => {
+                            let mut new_buf = buf;
+                            new_buf.pop();
+                            self.modal = Some(Modal::ReQuery {
+                                book_flat_index: flat_index,
+                                buf: new_buf,
+                            });
+                            Intent::Redraw
+                        }
+                        KeyCode::Char(c) => {
+                            let mut new_buf = buf;
+                            new_buf.push(c);
+                            self.modal = Some(Modal::ReQuery {
+                                book_flat_index: flat_index,
+                                buf: new_buf,
+                            });
+                            Intent::Redraw
+                        }
+                        _ => Intent::Redraw,
+                    },
+                    _ => Intent::Redraw,
+                }
+            }
+
+            Modal::EditBook {
+                book_flat_index,
+                title_buf,
+                author_buf,
+                field,
+            } => {
+                let flat_index = *book_flat_index;
+                let mut tbuf = title_buf.clone();
+                let mut abuf = author_buf.clone();
+                let fld = field.clone();
+                match ev {
+                    Event::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Esc => {
+                            self.modal = Some(Modal::Detail {
+                                book_flat_index: flat_index,
+                                selected: 0,
+                                sub_focus: DetailSubFocus::Variations,
+                                history_selected: 0,
+                            });
+                            Intent::Redraw
+                        }
+                        KeyCode::Tab => {
+                            let new_field = match fld {
+                                EditBookField::Title => EditBookField::Author,
+                                EditBookField::Author => EditBookField::Title,
+                            };
+                            self.modal = Some(Modal::EditBook {
+                                book_flat_index: flat_index,
+                                title_buf: tbuf,
+                                author_buf: abuf,
+                                field: new_field,
+                            });
+                            Intent::Redraw
+                        }
+                        KeyCode::Enter => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                let authors: Vec<String> = abuf
+                                    .split(',')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                                let intent = Intent::EditBook {
+                                    group_path: vec![fb.group_index],
+                                    book_index: fb.book_index_in_group,
+                                    title: tbuf,
+                                    authors,
+                                };
+                                self.modal = None;
+                                return intent;
+                            }
+                            self.modal = None;
+                            Intent::Redraw
+                        }
+                        KeyCode::Backspace => {
+                            match fld {
+                                EditBookField::Title => {
+                                    tbuf.pop();
+                                }
+                                EditBookField::Author => {
+                                    abuf.pop();
+                                }
+                            }
+                            self.modal = Some(Modal::EditBook {
+                                book_flat_index: flat_index,
+                                title_buf: tbuf,
+                                author_buf: abuf,
+                                field: fld,
+                            });
+                            Intent::Redraw
+                        }
+                        KeyCode::Char(c) => {
+                            match fld {
+                                EditBookField::Title => tbuf.push(c),
+                                EditBookField::Author => abuf.push(c),
+                            }
+                            self.modal = Some(Modal::EditBook {
+                                book_flat_index: flat_index,
+                                title_buf: tbuf,
+                                author_buf: abuf,
+                                field: fld,
+                            });
+                            Intent::Redraw
+                        }
+                        _ => Intent::Redraw,
+                    },
+                    _ => Intent::Redraw,
+                }
+            }
+
+            Modal::ConfirmBookRemove { book_flat_index } => {
+                let flat_index = *book_flat_index;
+                match ev {
+                    Event::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                let intent = Intent::RemoveBook {
+                                    group_path: vec![fb.group_index],
+                                    book_index: fb.book_index_in_group,
+                                };
+                                self.modal = None;
+                                return intent;
+                            }
+                            self.modal = None;
+                            Intent::Redraw
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            // Go back to detail.
+                            self.modal = Some(Modal::Detail {
+                                book_flat_index: flat_index,
+                                selected: 0,
+                                sub_focus: DetailSubFocus::Variations,
+                                history_selected: 0,
+                            });
                             Intent::Redraw
                         }
                         _ => Intent::Redraw,
