@@ -3,10 +3,18 @@
 [![CI](https://github.com/tanghong123/kwire/actions/workflows/ci.yml/badge.svg)](https://github.com/tanghong123/kwire/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A desktop tool to download books from Library Genesis. One **UI-agnostic Rust
-engine** (`libgen-core`) drives everything: command-line harnesses for
-development/testing, and a **native macOS desktop app** (Tauri) over a
-self-contained web UI.
+A desktop tool to download a **curated reading list** from Library Genesis. One
+**UI-agnostic Rust engine** (`libgen-core`) drives everything: command-line
+harnesses for development/testing, and a **native macOS desktop app** (Tauri) over
+a self-contained web UI.
+
+> **Scope — it's a *downloader*, not a search engine.** Kwire assumes you've
+> already **curated your reading list elsewhere** (a syllabus, a recommendation
+> thread, a reading-list export, your own notes) and bring it here as Markdown/JSON
+> or manual entries. It then *matches* each title to a Library Genesis copy and
+> downloads it — managing the queue, formats, retries, and resumes. It is **not** a
+> discovery or browsing tool: there's no catalog to explore, and the search step
+> exists only to resolve the titles you already chose, never to find new ones.
 
 **New to the codebase?** Read **[docs/CODEBASE.md](docs/CODEBASE.md)** — a guide
 written for engineers who don't know Rust yet. For *why* things are designed this
