@@ -1170,6 +1170,39 @@ impl Orchestrator {
         Ok((group_path, book_index))
     }
 
+    /// Append ONE new book from a single FREE-FORM `query` ("title author" as one
+    /// string) to the list's root group. Like [`add_book`](Self::add_book) but the
+    /// whole query becomes the title with `freeform = true`, so matching scores it
+    /// against each candidate's title+author COMBINED (see
+    /// [`crate::matching::evaluate_freeform`]) rather than structured field-vs-
+    /// field. Remembered on the request so re-queries match the same way. Used by
+    /// the Manual list's free-form add command. Errors on an empty query.
+    pub fn add_book_freeform(&mut self, query: &str) -> Result<(Vec<usize>, usize)> {
+        let query = query.trim();
+        anyhow::ensure!(!query.is_empty(), "a book title cannot be empty");
+        let mut req = BookRequest::new(crate::model::BookInput {
+            title: query.to_string(),
+            freeform: true,
+            ..Default::default()
+        });
+        // Drive it to completion (discover + download), like an import does.
+        req.goal = crate::model::Goal::Complete;
+
+        let group_path = vec![0usize];
+        let book_index = {
+            let list = self.snapshot()?;
+            group_at(&list.groups, &group_path)
+                .map(|g| g.books.len())
+                .context("manual list has no root group")?
+        };
+        self.store.append_book(self.list_id, &group_path, &req)?;
+        tracing::info!(
+            query = %req.input.title,
+            "manual book added (free-form) — querying"
+        );
+        Ok((group_path, book_index))
+    }
+
     /// Remove the book at `(group_path, book_index)` from the store. Its
     /// candidates/jobs cascade away; downloaded FILES on disk are left untouched
     /// (consistent with Remove-list). Used by the mutable **Manual** list's

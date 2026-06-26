@@ -599,6 +599,10 @@ pub(crate) fn expand_tilde(path: &str) -> String {
 /// If `arg` contains a comma, split on the **last** comma: everything before
 /// is the title, everything after is a single author string (both trimmed).
 /// If there is no comma, return the whole arg as the title with no authors.
+///
+/// Retained for tests and potential structured-add callers; the default `:add`
+/// path now treats the whole argument as a single free-form query.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_add_arg(arg: &str) -> (String, Vec<String>) {
     if let Some(pos) = arg.rfind(',') {
         let title = arg[..pos].trim().to_string();
@@ -1002,8 +1006,11 @@ async fn add_manual(app: &mut AppState, handles: &EngineHandles, arg: &str) {
     const MANUAL_TITLE: &str = "Manual";
     let cfg = handles.config.lock().expect("config poisoned").clone();
 
-    // (B) Parse title and optional author from the argument.
-    let (book_title, book_authors) = parse_add_arg(arg);
+    // (B) Treat the whole argument as a single FREE-FORM "title + author" query
+    // (matched against each candidate's title+author combined), rather than
+    // splitting it into a structured title/author pair — a comma-free
+    // "Steve Jobs Walter Isaacson" otherwise mis-ranks malformed catalog entries.
+    let book_title = arg.trim().to_string();
 
     // Find the Manual list id in the store.
     let store_id = {
@@ -1089,7 +1096,7 @@ async fn add_manual(app: &mut AppState, handles: &EngineHandles, arg: &str) {
         lib.arc_for(&id)
     } {
         let mut guard = orch_arc.lock().await;
-        match guard.add_book(&book_title, book_authors) {
+        match guard.add_book_freeform(&book_title) {
             Ok((group_path, book_index)) => {
                 let _ = guard.set_goal_one(&group_path, book_index, Goal::Complete);
                 info!("added book '{}' to Manual list", book_title);

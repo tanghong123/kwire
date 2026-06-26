@@ -27,6 +27,12 @@ pub fn evaluate(
     candidates: Vec<Candidate>,
     settings: &ListSettings,
 ) -> MatchOutcome {
+    // A free-form add (a single "title author" string, `freeform` set) ranks by the
+    // COMBINED title+author similarity instead of structured field-vs-field scoring,
+    // so every caller (orchestrator query/reverify, engine, desktop) honors it here.
+    if input.freeform {
+        return evaluate_freeform(&input.title, candidates, settings);
+    }
     let prefs = effective_format_prefs(input, settings);
     // The language to prefer for THIS request: the request's own language if set,
     // else an explicit list `settings.language` — and when that is `None`/empty (the
@@ -71,6 +77,68 @@ pub fn evaluate(
     // ranking/keep filtering left nothing, there's nothing to offer → NotFound.
     // Without this, a book could surface as "Needs you" / "Matched" with zero
     // variations — an unactionable dead-end the user (rightly) reads as a bug.
+    if ranked.is_empty()
+        && matches!(
+            status,
+            RequestStatus::Matched | RequestStatus::NeedsSelection
+        )
+    {
+        status = RequestStatus::NotFound;
+    }
+
+    MatchOutcome { status, ranked }
+}
+
+/// Score and rank `candidates` for a single FREE-FORM `query` ("title author" as
+/// typed in a free-form add), then apply the SAME confidence bands as
+/// [`evaluate`]. Unlike `evaluate`'s structured title-vs-title / author-vs-author
+/// scoring, each candidate is scored with [`freeform_query_match`] against its
+/// title+author COMBINED — so a comma-free "Steve Jobs Walter Isaacson" ranks the
+/// cleanly catalogued copy above a malformed entry that duplicates the author into
+/// the title (which `evaluate` mis-ranks because it sees only the candidate title).
+pub fn evaluate_freeform(
+    query: &str,
+    candidates: Vec<Candidate>,
+    settings: &ListSettings,
+) -> MatchOutcome {
+    // Synthetic structured input so the SHARED variation trimming (format + same-
+    // book gates in `select_variations`) can run unchanged: the whole free-form
+    // query stands in for the title, authors unset.
+    let input = BookInput {
+        title: query.to_string(),
+        freeform: true,
+        ..Default::default()
+    };
+    let prefs = effective_format_prefs(&input, settings);
+
+    let mut ranked: Vec<Candidate> = candidates
+        .into_iter()
+        .map(|mut c| {
+            c.score = freeform_query_match(query, &c);
+            c
+        })
+        .collect();
+
+    // Sort by score desc, then larger (saner) size, then md5 — deterministic.
+    ranked.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.size_bytes.unwrap_or(0).cmp(&a.size_bytes.unwrap_or(0)))
+            .then_with(|| a.md5.cmp(&b.md5))
+    });
+
+    // Same confidence bands as `evaluate`, keyed off the top free-form score.
+    let mut status = match ranked.first() {
+        Some(top) if top.score >= settings.auto_threshold => RequestStatus::Matched,
+        Some(top) if top.score >= settings.near_threshold => RequestStatus::NeedsSelection,
+        _ => RequestStatus::NotFound,
+    };
+
+    let ranked = select_variations(&input, ranked, &prefs, settings.keep_top);
+
+    // Same invariant as `evaluate`: an actionable status with nothing to act on
+    // collapses to NotFound.
     if ranked.is_empty()
         && matches!(
             status,
@@ -1607,6 +1675,30 @@ mod tests {
             s_clean > s_dup,
             "clean ({s_clean}) must outrank duplicated ({s_dup})"
         );
+    }
+
+    #[test]
+    fn evaluate_freeform_ranks_clean_above_duplicated() {
+        // A free-form add ("Steve Jobs, Walter Isaacson", authors empty) must rank
+        // the cleanly catalogued copy (title="Steve Jobs", author="Walter
+        // Isaacson") above a malformed entry whose title swallows the author
+        // ("Steve Jobs Walter Isaacson") — the bug structured `evaluate` exhibits.
+        let mut clean = cand("Steve Jobs", &["Walter Isaacson"], Some(Format::Epub));
+        clean.md5 = "a".repeat(32);
+        let mut dup = cand(
+            "Steve Jobs Walter Isaacson",
+            &["Walter Isaacson"],
+            Some(Format::Epub),
+        );
+        dup.md5 = "b".repeat(32);
+
+        let out = evaluate_freeform("Steve Jobs, Walter Isaacson", vec![dup, clean], &settings());
+        assert_eq!(
+            out.ranked[0].md5,
+            "a".repeat(32),
+            "clean copy must rank first"
+        );
+        assert_eq!(out.status, RequestStatus::Matched);
     }
 
     #[test]

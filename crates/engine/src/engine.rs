@@ -509,6 +509,9 @@ async fn run_item<E: EngineEmitter>(
             if let Some((input, settings, search)) = prep {
                 // No lock held here — concurrent with every other book's search.
                 let candidates = search.search(&input).await.unwrap_or_default();
+                // `evaluate` dispatches on input.freeform: a free-form add ("title
+                // author" as one string) is scored against each candidate's
+                // title+author combined, not structured field-vs-field.
                 let outcome = libgen_core::matching::evaluate(&input, candidates, &settings);
                 let mut g = item.orch.lock().await;
                 let _ = g
@@ -528,6 +531,8 @@ async fn run_item<E: EngineEmitter>(
             if let Some(prep) = prep {
                 // No lock held here — concurrent with every other book's search.
                 let fresh = prep.search.search(&prep.input).await.unwrap_or_default();
+                // Re-verify a free-form add the same way it was first matched
+                // (`evaluate` dispatches on prep.input.freeform).
                 let outcome = libgen_core::matching::evaluate(&prep.input, fresh, &prep.settings);
                 let mut g = item.orch.lock().await;
                 let _ = g

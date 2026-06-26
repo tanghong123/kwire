@@ -55,6 +55,14 @@ pub struct BookInput {
     /// Preferred formats, most-preferred first. Empty = inherit list default.
     #[serde(default)]
     pub format_pref: Vec<Format>,
+    /// This input is a single free-form "title + author" query (as typed in a
+    /// free-form add) rather than a structured title/author pair. When set,
+    /// matching scores `title` against each candidate's title+author COMBINED
+    /// (see [`crate::matching::evaluate_freeform`]) instead of structured
+    /// title-vs-title / author-vs-author scoring. Remembered so re-queries match
+    /// the same way. Backward-compatible (serde default `false`).
+    #[serde(default)]
+    pub freeform: bool,
 }
 
 /// One tracked request: the input plus its lifecycle state.
