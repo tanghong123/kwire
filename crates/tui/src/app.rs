@@ -398,6 +398,50 @@ pub struct ListSummary {
 }
 
 // ---------------------------------------------------------------------------
+// RowRef — identity of a single rendered row in the main book list
+// ---------------------------------------------------------------------------
+
+/// Identity of one rendered row in the main book table. A book with two or more
+/// ARMED (requested) variations renders its primary copy on a `Book` row and one
+/// `Variation` sub-row per additional armed copy. Used for selection state,
+/// arrow-nav, and mouse hit-testing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowRef {
+    /// The book's primary row (flat-book index).
+    Book(usize),
+    /// An indented "↳ alt. copy" sub-row: (flat-book index, variation md5).
+    Variation(usize, String),
+}
+
+/// Ordering rank for an armed variation's display: lower sorts earlier (primary).
+/// done < downloading < queued/paused < failed/cancelled < anything else.
+fn variation_display_rank(state: &str) -> u8 {
+    match state {
+        "done" => 0,
+        "downloading" => 1,
+        "queued" => 2,
+        "paused" => 3,
+        "failed" | "cancelled" => 4,
+        _ => 5,
+    }
+}
+
+/// The ARMED (requested — `state != "available"`) variations of a book, in
+/// display order (primary first). Empty when the book has no armed copies (pure
+/// discovery / pick state). Both the renderer and the selection/nav model derive
+/// the stacked-row layout from this single function so they never diverge.
+pub fn armed_variations(book: &ViewBook) -> Vec<&ViewVariation> {
+    let mut v: Vec<&ViewVariation> = book
+        .versions
+        .iter()
+        .filter(|v| v.state != "available")
+        .collect();
+    // Stable sort keeps mirror/insertion order within the same state class.
+    v.sort_by_key(|x| variation_display_rank(&x.state));
+    v
+}
+
+// ---------------------------------------------------------------------------
 // LastRects — stores panel Rects from the last render for mouse hit-testing
 // ---------------------------------------------------------------------------
 
@@ -410,8 +454,9 @@ pub struct LastRects {
     pub book_table: Rect,
     pub activity: Rect,
     pub hint_bar: Rect,
-    /// `(row_rect, flat_index)` for each rendered book row.
-    pub book_rows: Vec<(Rect, usize)>,
+    /// `(row_rect, RowRef)` for each rendered row (book row or variation
+    /// sub-row), in render order.
+    pub book_rows: Vec<(Rect, RowRef)>,
     /// `(chip_rect, StatusFilter)` for each rendered filter chip.
     pub filter_chips: Vec<(Rect, StatusFilter)>,
     /// `(chip_rect, list_index)` for each list chip in the strip.
@@ -456,8 +501,14 @@ pub struct AppState {
     /// filtering.  Rebuilt whenever `view` or `filter` changes.
     pub flat: Vec<FlatBook>,
 
-    /// Index into `flat` for the currently selected row.
+    /// Index into `flat` for the currently selected book (the OWNING book of the
+    /// focused row — a book row OR one of its variation sub-rows).
     pub selected: usize,
+
+    /// When a variation SUB-ROW is focused, the md5 of that armed variation
+    /// (within the book at `selected`). `None` = the book's primary row is
+    /// focused. Validated/cleared by `rebuild_flat` when the variation vanishes.
+    pub selected_var: Option<String>,
 
     /// Active status filter.
     pub filter: StatusFilter,
@@ -529,6 +580,12 @@ pub struct AppState {
     /// The `[`/`]` cycle steps onto this as one extra stop before the first list.
     pub all_active: bool,
 
+    /// Origin map for the aggregate "All" view: index = aggregate group index,
+    /// value = (owning list id, original group index within that list). Lets
+    /// actions taken in All view route to the OWNING list's orchestrator. Empty
+    /// when not viewing the aggregate.
+    pub aggregate_origins: Vec<(String, usize)>,
+
     // ── Marquee scroll state (Detail modal · Title·Author column) ─────────────
     /// Character offset into the selected variation's "Title · Author" string.
     /// The rendered text starts at this offset and is clipped to the column width.
@@ -560,6 +617,7 @@ impl AppState {
             view: None,
             flat: Vec::new(),
             selected: 0,
+            selected_var: None,
             filter: StatusFilter::All,
             focus: Focus::List,
             activity_expanded: true,
@@ -581,6 +639,7 @@ impl AppState {
             all_lists: Vec::new(),
             active_list_idx: 0,
             all_active: false,
+            aggregate_origins: Vec::new(),
             marquee_offset: 0,
             marquee_forward: true,
             marquee_pause: 0,
@@ -823,8 +882,7 @@ impl AppState {
                             match self.focus {
                                 Focus::List => {
                                     // #65 arrow-cross: ↓ at bottom → focus Activity
-                                    if !self.flat.is_empty() && self.selected >= self.flat.len() - 1
-                                    {
+                                    if !self.flat.is_empty() && self.at_last_row() {
                                         self.focus = Focus::Activity;
                                         self.activity_selected = 0;
                                     } else {
@@ -836,6 +894,7 @@ impl AppState {
                                 Focus::Header => {
                                     self.focus = Focus::List;
                                     self.selected = 0;
+                                    self.selected_var = None;
                                 }
                             }
                         }
@@ -845,7 +904,7 @@ impl AppState {
                         match self.focus {
                             Focus::List => {
                                 // #65 arrow-cross: j at bottom → focus Activity
-                                if !self.flat.is_empty() && self.selected >= self.flat.len() - 1 {
+                                if !self.flat.is_empty() && self.at_last_row() {
                                     self.focus = Focus::Activity;
                                     self.activity_selected = 0;
                                 } else {
@@ -857,6 +916,7 @@ impl AppState {
                             Focus::Header => {
                                 self.focus = Focus::List;
                                 self.selected = 0;
+                                self.selected_var = None;
                             }
                         }
                         Intent::Redraw
@@ -877,7 +937,7 @@ impl AppState {
                             match self.focus {
                                 Focus::List => {
                                     // arrow-cross: ↑ at top of List → Header (filter chips).
-                                    if self.selected == 0 {
+                                    if self.at_first_row() {
                                         self.focus = Focus::Header;
                                     } else {
                                         self.move_selection_up();
@@ -896,6 +956,7 @@ impl AppState {
                                 Focus::Header => {
                                     self.focus = Focus::List;
                                     self.selected = 0;
+                                    self.selected_var = None;
                                 }
                             }
                         }
@@ -905,7 +966,7 @@ impl AppState {
                         match self.focus {
                             Focus::List => {
                                 // arrow-cross: k at top of List → Header (filter chips).
-                                if self.selected == 0 {
+                                if self.at_first_row() {
                                     self.focus = Focus::Header;
                                 } else {
                                     self.move_selection_up();
@@ -923,6 +984,7 @@ impl AppState {
                             Focus::Header => {
                                 self.focus = Focus::List;
                                 self.selected = 0;
+                                self.selected_var = None;
                             }
                         }
                         Intent::Redraw
@@ -1259,11 +1321,11 @@ impl AppState {
                         } else if point_in_rect(col, row, self.last_rects.book_table) {
                             self.focus = Focus::List;
                             self.move_selection(1);
-                            // Hover-to-select: prefer the book under the cursor.
+                            // Hover-to-select: prefer the row under the cursor.
                             let book_rows = self.last_rects.book_rows.clone();
-                            for (rect, flat_index) in &book_rows {
+                            for (rect, rref) in &book_rows {
                                 if point_in_rect(col, row, *rect) {
-                                    self.selected = *flat_index;
+                                    self.set_focus_row(rref);
                                     break;
                                 }
                             }
@@ -1292,9 +1354,9 @@ impl AppState {
                             self.focus = Focus::List;
                             self.move_selection_up();
                             let book_rows = self.last_rects.book_rows.clone();
-                            for (rect, flat_index) in &book_rows {
+                            for (rect, rref) in &book_rows {
                                 if point_in_rect(col, row, *rect) {
-                                    self.selected = *flat_index;
+                                    self.set_focus_row(rref);
                                     break;
                                 }
                             }
@@ -1308,14 +1370,14 @@ impl AppState {
                         Intent::Redraw
                     }
                     MouseEventKind::Down(MouseButton::Left) => {
-                        // 1. Book rows: select + focus List; second click → Enter.
+                        // 1. Book/variation rows: select + focus List; second click → Enter.
                         let book_rows = self.last_rects.book_rows.clone();
-                        for (rect, flat_index) in &book_rows {
+                        for (rect, rref) in &book_rows {
                             if point_in_rect(col, row, *rect) {
                                 let already =
-                                    self.selected == *flat_index && self.focus == Focus::List;
+                                    self.row_is_focused(rref) && self.focus == Focus::List;
                                 self.focus = Focus::List;
-                                self.selected = *flat_index;
+                                self.set_focus_row(rref);
                                 if already {
                                     return self.enter_action_for_selected();
                                 }
@@ -2479,33 +2541,154 @@ impl AppState {
     // Internal helpers
     // -----------------------------------------------------------------------
 
+    /// Every rendered row in the main book table, in render order. A book with
+    /// two or more armed variations contributes a `Book` row followed by one
+    /// `Variation` sub-row per additional armed copy. MUST mirror
+    /// `render_book_table`'s stacking rule (both derive from `armed_variations`).
+    pub fn rendered_rows(&self) -> Vec<RowRef> {
+        let mut rows = Vec::with_capacity(self.flat.len());
+        for (i, fb) in self.flat.iter().enumerate() {
+            rows.push(RowRef::Book(i));
+            let armed = armed_variations(&fb.book);
+            if armed.len() >= 2 {
+                for v in &armed[1..] {
+                    rows.push(RowRef::Variation(i, v.md5.clone()));
+                }
+            }
+        }
+        rows
+    }
+
+    /// `true` when `r` is the row currently focused (book row vs. variation sub-row).
+    fn row_is_focused(&self, r: &RowRef) -> bool {
+        match (r, self.selected_var.as_ref()) {
+            (RowRef::Book(i), None) => *i == self.selected,
+            (RowRef::Variation(i, md5), Some(sel)) => *i == self.selected && md5 == sel,
+            _ => false,
+        }
+    }
+
+    /// Index of the focused row within `rows` (0 if not found).
+    fn current_row_pos(&self, rows: &[RowRef]) -> usize {
+        rows.iter()
+            .position(|r| self.row_is_focused(r))
+            .unwrap_or(0)
+    }
+
+    /// Move focus onto a specific rendered row, updating `selected`/`selected_var`.
+    pub fn set_focus_row(&mut self, r: &RowRef) {
+        match r {
+            RowRef::Book(i) => {
+                self.selected = *i;
+                self.selected_var = None;
+            }
+            RowRef::Variation(i, md5) => {
+                self.selected = *i;
+                self.selected_var = Some(md5.clone());
+            }
+        }
+    }
+
+    /// `true` when the focused row is the FIRST rendered row.
+    fn at_first_row(&self) -> bool {
+        let rows = self.rendered_rows();
+        rows.is_empty() || self.current_row_pos(&rows) == 0
+    }
+
+    /// `true` when the focused row is the LAST rendered row.
+    fn at_last_row(&self) -> bool {
+        let rows = self.rendered_rows();
+        rows.is_empty() || self.current_row_pos(&rows) == rows.len() - 1
+    }
+
+    /// Detail-modal variation index for the focused variation sub-row (position
+    /// of `selected_var`'s md5 within `book.versions`); 0 when a book row is
+    /// focused or the variation can't be located.
+    pub fn detail_variation_index(&self, flat_index: usize) -> usize {
+        if let (Some(md5), Some(fb)) = (self.selected_var.as_ref(), self.flat.get(flat_index)) {
+            if flat_index == self.selected {
+                return fb
+                    .book
+                    .versions
+                    .iter()
+                    .position(|v| &v.md5 == md5)
+                    .unwrap_or(0);
+            }
+        }
+        0
+    }
+
+    /// Aggregate "All" view remap: given an aggregate group index, return the
+    /// (owning list id, original group index) it came from. Used by the dispatch
+    /// layer to route an action taken in All view to the OWNING list's
+    /// orchestrator. `None` when not in aggregate view or the index is unknown.
+    pub fn aggregate_origin(&self, agg_group: usize) -> Option<(String, usize)> {
+        self.aggregate_origins.get(agg_group).cloned()
+    }
+
+    /// Drop a stale variation focus: clear `selected_var` when the selected book
+    /// no longer renders that md5 as one of its armed sub-rows.
+    fn validate_selected_var(&mut self) {
+        let Some(md5) = self.selected_var.clone() else {
+            return;
+        };
+        let still_valid = self
+            .flat
+            .get(self.selected)
+            .map(|fb| {
+                let armed = armed_variations(&fb.book);
+                // Only ADDITIONAL armed copies (index >= 1) render as sub-rows.
+                armed.len() >= 2 && armed[1..].iter().any(|v| v.md5 == md5)
+            })
+            .unwrap_or(false);
+        if !still_valid {
+            self.selected_var = None;
+        }
+    }
+
     fn move_selection(&mut self, delta: usize) {
-        if self.flat.is_empty() {
+        let rows = self.rendered_rows();
+        if rows.is_empty() {
             return;
         }
-        self.selected = (self.selected + delta).min(self.flat.len() - 1);
+        let pos = self.current_row_pos(&rows);
+        let new = (pos + delta).min(rows.len() - 1);
+        self.set_focus_row(&rows[new]);
     }
 
     fn move_selection_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
+        let rows = self.rendered_rows();
+        if rows.is_empty() {
+            return;
         }
+        let pos = self.current_row_pos(&rows);
+        let new = pos.saturating_sub(1);
+        self.set_focus_row(&rows[new]);
     }
 
     /// Move down by one viewport height (Shift-Down / Shift-J).
     fn move_selection_page_down(&mut self) {
-        if self.flat.is_empty() {
+        let rows = self.rendered_rows();
+        if rows.is_empty() {
             return;
         }
         // Use the book-table height from the last render as the page size.
         let page = self.last_rects.book_table.height.max(1) as usize;
-        self.selected = (self.selected + page).min(self.flat.len() - 1);
+        let pos = self.current_row_pos(&rows);
+        let new = (pos + page).min(rows.len() - 1);
+        self.set_focus_row(&rows[new]);
     }
 
     /// Move up by one viewport height (Shift-Up / Shift-K).
     fn move_selection_page_up(&mut self) {
+        let rows = self.rendered_rows();
+        if rows.is_empty() {
+            return;
+        }
         let page = self.last_rects.book_table.height.max(1) as usize;
-        self.selected = self.selected.saturating_sub(page);
+        let pos = self.current_row_pos(&rows);
+        let new = pos.saturating_sub(page);
+        self.set_focus_row(&rows[new]);
     }
 
     /// Number of in-flight transfer rows the Activity pane can scroll through.
@@ -2878,6 +3061,8 @@ impl AppState {
         if !self.flat.is_empty() && self.selected >= self.flat.len() {
             self.selected = self.flat.len() - 1;
         }
+        // Drop variation focus if the focused sub-row no longer exists.
+        self.validate_selected_var();
     }
 
     fn passes_filter(&self, book: &ViewBook) -> bool {

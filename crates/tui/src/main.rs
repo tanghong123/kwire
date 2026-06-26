@@ -391,9 +391,11 @@ async fn dispatch_intent(
             cancel_book(app, handles, group_path, book_index).await;
         }
         Intent::OpenDetail { flat_index } => {
+            // Pre-select the focused variation sub-row (if any) inside the detail.
+            let selected = app.detail_variation_index(flat_index);
             app.modal = Some(Modal::Detail {
                 book_flat_index: flat_index,
-                selected: 0,
+                selected,
                 sub_focus: crate::app::DetailSubFocus::Variations,
                 history_selected: 0,
             });
@@ -645,13 +647,16 @@ async fn refresh_active_view(app: &mut AppState, handles: &EngineHandles) {
     };
     if id == ALL_LIST_ID {
         // Aggregate "All" stop: merge every loaded list into one view.
-        if let Some(vm) = build_aggregate_view(handles).await {
+        if let Some((vm, origins)) = build_aggregate_view(handles).await {
+            app.aggregate_origins = origins;
             app.set_view(vm);
         }
     } else if let Some(orch_arc) = orch_arc {
         let snap = orch_arc.lock().await.snapshot();
         if let Ok(snap) = snap {
             let vm = build_with_id(id, &snap);
+            // Leaving the aggregate view: drop the stale origin map.
+            app.aggregate_origins.clear();
             app.set_view(vm);
         }
     }
@@ -661,39 +666,79 @@ async fn refresh_active_view(app: &mut AppState, handles: &EngineHandles) {
 /// Build the aggregate "All" [`ViewModel`]: every loaded list's groups
 /// concatenated into one view (each group name prefixed with its list title so
 /// the origin stays clear). `format_pref`/settings come from the first list.
-async fn build_aggregate_view(handles: &EngineHandles) -> Option<libgen_engine::ViewModel> {
+/// Returns the merged `ViewModel` plus an `origins` map: for each aggregate
+/// group index, the (owning list id, original group index) it came from, so
+/// actions taken in the All view can route back to the owning list's orchestrator.
+async fn build_aggregate_view(
+    handles: &EngineHandles,
+) -> Option<(libgen_engine::ViewModel, Vec<(String, usize)>)> {
     let pairs = {
         let lib = handles.library.lock().await;
         lib.all_arcs()
     };
     let mut groups: Vec<libgen_engine::ViewGroup> = Vec::new();
+    let mut origins: Vec<(String, usize)> = Vec::new();
     let mut settings: Option<libgen_engine::ViewListSettings> = None;
     let mut format_pref: Vec<String> = Vec::new();
     for (id, orch_arc) in pairs {
         let snap = orch_arc.lock().await.snapshot();
         if let Ok(snap) = snap {
-            let vm = build_with_id(id, &snap);
+            let vm = build_with_id(id.clone(), &snap);
             if settings.is_none() {
                 settings = Some(vm.settings.clone());
                 format_pref = vm.format_pref.clone();
             }
             let list_title = vm.title.clone();
-            for mut g in vm.groups {
+            for (orig_gi, mut g) in vm.groups.into_iter().enumerate() {
                 g.name = format!("{} \u{203a} {}", list_title, g.name);
                 groups.push(g);
+                origins.push((id.clone(), orig_gi));
             }
         }
     }
     let total: usize = groups.iter().map(|g| g.books.len()).sum();
-    Some(libgen_engine::ViewModel {
-        id: ALL_LIST_ID.to_string(),
-        title: "All".to_string(),
-        subtitle: format!("{total} book(s) across all lists"),
-        format_pref,
-        settings: settings?,
-        is_manual: false,
-        groups,
-    })
+    Some((
+        libgen_engine::ViewModel {
+            id: ALL_LIST_ID.to_string(),
+            title: "All".to_string(),
+            subtitle: format!("{total} book(s) across all lists"),
+            format_pref,
+            settings: settings?,
+            is_manual: false,
+            groups,
+        },
+        origins,
+    ))
+}
+
+/// Resolve the orchestrator + real group_path for a book action.
+///
+/// In a normal single-list view this is just the active orchestrator with the
+/// group_path unchanged. In the aggregate "All" view it remaps the leading
+/// (aggregate) group index back to the OWNING list's orchestrator and original
+/// group index via `app.aggregate_origins`, so Enter/`a`/`d`/`r`/`p`/`c`/… act
+/// for real instead of no-op'ing.
+async fn resolve_book_orch(
+    app: &AppState,
+    handles: &EngineHandles,
+    group_path: &[usize],
+) -> Option<(
+    Arc<tokio::sync::Mutex<libgen_core::orchestrator::Orchestrator>>,
+    Vec<usize>,
+)> {
+    let lib = handles.library.lock().await;
+    if lib.current == ALL_LIST_ID {
+        let agg_idx = *group_path.first()?;
+        let (list_id, orig_group) = app.aggregate_origin(agg_idx)?;
+        let orch = lib.arc_for(&list_id)?;
+        let mut gp = group_path.to_vec();
+        gp[0] = orig_group;
+        Some((orch, gp))
+    } else {
+        let id = lib.current.clone();
+        let orch = lib.arc_for(&id)?;
+        Some((orch, group_path.to_vec()))
+    }
 }
 
 /// Recompute summaries for ALL loaded lists and update `app.all_lists`.
@@ -750,7 +795,7 @@ async fn select_candidate(
     book_index: usize,
     md5: String,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
         return;
     };
     {
@@ -777,7 +822,7 @@ async fn request_variations(
     book_index: usize,
     md5s: Vec<String>,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
         return;
     };
     {
@@ -799,7 +844,7 @@ async fn retry_book(
     group_path: Vec<usize>,
     book_index: usize,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
         return;
     };
     {
@@ -819,7 +864,7 @@ async fn pause_book(
     group_path: Vec<usize>,
     book_index: usize,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
         return;
     };
     // Get in-flight md5s for this book.
@@ -866,7 +911,7 @@ async fn cancel_book(
     group_path: Vec<usize>,
     book_index: usize,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
         return;
     };
     let inflight = {
@@ -941,7 +986,8 @@ async fn resume_transfer(app: &mut AppState, handles: &EngineHandles, md5: Strin
         }
     });
     if let Some((group_path, book_index)) = location {
-        let Some(orch_arc) = active_orch(handles).await else {
+        let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await
+        else {
             return;
         };
         let mut guard = orch_arc.lock().await;
@@ -1891,7 +1937,7 @@ async fn requery_book(
     book_index: usize,
     title: String,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
         app.status_msg = Some("No active list".into());
         return;
     };
@@ -1921,7 +1967,7 @@ async fn edit_book(
     title: String,
     authors: Vec<String>,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
         app.status_msg = Some("No active list".into());
         return;
     };
@@ -1949,7 +1995,7 @@ async fn remove_book(
     group_path: Vec<usize>,
     book_index: usize,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
         app.status_msg = Some("No active list".into());
         return;
     };
@@ -1979,7 +2025,7 @@ async fn mark_not_found(
     group_path: Vec<usize>,
     book_index: usize,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
         app.status_msg = Some("No active list".into());
         return;
     };

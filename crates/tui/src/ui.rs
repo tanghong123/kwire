@@ -28,8 +28,8 @@ use ratatui::{
 };
 
 use crate::app::{
-    settings_field_kind, AppState, DetailSubFocus, EditBookField, Focus, Modal, SettingsEditor,
-    SettingsFieldKind, StatusFilter, FORMAT_EDITOR_FORMATS,
+    armed_variations, settings_field_kind, AppState, DetailSubFocus, EditBookField, Focus, Modal,
+    RowRef, SettingsEditor, SettingsFieldKind, StatusFilter, FORMAT_EDITOR_FORMATS,
 };
 use crate::theme::{
     self, filter_chip_color, history_kind_color, score_color, style_dim, style_header, style_hint,
@@ -631,6 +631,43 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
 // 2  Book table
 // ---------------------------------------------------------------------------
 
+/// Per-variation display cells for a SINGLE armed copy (used for the primary
+/// row of a stacked book and for each "↳ alt. copy" sub-row). Returns
+/// `(fmt, size, state_label, progress)`.
+fn variation_display(v: &libgen_engine::ViewVariation, tick: u64) -> (String, String, String, u32) {
+    let state_label = match v.state.as_str() {
+        "done" => "\u{2713} done".to_string(),
+        "downloading" => format!("{} {}%", theme::spinner(tick), v.progress),
+        "queued" => "\u{00b7} queued".to_string(),
+        "paused" => "\u{23f8} paused".to_string(),
+        "failed" | "cancelled" => "\u{2717} failed".to_string(),
+        other => other.to_string(),
+    };
+    let size = if v.size > 0 {
+        format!("{} MB", v.size)
+    } else {
+        "\u{2014}".to_string()
+    };
+    (v.fmt.clone(), size, state_label, v.progress)
+}
+
+/// Map a rendered state label back to a core state key for `style_for_state`.
+fn state_key_for_label(label: &str) -> &'static str {
+    if label.contains("done") {
+        "done"
+    } else if label.contains('%') {
+        "downloading"
+    } else if label.contains("failed") || label.contains("not found") {
+        "failed"
+    } else if label.contains("choose") {
+        "available"
+    } else if label.contains("paused") {
+        "paused"
+    } else {
+        "queued"
+    }
+}
+
 fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
     // Clear previous book_rows.
     app.last_rects.book_rows.clear();
@@ -651,10 +688,13 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
 
     for (i, fb) in app.flat.iter().enumerate() {
         let book = &fb.book;
+        // The book PRIMARY row is "the selected row" only when no variation
+        // sub-row of this book is focused (`selected_var` is None).
+        let book_focused = i == app.selected && app.selected_var.is_none();
         // Active selection only when the List pane has focus.
-        let is_selected = i == app.selected && app.focus == Focus::List;
+        let is_selected = book_focused && app.focus == Focus::List;
         // Dim selection marker when List pane is inactive (any other pane focused).
-        let is_inactive_selected = i == app.selected && app.focus != Focus::List;
+        let is_inactive_selected = book_focused && app.focus != Focus::List;
 
         // Emit a group-header row whenever the owning group changes (matches the
         // wireframe's "LIFT-OFF  4/12" section bands).
@@ -692,103 +732,62 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             visual_row += 1;
         }
 
-        if i == app.selected {
+        if book_focused {
             selected_visual = visual_row as usize;
         }
 
-        // Determine display state from the first non-available variation (or show
-        // discovery state when nothing is queued).
-        let (display_fmt, display_size, display_state, display_progress) =
-            if book.versions.is_empty() {
-                let disc = match book.discovery.as_str() {
-                    "not_found" => "\u{2717} not found",
-                    "needs_selection" => "\u{25cf} choose",
-                    "queuing" | "querying" => "\u{280b} querying",
-                    _ => "queued",
-                };
-                (
-                    "???".to_string(),
-                    "\u{2014}".to_string(),
-                    disc.to_string(),
-                    0u32,
-                )
-            } else {
-                // Pick the "best" variation to display: prefer an active one,
-                // else the first done, else the first kept.
-                let best = book
-                    .versions
-                    .iter()
-                    .find(|v| v.state == "downloading")
-                    .or_else(|| book.versions.iter().find(|v| v.state == "done"))
-                    .or_else(|| book.versions.first())
-                    .unwrap();
+        // Armed (requested) variations in display order. With 2+ armed copies the
+        // book renders its PRIMARY copy here and one indented "↳ alt. copy"
+        // sub-row per additional armed copy (see the main-library mock). With 0–1
+        // armed it stays a single row (existing best-variation roll-up).
+        let armed = armed_variations(book);
+        let stacked = armed.len() >= 2;
 
-                // A book can complete MORE than one copy (e.g. an epub AND a
-                // pdf). Surface every downloaded variation on the row: list all
-                // done formats and a "N copies" badge so multi-copy books are
-                // visibly distinct (the Detail view breaks them out per row).
-                let done_fmts: Vec<&str> = book
-                    .versions
-                    .iter()
-                    .filter(|v| v.state == "done")
-                    .map(|v| v.fmt.as_str())
-                    .collect();
-                let n_done = done_fmts.len();
-
-                let state_label = match best.state.as_str() {
-                    "done" if n_done >= 2 => format!("\u{2713} {} copies", n_done),
-                    "done" => "\u{2713} done".to_string(),
-                    "downloading" if n_done >= 1 => {
-                        // One copy in flight while ≥1 already finished.
-                        format!(
-                            "{} {}% \u{00b7} +{} done",
-                            theme::spinner(app.tick),
-                            best.progress,
-                            n_done
-                        )
-                    }
-                    "downloading" => format!("{} {}%", theme::spinner(app.tick), best.progress),
-                    "failed" | "cancelled" => "\u{2717} failed".to_string(),
-                    "queued" => "\u{00b7} queued".to_string(),
-                    "paused" => "\u{23f8} paused".to_string(),
-                    _ => best.state.clone(),
-                };
-
-                // Format cell shows ALL done formats joined (epub+pdf) when more
-                // than one completed; otherwise the best variation's format.
-                let fmt_label = if n_done >= 2 {
-                    done_fmts.join("+")
-                } else {
-                    best.fmt.clone()
-                };
-
-                let size_label = if best.size > 0 {
-                    format!("{} MB", best.size)
-                } else {
-                    "\u{2014}".to_string()
-                };
-
-                (fmt_label, size_label, state_label, best.progress)
+        // Determine the PRIMARY row's display cells.
+        let (display_fmt, display_size, display_state, display_progress) = if stacked {
+            // Primary = the first armed copy in display order (done-first).
+            variation_display(armed[0], app.tick)
+        } else if book.versions.is_empty() {
+            let disc = match book.discovery.as_str() {
+                "not_found" => "\u{2717} not found",
+                "needs_selection" => "\u{25cf} choose",
+                "queuing" | "querying" => "\u{280b} querying",
+                _ => "queued",
             };
+            (
+                "???".to_string(),
+                "\u{2014}".to_string(),
+                disc.to_string(),
+                0u32,
+            )
+        } else {
+            // Pick the "best" variation to display: prefer an active one,
+            // else the first done, else the first kept.
+            let best = book
+                .versions
+                .iter()
+                .find(|v| v.state == "downloading")
+                .or_else(|| book.versions.iter().find(|v| v.state == "done"))
+                .or_else(|| book.versions.first())
+                .unwrap();
+            let state_label = match best.state.as_str() {
+                "done" => "\u{2713} done".to_string(),
+                "downloading" => format!("{} {}%", theme::spinner(app.tick), best.progress),
+                "failed" | "cancelled" => "\u{2717} failed".to_string(),
+                "queued" => "\u{00b7} queued".to_string(),
+                "paused" => "\u{23f8} paused".to_string(),
+                _ => best.state.clone(),
+            };
+            let size_label = if best.size > 0 {
+                format!("{} MB", best.size)
+            } else {
+                "\u{2014}".to_string()
+            };
+            (best.fmt.clone(), size_label, state_label, best.progress)
+        };
 
         let bar = theme::progress_bar(display_progress, 10);
-
-        let state_style = theme::style_for_state(
-            // Map the display_state string back to a core state key.
-            if display_state.contains("done") {
-                "done"
-            } else if display_state.contains('%') {
-                "downloading"
-            } else if display_state.contains("failed") || display_state.contains("not found") {
-                "failed" // not-found renders RED like a failure
-            } else if display_state.contains("choose") {
-                "available" // needs-you amber
-            } else if display_state.contains("paused") {
-                "paused"
-            } else {
-                "queued"
-            },
-        );
+        let state_style = theme::style_for_state(state_key_for_label(&display_state));
 
         let row_style = if is_selected {
             style_selected()
@@ -854,8 +853,74 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
 
         // Store book row rect: no border, no header — offset is just visual_row.
         let row_rect = Rect::new(area.x, area.y + visual_row, area.width, 1);
-        app.last_rects.book_rows.push((row_rect, i));
+        app.last_rects.book_rows.push((row_rect, RowRef::Book(i)));
         visual_row += 1;
+
+        // ── Indented "↳ alt. copy" sub-rows for each ADDITIONAL armed copy ──
+        if stacked {
+            for v in &armed[1..] {
+                let var_focused =
+                    i == app.selected && app.selected_var.as_deref() == Some(v.md5.as_str());
+                let sub_selected = var_focused && app.focus == Focus::List;
+                let sub_inactive = var_focused && app.focus != Focus::List;
+                if var_focused {
+                    selected_visual = visual_row as usize;
+                }
+
+                let (vfmt, vsize, vstate, vprog) = variation_display(v, app.tick);
+                let vbar = theme::progress_bar(vprog, 10);
+                let vstate_style = theme::style_for_state(state_key_for_label(&vstate));
+                let vrow_style = if sub_selected {
+                    style_selected()
+                } else {
+                    style_normal()
+                };
+
+                // Accent / blank seq column (sub-rows have no number).
+                let vseq_cell = if sub_selected {
+                    Cell::from("\u{258c}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
+                } else if sub_inactive {
+                    Cell::from("\u{258c}").style(Style::default().fg(C_FAINT))
+                } else {
+                    Cell::from("").style(Style::default().fg(C_FAINT))
+                };
+
+                // Indented label: "  ↳ alt. copy · <host>".
+                let host = v.host.as_deref().unwrap_or("\u{2014}");
+                let label_style = if sub_selected {
+                    style_selected()
+                } else {
+                    Style::default().fg(C_MUTED)
+                };
+                let label_cell = Cell::from(Line::from(Span::styled(
+                    format!("  \u{21b3} alt. copy \u{00b7} {host}"),
+                    label_style,
+                )));
+
+                let cell_style = if sub_selected {
+                    style_selected()
+                } else {
+                    Style::default().fg(C_MUTED)
+                };
+                let vrow = Row::new([
+                    vseq_cell,
+                    label_cell,
+                    Cell::from(vfmt).style(cell_style),
+                    Cell::from(vsize).style(cell_style),
+                    Cell::from(vstate).style(vstate_style),
+                    Cell::from(vbar).style(vstate_style),
+                ])
+                .height(1)
+                .style(vrow_style);
+                rows.push(vrow);
+
+                let vrect = Rect::new(area.x, area.y + visual_row, area.width, 1);
+                app.last_rects
+                    .book_rows
+                    .push((vrect, RowRef::Variation(i, v.md5.clone())));
+                visual_row += 1;
+            }
+        }
     }
 
     let mut table_state = TableState::default();

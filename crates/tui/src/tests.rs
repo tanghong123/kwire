@@ -17,7 +17,7 @@ mod tests {
 
     use crate::app::{
         build_format_editor_rows, settings_field_kind, ActiveTransfer, AppState, FlatBook, Focus,
-        Modal, SettingsDraft, SettingsEditor, SettingsFieldKind, StatusFilter,
+        Modal, RowRef, SettingsDraft, SettingsEditor, SettingsFieldKind, StatusFilter,
         FORMAT_EDITOR_FORMATS, SETTINGS_FIELD_COUNT,
     };
     use crate::intent::Intent;
@@ -4384,8 +4384,8 @@ mod tests {
         // The group-header occupies row 0; books are at rows 1+ relative to book_table.
         let second_book_rect = ratatui::layout::Rect::new(0, 5, 80, 1);
         app.last_rects.book_rows = vec![
-            (ratatui::layout::Rect::new(0, 4, 80, 1), 0),
-            (second_book_rect, 1),
+            (ratatui::layout::Rect::new(0, 4, 80, 1), RowRef::Book(0)),
+            (second_book_rect, RowRef::Book(1)),
         ];
 
         // Start with Activity focused to confirm focus switches.
@@ -4410,7 +4410,7 @@ mod tests {
         app.focus = Focus::List;
 
         // Put a rect for flat index 0 at row 3.
-        app.last_rects.book_rows = vec![(ratatui::layout::Rect::new(0, 3, 80, 1), 0)];
+        app.last_rects.book_rows = vec![(ratatui::layout::Rect::new(0, 3, 80, 1), RowRef::Book(0))];
 
         // First click: already selected (focus is List, selected == 0) → Enter intent.
         let intent = app.on_input(mouse_left_click(5, 3));
@@ -4429,7 +4429,7 @@ mod tests {
         // flat[0] has discovery == "needs_selection".
         app.selected = 0;
         app.focus = Focus::List;
-        app.last_rects.book_rows = vec![(ratatui::layout::Rect::new(0, 3, 80, 1), 0)];
+        app.last_rects.book_rows = vec![(ratatui::layout::Rect::new(0, 3, 80, 1), RowRef::Book(0))];
 
         let intent = app.on_input(mouse_left_click(5, 3));
         assert!(
@@ -4517,8 +4517,8 @@ mod tests {
         // Set book_table rect and book_rows.
         app.last_rects.book_table = ratatui::layout::Rect::new(0, 3, 80, 20);
         app.last_rects.book_rows = vec![
-            (ratatui::layout::Rect::new(0, 4, 80, 1), 0),
-            (ratatui::layout::Rect::new(0, 5, 80, 1), 1),
+            (ratatui::layout::Rect::new(0, 4, 80, 1), RowRef::Book(0)),
+            (ratatui::layout::Rect::new(0, 5, 80, 1), RowRef::Book(1)),
         ];
 
         // Scroll down with cursor over the book table.
@@ -4855,5 +4855,192 @@ mod tests {
             content.contains("choose a copy"),
             "picker modal must render at 132 cols"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Stacked per-variation rows — selection / nav / mouse / All-view routing
+    // -----------------------------------------------------------------------
+
+    /// A `FlatBook` with TWO armed copies: a finished `done` epub (primary) and
+    /// an in-flight `downloading` epub (the "↳ alt. copy" sub-row).
+    fn make_multi_variation_flat_book(gi: usize, bi: usize) -> FlatBook {
+        let mk = |md5: &str, state: &str, progress: u32| ViewVariation {
+            md5: md5.into(),
+            title: "Peter Rabbit".into(),
+            author: "Beatrix Potter".into(),
+            fmt: "epub".into(),
+            size: 2,
+            size_bytes: None,
+            year: None,
+            publisher: String::new(),
+            language: String::new(),
+            pages: None,
+            counted_pages: None,
+            low_pages: false,
+            host: Some("libgen.li".into()),
+            state: state.into(),
+            progress,
+            downloaded_bytes: None,
+            total_bytes: None,
+            speed_bps: None,
+            eta_secs: None,
+            output_path: None,
+            score: 0.9,
+            cover_url: None,
+            last_error: None,
+        };
+        FlatBook {
+            group_name: "G".into(),
+            group_index: gi,
+            book_index_in_group: bi,
+            book: ViewBook {
+                id: format!("id-{}", bi),
+                title: "The Tale of Peter Rabbit".into(),
+                author: "Beatrix Potter".into(),
+                year: None,
+                pages: None,
+                backfilled: vec![],
+                seq: bi + 1,
+                discovery: "matched".into(),
+                versions: vec![
+                    mk(&"d".repeat(32), "done", 100),
+                    mk(&"e".repeat(32), "downloading", 25),
+                ],
+                acquisition: None,
+                review: false,
+                recommended_md5: None,
+                history: vec![],
+            },
+        }
+    }
+
+    /// A multi-armed book contributes a `Book` row plus one `Variation` sub-row
+    /// for each ADDITIONAL armed copy; single-armed books stay one row.
+    #[test]
+    fn rendered_rows_stacks_additional_variations() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // make view Some
+        app.flat = vec![
+            make_multi_variation_flat_book(0, 0),
+            make_downloading_flat_book("Solo", 0, 1), // single armed copy
+        ];
+        let rows = app.rendered_rows();
+        assert_eq!(rows.len(), 3, "2 rows for multi book + 1 for solo book");
+        assert_eq!(rows[0], RowRef::Book(0));
+        // Primary is the DONE copy; the sub-row is the downloading copy.
+        assert_eq!(rows[1], RowRef::Variation(0, "e".repeat(32)));
+        assert_eq!(rows[2], RowRef::Book(1));
+    }
+
+    /// ↓ steps from a book's primary row onto its variation sub-row, then onto
+    /// the next book; ↑ reverses.
+    #[test]
+    fn arrow_nav_steps_through_variation_subrows() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = vec![
+            make_multi_variation_flat_book(0, 0),
+            make_downloading_flat_book("Solo", 0, 1),
+        ];
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected_var, None);
+
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(app.selected, 0);
+        assert_eq!(
+            app.selected_var.as_deref(),
+            Some("e".repeat(32).as_str()),
+            "↓ from book row lands on its variation sub-row"
+        );
+
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(app.selected, 1, "↓ from sub-row lands on the next book");
+        assert_eq!(app.selected_var, None);
+
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(app.selected, 0);
+        assert_eq!(
+            app.selected_var.as_deref(),
+            Some("e".repeat(32).as_str()),
+            "↑ returns onto the variation sub-row"
+        );
+    }
+
+    /// Clicking a variation sub-row selects that variation (sets `selected_var`).
+    #[test]
+    fn mouse_click_variation_subrow_selects_it() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = vec![make_multi_variation_flat_book(0, 0)];
+        app.focus = Focus::Activity; // start elsewhere
+
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+
+        // Find the rect registered for the variation sub-row.
+        let var_rect = app
+            .last_rects
+            .book_rows
+            .iter()
+            .find_map(|(rect, r)| matches!(r, RowRef::Variation(0, _)).then_some(*rect))
+            .expect("variation sub-row rect must be registered");
+
+        let intent = app.on_input(mouse_left_click(var_rect.x + 5, var_rect.y));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(app.focus, Focus::List, "click focuses the List pane");
+        assert_eq!(app.selected, 0);
+        assert_eq!(
+            app.selected_var.as_deref(),
+            Some("e".repeat(32).as_str()),
+            "clicking a variation sub-row selects that variation"
+        );
+    }
+
+    /// The list render shows the indented "↳ alt. copy" sub-row for a multi book.
+    #[test]
+    fn render_shows_alt_copy_subrow() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = vec![make_multi_variation_flat_book(0, 0)];
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains("alt. copy"),
+            "multi-copy book must render an '↳ alt. copy' sub-row"
+        );
+    }
+
+    /// With a variation sub-row focused, `detail_variation_index` resolves the
+    /// detail-modal cursor to that variation's position in `versions`.
+    #[test]
+    fn detail_index_follows_focused_variation() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = vec![make_multi_variation_flat_book(0, 0)];
+        app.selected = 0;
+        app.selected_var = Some("e".repeat(32)); // the downloading copy (index 1)
+        assert_eq!(app.detail_variation_index(0), 1);
+
+        // Book row focused → index 0.
+        app.selected_var = None;
+        assert_eq!(app.detail_variation_index(0), 0);
+    }
+
+    /// All-view routing: an aggregate group index remaps to its owning list +
+    /// original group index via `aggregate_origin`.
+    #[test]
+    fn aggregate_origin_maps_to_owning_list() {
+        let mut app = AppState::new();
+        app.aggregate_origins = vec![
+            ("list1".into(), 0),
+            ("list1".into(), 1),
+            ("list2".into(), 0),
+        ];
+        assert_eq!(app.aggregate_origin(0), Some(("list1".into(), 0)));
+        assert_eq!(app.aggregate_origin(2), Some(("list2".into(), 0)));
+        assert_eq!(app.aggregate_origin(3), None);
     }
 }
