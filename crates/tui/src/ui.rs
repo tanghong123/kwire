@@ -31,9 +31,9 @@ use crate::app::{
     FORMAT_EDITOR_FORMATS,
 };
 use crate::theme::{
-    self, history_kind_color, score_color, style_dim, style_header, style_hint, style_normal,
-    style_selected, style_title, C_BACKDROP, C_BG, C_BRIGHT, C_DIM, C_DONE, C_FAINT, C_NEEDS_YOU,
-    C_PANEL, C_SELECTED, C_TEXT,
+    self, history_kind_color, score_color, style_dim, style_header, style_hint, style_muted,
+    style_normal, style_selected, style_title, C_BACKDROP, C_BG, C_BRIGHT, C_DONE, C_FAINT,
+    C_MUTED, C_NEEDS_YOU, C_PANEL, C_SELECTED, C_TEXT, C_WARM,
 };
 
 const ACTIVITY_EXPANDED_H: u16 = 5;
@@ -248,30 +248,30 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     //    "A quire gathers folded sheets into one section of a book —"
     //    "kwire gathers a scattered reading list into one tidy collection."
     let line1 = Line::from(vec![
-        Span::styled("A ", style_dim()),
+        Span::styled("A ", Style::default().fg(C_WARM)),
         Span::styled(
             "quire",
-            Style::default().fg(C_DONE).add_modifier(Modifier::BOLD),
+            Style::default().fg(C_WARM).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             " gathers folded sheets into one section of a book \u{2014}",
-            style_dim(),
+            Style::default().fg(C_WARM),
         ),
     ]);
     let line2 = Line::from(Span::styled(
         "kwire gathers a scattered reading list into one tidy collection.",
-        style_dim(),
+        Style::default().fg(C_WARM),
     ));
     frame.render_widget(
         Paragraph::new(vec![line1, line2]).alignment(Alignment::Center),
         parts[4],
     );
 
-    // 4. NO READING LISTS YET — dim, centered
+    // 4. NO READING LISTS YET — muted, centered
     frame.render_widget(
         Paragraph::new("NO READING LISTS YET")
             .alignment(Alignment::Center)
-            .style(style_dim()),
+            .style(style_muted()),
         parts[6],
     );
 
@@ -398,7 +398,7 @@ fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
     let mut cumulative: usize = prefix.chars().count();
     segs.push(Seg {
         text: prefix,
-        style: style_dim(),
+        style: style_muted(),
     });
 
     // Store the [start, end) column range of each list segment (excluding
@@ -419,7 +419,7 @@ fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
         let style = if is_active {
             style_title()
         } else {
-            style_dim()
+            style_muted()
         };
         segs.push(Seg { text, style });
     }
@@ -429,7 +429,7 @@ fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
     let total_width = cumulative + nav_len;
     segs.push(Seg {
         text: nav.into(),
-        style: style_dim(),
+        style: style_muted(),
     });
 
     let area_w = area.width as usize;
@@ -550,7 +550,7 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 .fg(C_TEXT)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
-            Style::default().fg(C_DIM)
+            Style::default().fg(C_MUTED)
         };
         let chip_width = label.len() as u16;
         // Store chip rect for mouse hit-testing.
@@ -707,7 +707,7 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
         let seq_cell = if is_selected {
             Cell::from("\u{258c}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
         } else {
-            Cell::from(format!("{:>3}", book.seq)).style(style_dim())
+            Cell::from(format!("{:>3}", book.seq)).style(Style::default().fg(C_FAINT))
         };
         let title_label = book.title.clone();
         let author_label = book.author.clone();
@@ -722,10 +722,18 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             Cell::from(author_label).style(if is_selected {
                 style_selected()
             } else {
-                Style::default().fg(C_NEEDS_YOU)
+                Style::default().fg(C_MUTED)
             }),
-            Cell::from(display_fmt).style(style_dim()),
-            Cell::from(display_size).style(style_dim()),
+            Cell::from(display_fmt).style(if is_selected {
+                style_selected()
+            } else {
+                Style::default().fg(C_MUTED)
+            }),
+            Cell::from(display_size).style(if is_selected {
+                style_selected()
+            } else {
+                Style::default().fg(C_MUTED)
+            }),
             Cell::from(display_state).style(state_style),
             Cell::from(bar).style(state_style),
         ])
@@ -818,7 +826,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
     let header_style = if app.focus == Focus::Activity {
         style_normal()
     } else {
-        style_dim()
+        style_muted()
     };
     let header_line = Line::from(Span::styled(header_text, header_style));
 
@@ -906,15 +914,21 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                         format!("   {}↓ \u{00b7} {}", versions.len(), host_speed_str)
                     }
                 );
-                all_content.push(Line::from(Span::styled(host_line, style_normal())));
+                all_content.push(Line::from(Span::styled(
+                    host_line,
+                    Style::default().fg(C_WARM),
+                )));
 
                 for (title, pct, fmt, eta_secs) in versions {
                     let bar = theme::progress_bar((*pct).into(), 6);
                     let eta = eta_secs.map(|s| format!("  {}s", s)).unwrap_or_default();
                     all_content.push(Line::from(vec![
-                        Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
+                        Span::styled(format!("  {} ", theme::spinner(app.tick)), style_muted()),
                         Span::styled(title.clone(), style_normal()),
-                        Span::styled(format!("  {}  {}%  {}{}", fmt, pct, bar, eta), style_dim()),
+                        Span::styled(
+                            format!("  {}  {}%  {}{}", fmt, pct, bar, eta),
+                            style_muted(),
+                        ),
                     ]));
                 }
             }
@@ -939,13 +953,16 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                     format!(" \u{00b7} {}", speed_s)
                 }
             );
-            all_content.push(Line::from(Span::styled(host_line, style_normal())));
+            all_content.push(Line::from(Span::styled(
+                host_line,
+                Style::default().fg(C_WARM),
+            )));
             for (title, pct, _) in transfers {
                 let bar = theme::progress_bar((*pct).into(), 6);
                 all_content.push(Line::from(vec![
-                    Span::styled(format!("  {} ", theme::spinner(app.tick)), style_dim()),
+                    Span::styled(format!("  {} ", theme::spinner(app.tick)), style_muted()),
                     Span::styled(title.clone(), style_normal()),
-                    Span::styled(format!("  {}%  {}", pct, bar), style_dim()),
+                    Span::styled(format!("  {}%  {}", pct, bar), style_muted()),
                 ]));
             }
         }
@@ -970,7 +987,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
         if has_above {
             display.push(Line::from(Span::styled(
                 format!("  \u{25b4} {} above", offset),
-                style_dim(),
+                style_muted(),
             )));
         }
         for line in &all_content[offset..end] {
@@ -979,7 +996,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
         if has_below {
             display.push(Line::from(Span::styled(
                 format!("  \u{25be} {} more", n - end),
-                style_dim(),
+                style_muted(),
             )));
         }
         display
@@ -1789,7 +1806,7 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
                 } else if is_sel {
                     style_selected()
                 } else {
-                    Style::default().fg(C_NEEDS_YOU)
+                    Style::default().fg(C_WARM)
                 };
 
                 let indicator = if is_editing {
