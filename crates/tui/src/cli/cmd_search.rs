@@ -2,7 +2,8 @@
 
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
-use libgen_core::model::{BookInput, Candidate, Format};
+use libgen_core::matching;
+use libgen_core::model::{BookInput, Candidate, Format, ListSettings};
 use libgen_engine::{build_search, Config};
 
 #[derive(ClapArgs)]
@@ -58,6 +59,10 @@ pub async fn run(args: SearchArgs) -> Result<()> {
                 .unwrap_or(false)
         });
     }
+
+    // Score + rank with the SAME criteria as the desktop's "choose a copy"
+    // (matching::evaluate → score_candidate + format/language prefs + tie-breaks).
+    let mut candidates = matching::evaluate(&input, candidates, &ListSettings::default()).ranked;
 
     let total = candidates.len();
     candidates.truncate(args.limit);

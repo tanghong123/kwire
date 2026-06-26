@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
 use libgen_core::download::{Resolver, ResolverChain};
 use libgen_core::matching;
-use libgen_core::model::{BookInput, Format, ListSettings};
+use libgen_core::model::{BookInput, Format, ListSettings, RequestStatus};
 use libgen_core::queue::{DownloadRequest, HostLimits, Progress, SchedulerBuilder};
 use libgen_engine::{build_search, Config};
 use reqwest::Client;
@@ -100,22 +100,34 @@ pub async fn run(args: GetArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Rank with the matcher.
+    // Rank with the SAME match algorithm as the desktop (matching::evaluate),
+    // then act on its confidence decision.
     let settings = ListSettings::default();
     let outcome = matching::evaluate(&input, candidates, &settings);
 
-    if outcome.ranked.is_empty() {
-        eprintln!("no matching candidates — try: kwire search \"{title}\"");
-        return Ok(());
+    match outcome.status {
+        // Confident match → auto-download the best, exactly like the desktop.
+        RequestStatus::Matched => {
+            let best = &outcome.ranked[0];
+            println!("{}", super::cmd_search::format_candidate(1, best));
+            let emitter = CliEmitter::new();
+            download_by_md5(&best.md5, &args.site, &args.out, client, &emitter).await
+        }
+        // No confident match → degrade to search: show the ranked candidates so the
+        // user can pick one and download it with `kwire get <md5>`.
+        RequestStatus::NeedsSelection => {
+            eprintln!("no confident match — pick one and run:  kwire get <md5>");
+            for (i, c) in outcome.ranked.iter().take(args.limit).enumerate() {
+                println!("{}", super::cmd_search::format_candidate(i + 1, c));
+            }
+            Ok(())
+        }
+        // Nothing usable.
+        _ => {
+            eprintln!("no matching candidates — try: kwire search \"{title}\"");
+            Ok(())
+        }
     }
-
-    let best = &outcome.ranked[0];
-
-    // Print the chosen candidate's metadata (two-line format, same as `search`).
-    println!("{}", super::cmd_search::format_candidate(1, best));
-
-    let emitter = CliEmitter::new();
-    download_by_md5(&best.md5, &args.site, &args.out, client, &emitter).await
 }
 
 /// Download a single md5 using `--site`, saving to `--out`.
