@@ -217,6 +217,8 @@ const COMMANDS: &[&str] = &[
     "refresh-mirrors",
     "cleanup",
     "reorganize",
+    "download-series",
+    "series",
     "quit",
     "help",
 ];

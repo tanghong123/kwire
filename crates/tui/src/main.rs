@@ -553,6 +553,10 @@ async fn handle_command_async(
                 add_md5_cmd(app, handles, arg).await;
             }
         }
+        // #53 — add the selected book's series siblings to the current list
+        "download-series" | "series" => {
+            download_series_cmd(app, handles).await;
+        }
         "" => {}
         other => {
             tracing::warn!("unknown command: {:?}", other);
@@ -1556,6 +1560,132 @@ async fn add_md5_cmd(app: &mut AppState, handles: &EngineHandles, md5: &str) {
     handles.engine_wake.notify_one();
     refresh_active_view(app, handles).await;
     app.status_msg = Some(format!("Added MD5 {}", &md5[..md5.len().min(8)]));
+}
+
+/// Decide what `:download-series` should add, given the seed book's title and
+/// the (already-performed) series lookup result. Pure and I/O-free so the
+/// no-title / no-series / found-siblings paths can be unit-tested without a
+/// network or an engine.
+///
+/// On success returns `(member titles in reading order, series name)`. `Err`
+/// carries a user-facing message for each failure path.
+pub(crate) fn plan_series_add(
+    seed_title: &str,
+    series: Option<&libgen_core::series::Series>,
+) -> Result<(Vec<String>, String), String> {
+    if seed_title.trim().is_empty() {
+        return Err("No title on the selected book".into());
+    }
+    let series = match series {
+        Some(s) if !s.members.is_empty() => s,
+        _ => return Err("No series found for the selected book".into()),
+    };
+    let titles: Vec<String> = series
+        .members
+        .iter()
+        .map(|m| m.title.clone())
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    if titles.is_empty() {
+        return Err("No series found for the selected book".into());
+    }
+    Ok((titles, series.name.clone()))
+}
+
+/// `:download-series` (alias `:series`) — for the currently selected book, look
+/// up the series it belongs to and add the sibling volumes to the CURRENT list,
+/// then query them.
+///
+/// Mirrors `commands::download_series`' locking: the seed `(title, author)` is
+/// read under a BRIEF orch lock that is then DROPPED; the series lookup (the
+/// network phase) runs with NO lock held; only afterwards is the orch re-locked
+/// to add the discovered siblings.
+async fn download_series_cmd(app: &mut AppState, handles: &EngineHandles) {
+    let Some(orch_arc) = active_orch(handles).await else {
+        app.status_msg = Some("No active list".into());
+        return;
+    };
+    let Some(fb) = app.flat.get(app.selected) else {
+        app.status_msg = Some("No book selected".into());
+        return;
+    };
+    let group_index = fb.group_index;
+    let book_index = fb.book_index_in_group;
+
+    // 1. Resolve the seed (title, author) under a BRIEF orch lock, then drop it.
+    let (title, author) = {
+        let guard = orch_arc.lock().await;
+        let snap = match guard.snapshot() {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("download_series: snapshot: {e}");
+                app.status_msg = Some(format!("Series lookup failed: {e}"));
+                return;
+            }
+        };
+        match snap
+            .groups
+            .get(group_index)
+            .and_then(|g| g.books.get(book_index))
+        {
+            Some(b) => (b.input.title.clone(), b.input.authors.join(", ")),
+            None => {
+                app.status_msg = Some("No book selected".into());
+                return;
+            }
+        }
+    }; // orch lock dropped here — the network lookup runs OFF any lock.
+
+    if title.trim().is_empty() {
+        app.status_msg = Some("No title on the selected book".into());
+        return;
+    }
+
+    // 2. Series lookup — NO lock held across the network (replay when configured).
+    let series_client = {
+        let cfg = handles.config.lock().expect("config poisoned").clone();
+        match &cfg.replay_dir {
+            Some(dir) => libgen_core::series::SeriesClient::replay(dir.join("series")),
+            None => libgen_core::series::SeriesClient::live(),
+        }
+    };
+    let series = match series_client.lookup(&title, &author).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("download_series: lookup: {e}");
+            app.status_msg = Some(format!("Series lookup failed: {e}"));
+            return;
+        }
+    };
+
+    // 3. Decide what to add (pure; also surfaces the no-series error path).
+    let (titles, series_name) = match plan_series_add(&title, series.as_ref()) {
+        Ok(plan) => plan,
+        Err(e) => {
+            app.status_msg = Some(e);
+            return;
+        }
+    };
+
+    // 4. Add the siblings to the CURRENT list and queue each for discovery.
+    let mut added = 0usize;
+    {
+        let mut guard = orch_arc.lock().await;
+        for t in &titles {
+            match guard.add_book(t, vec![]) {
+                Ok((group_path, book_idx)) => {
+                    let _ = guard.set_goal_one(&group_path, book_idx, Goal::Complete);
+                    added += 1;
+                }
+                Err(e) => tracing::warn!("download_series: add_book '{t}': {e}"),
+            }
+        }
+    }
+    handles.engine_wake.notify_one();
+    refresh_active_view(app, handles).await;
+    app.status_msg = Some(format!(
+        "Added {added} book(s) from the series \"{series_name}\""
+    ));
 }
 
 /// Persist the staged settings draft: per-list settings → orchestrator,

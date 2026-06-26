@@ -1946,6 +1946,7 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
         make_key_line(":start / :start-all", "resume downloads"),
         make_key_line(":delete", "remove active list"),
         make_key_line(":add-md5 <md5>", "inject MD5 for selection"),
+        make_key_line(":download-series", "add selection's series siblings"),
         make_key_line(":refresh-mirrors", "refresh mirror status"),
         make_key_line(":cleanup", "remove .part files"),
         make_key_line(":reorganize", "move files to current layout"),

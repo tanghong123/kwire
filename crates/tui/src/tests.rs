@@ -3008,4 +3008,83 @@ mod tests {
         assert!(buf.contains("would move"), "count subheader should render");
         assert!(buf.contains("apply"), "apply/cancel hint should render");
     }
+
+    // -----------------------------------------------------------------------
+    // #53 — :download-series command
+    // -----------------------------------------------------------------------
+
+    /// Both the command and its alias must be Tab-completable (dispatch glue).
+    #[test]
+    fn download_series_in_tab_completion() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        app.on_input(key(KeyCode::Tab));
+        for cmd in ["download-series", "series"] {
+            assert!(
+                app.completion_candidates.iter().any(|c| c == cmd),
+                "command '{cmd}' must appear in Tab-completion candidates"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_series_add_no_title_errs() {
+        let err = crate::plan_series_add("   ", None).unwrap_err();
+        assert!(err.to_lowercase().contains("title"), "msg was: {err}");
+    }
+
+    #[test]
+    fn plan_series_add_no_series_errs() {
+        // Lookup returned None → not part of a known series.
+        let err = crate::plan_series_add("The Wonderful Wizard of Oz", None).unwrap_err();
+        assert!(err.to_lowercase().contains("series"), "msg was: {err}");
+    }
+
+    #[test]
+    fn plan_series_add_empty_members_errs() {
+        let series = libgen_core::series::Series {
+            key: "OL123L".into(),
+            name: "Oz".into(),
+            members: vec![],
+        };
+        let err = crate::plan_series_add("The Wonderful Wizard of Oz", Some(&series)).unwrap_err();
+        assert!(err.to_lowercase().contains("series"), "msg was: {err}");
+    }
+
+    #[test]
+    fn plan_series_add_returns_siblings_in_order() {
+        use libgen_core::series::{Series, SeriesMember};
+        let series = Series {
+            key: "OL123L".into(),
+            name: "Oz".into(),
+            members: vec![
+                SeriesMember {
+                    title: "The Wonderful Wizard of Oz".into(),
+                    position: Some(1),
+                    ..Default::default()
+                },
+                SeriesMember {
+                    title: "The Marvelous Land of Oz".into(),
+                    position: Some(2),
+                    ..Default::default()
+                },
+                // A blank member title is dropped (defensive).
+                SeriesMember {
+                    title: "   ".into(),
+                    position: Some(3),
+                    ..Default::default()
+                },
+            ],
+        };
+        let (titles, name) =
+            crate::plan_series_add("The Wonderful Wizard of Oz", Some(&series)).unwrap();
+        assert_eq!(name, "Oz");
+        assert_eq!(
+            titles,
+            vec![
+                "The Wonderful Wizard of Oz".to_string(),
+                "The Marvelous Land of Oz".to_string(),
+            ]
+        );
+    }
 }
