@@ -287,6 +287,19 @@ fn should_flag_review(request_title: &str, copy: &Candidate) -> bool {
     crate::matching::request_title_match(request_title, &copy.title) < REVIEW_TITLE_MATCH_MIN
 }
 
+/// Whether a downloaded `copy`'s on-disk file is suspiciously SHORT — its counted
+/// page (PDF) / spine-section (EPUB) total sits below
+/// [`crate::pagecount::LOW_PAGE_THRESHOLD`] (a likely sample, wrong, or corrupt
+/// file). A `None`/`0`/unknown count is NOT treated as short: we never flag a file
+/// we couldn't count. OR-ed into the review trigger alongside `should_flag_review`
+/// so a too-short copy drops the book back to review just like a title mismatch.
+fn copy_too_short(copy: &Candidate) -> bool {
+    matches!(
+        copy.job.as_ref().and_then(|j| j.page_count),
+        Some(n) if n > 0 && n < crate::pagecount::LOW_PAGE_THRESHOLD
+    )
+}
+
 /// Drop any candidate the user has DISMISSED (removed) for this book, so a
 /// re-query / re-verify never re-surfaces it.
 fn drop_dismissed(candidates: Vec<Candidate>, dismissed: &[String]) -> Vec<Candidate> {
@@ -868,7 +881,11 @@ impl Orchestrator {
             .first()
             .map(|c| c.md5 == downloaded.md5)
             .unwrap_or(false);
-        let mut review = !is_top_pick && should_flag_review(&req.input.title, &downloaded);
+        // Flag for review on a title mismatch (unless it's the top pick) OR when the
+        // downloaded file is too short — a too-short copy is never silently accepted,
+        // even if it ranks top.
+        let mut review = (!is_top_pick && should_flag_review(&req.input.title, &downloaded))
+            || copy_too_short(&downloaded);
 
         // Merge fresh ranked list (fresh scores/titles win) while carrying EVERY
         // prior job forward — the downloaded copy's Done job AND any other
@@ -1397,7 +1414,10 @@ impl Orchestrator {
                 .first()
                 .map(|c| c.md5 == downloaded.md5)
                 .unwrap_or(false);
-            let mut review = !is_top_pick && should_flag_review(&req.input.title, &downloaded);
+            // Title mismatch (unless top pick) OR a too-short downloaded file flags
+            // review — a too-short copy is never silently accepted, even if top-ranked.
+            let mut review = (!is_top_pick && should_flag_review(&req.input.title, &downloaded))
+                || copy_too_short(&downloaded);
 
             // Merge fresh ranked list (fresh scores/titles win) while carrying
             // EVERY prior job forward — the downloaded copy's Done job + any OTHER
@@ -3296,6 +3316,28 @@ impl Orchestrator {
             // change) and folds into the same persist below. See
             // `crate::model::backfill_input`.
             crate::model::backfill_input(&mut req);
+            // Too-few-pages review (download-finish): if THIS just-finished copy is
+            // suspiciously short, DROP the book out of the "done" pile back to the
+            // review state (`NeedsSelection`) so the UI re-recommends the next-best
+            // copy — instead of silently settling as Done with only a warning. Uses
+            // the SAME review computation the reverify path does
+            // (`should_flag_review || copy_too_short`, then `honor_review_after_accept`),
+            // so a copy the user already ACCEPTED (no strictly-better sibling) stays
+            // settled. The short file is LEFT ON DISK as the current copy. Gated on
+            // `copy_too_short` so a plain title mismatch here is unchanged (that path
+            // is owned by the periodic reverify, which keeps the book Done).
+            if matches!(prog, Progress::Done { .. }) {
+                if let Some(downloaded) = req.candidates.iter().find(|c| c.md5 == md5).cloned() {
+                    if copy_too_short(&downloaded) {
+                        let flag = should_flag_review(&req.input.title, &downloaded)
+                            || copy_too_short(&downloaded);
+                        if honor_review_after_accept(flag, &req, &downloaded) {
+                            req.review = true;
+                            req.status = RequestStatus::NeedsSelection;
+                        }
+                    }
+                }
+            }
             self.store
                 .update_request(self.list_id, &p.group_path, p.book_index, &req)?;
             if let (Some(ok), Some(host)) = (outcome, host) {
@@ -3751,6 +3793,125 @@ mod tests {
             out.push(e);
         }
         out
+    }
+
+    /// Write a minimal, valid `n`-page PDF that `lopdf` (the pagecount backend)
+    /// parses to exactly `n` pages. Hand-built (no encoder) so the page-count guard
+    /// can be exercised deterministically. Mirrors `pagecount`'s own test helper.
+    fn write_pdf(path: &Path, n: usize) {
+        use std::io::Write;
+        let mut objects: Vec<String> = Vec::new();
+        objects.push("<< /Type /Catalog /Pages 2 0 R >>".to_string());
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + i)).collect();
+        objects.push(format!(
+            "<< /Type /Pages /Kids [{}] /Count {} >>",
+            kids.join(" "),
+            n
+        ));
+        for _ in 0..n {
+            objects.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_string());
+        }
+        let mut body = String::from("%PDF-1.5\n");
+        let mut offsets: Vec<usize> = Vec::with_capacity(objects.len());
+        for (i, obj) in objects.iter().enumerate() {
+            offsets.push(body.len());
+            body.push_str(&format!("{} 0 obj\n{}\nendobj\n", i + 1, obj));
+        }
+        let xref_start = body.len();
+        body.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+        body.push_str("0000000000 65535 f \n");
+        for off in &offsets {
+            body.push_str(&format!("{off:010} 00000 n \n"));
+        }
+        body.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF",
+            objects.len() + 1,
+            xref_start
+        ));
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::File::create(path)
+            .unwrap()
+            .write_all(body.as_bytes())
+            .unwrap();
+    }
+
+    /// A one-book list whose single book carries two same-format PDF candidates:
+    /// `dl` (score 1.0, a Downloading job we will finish) and `sib` (the sibling
+    /// alternative, score `sib_score`, no job). Lets the page-count tests drive
+    /// `apply_progress` deterministically without depending on search fixtures.
+    fn two_copy_list(dl: &str, sib: &str, sib_score: f32) -> DownloadList {
+        let mk = |md5: &str, score: f32, job: Option<DownloadJob>| Candidate {
+            md5: md5.to_string(),
+            title: "Treasure Island".into(),
+            authors: vec!["Robert Louis Stevenson".into()],
+            year: None,
+            publisher: None,
+            language: None,
+            pages: None,
+            extension: Some(Format::Pdf),
+            size_bytes: None,
+            source_host: None,
+            cover_url: None,
+            score,
+            job,
+        };
+        let mut b = BookRequest::new(BookInput {
+            title: "Treasure Island".into(),
+            authors: vec!["Robert Louis Stevenson".into()],
+            ..Default::default()
+        });
+        b.status = RequestStatus::Downloading;
+        b.goal = crate::model::Goal::Complete;
+        b.candidates = vec![
+            mk(
+                dl,
+                1.0,
+                Some(DownloadJob {
+                    state: JobState::Downloading,
+                    ..Default::default()
+                }),
+            ),
+            mk(sib, sib_score, None),
+        ];
+        let mut g = Group::new("Batch 1");
+        g.books.push(b);
+        DownloadList {
+            title: "Mini".into(),
+            settings: ListSettings::default(),
+            groups: vec![g],
+        }
+    }
+
+    /// Finish the `dl` copy via `apply_progress` against a real PDF of `pages`
+    /// pages written at `dest`. Returns the freshly-persisted book.
+    fn finish_with_pages(
+        orch: &mut Orchestrator,
+        dl: &str,
+        dest: &Path,
+        pages: usize,
+    ) -> BookRequest {
+        use crate::queue::Progress;
+        write_pdf(dest, pages);
+        let planned = vec![PlannedDownload {
+            group_path: vec![0],
+            book_index: 0,
+            title: "Treasure Island".into(),
+            md5: dl.to_string(),
+            destination: dest.to_path_buf(),
+        }];
+        orch.apply_progress(
+            &planned,
+            &Progress::Done {
+                md5: dl.to_string(),
+                host: "libgen.li".into(),
+                path: dest.to_path_buf(),
+                bytes_written: 4096,
+            },
+        )
+        .unwrap();
+        orch.snapshot().unwrap().groups[0].books[0].clone()
     }
 
     #[tokio::test]
@@ -5239,6 +5400,99 @@ mod tests {
         // Chronological: downloading precedes failed.
         let idx = |k: &str| h.iter().position(|e| e.kind == k).unwrap();
         assert!(idx("downloading") < idx("failed"));
+    }
+
+    /// A finished download whose file has TOO FEW pages must DROP the book out of
+    /// "done" back to the review state (`NeedsSelection`) and re-recommend the
+    /// next-best sibling — not silently settle as Done. The short file stays on disk.
+    #[tokio::test]
+    async fn short_download_drops_to_needs_selection_and_recommends_sibling() {
+        let dl = "a".repeat(32);
+        let sib = "b".repeat(32);
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch =
+            Orchestrator::new(store, &two_copy_list(&dl, &sib, 0.5), search, tmp.path()).unwrap();
+
+        let dest = tmp.path().join("Batch 1/short.pdf");
+        let book = finish_with_pages(&mut orch, &dl, &dest, 2);
+
+        // Dropped to the review state, with the review flag set.
+        assert_eq!(
+            book.status,
+            RequestStatus::NeedsSelection,
+            "a 2-page copy drops the book to review"
+        );
+        assert!(book.review, "review flag set on the short copy");
+        // The next-best copy (the sibling, NOT the downloaded one) is recommended.
+        assert_eq!(recommended_replacement(&book), Some(sib.clone()));
+        // The short file is LEFT ON DISK as the current copy, with its Done job +
+        // counted page total preserved.
+        assert!(dest.exists(), "short file left on disk");
+        let downloaded = book.candidates.iter().find(|c| c.md5 == dl).unwrap();
+        assert_eq!(
+            downloaded.job.as_ref().map(|j| &j.state),
+            Some(&JobState::Done)
+        );
+        assert_eq!(downloaded.job.as_ref().and_then(|j| j.page_count), Some(2));
+    }
+
+    /// A finished download with a HEALTHY page count settles as Done — the page
+    /// guard must NOT fire.
+    #[tokio::test]
+    async fn healthy_page_count_download_stays_done() {
+        let dl = "a".repeat(32);
+        let sib = "b".repeat(32);
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch =
+            Orchestrator::new(store, &two_copy_list(&dl, &sib, 0.5), search, tmp.path()).unwrap();
+
+        let dest = tmp.path().join("Batch 1/full.pdf");
+        let book = finish_with_pages(&mut orch, &dl, &dest, 42);
+
+        assert_eq!(
+            book.status,
+            RequestStatus::Done,
+            "a 42-page copy settles as Done"
+        );
+        assert!(!book.review, "no review flag on a healthy copy");
+        assert_eq!(downloaded_md5(&book).as_deref(), Some(dl.as_str()));
+    }
+
+    /// A too-short copy the user already ACCEPTED (`review_dismissed` set) with NO
+    /// strictly-better sibling must STAY accepted — `honor_review_after_accept`
+    /// suppresses the page-guard re-flag.
+    #[tokio::test]
+    async fn accepted_short_copy_is_not_reflagged() {
+        let dl = "a".repeat(32);
+        let sib = "b".repeat(32);
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        // Sibling scores LOWER (0.5 < 1.0) → not strictly better than the accepted copy.
+        let mut orch =
+            Orchestrator::new(store, &two_copy_list(&dl, &sib, 0.5), search, tmp.path()).unwrap();
+        // The user accepted this copy: record the standing decision.
+        {
+            let mut req = orch.snapshot().unwrap().groups[0].books[0].clone();
+            req.review_dismissed = Some(sib.clone());
+            orch.store
+                .update_request(orch.list_id, &[0], 0, &req)
+                .unwrap();
+        }
+
+        let dest = tmp.path().join("Batch 1/short.pdf");
+        let book = finish_with_pages(&mut orch, &dl, &dest, 2);
+
+        assert_eq!(
+            book.status,
+            RequestStatus::Done,
+            "an accepted short copy with no better sibling stays Done"
+        );
+        assert!(!book.review, "accepted short copy is not re-flagged");
     }
 
     /// A partial left at an OLD-scheme path (different folder + seq) is adopted
