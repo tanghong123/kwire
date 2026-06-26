@@ -1040,6 +1040,17 @@ impl AppState {
                         }
                         Focus::Header => Intent::Redraw,
                     },
+                    KeyCode::Char(' ') => match self.focus {
+                        Focus::Activity => {
+                            // Collapse / expand the Activity pane (hide / show legs).
+                            self.activity_expanded = !self.activity_expanded;
+                            if !self.activity_expanded {
+                                self.activity_selected = 0;
+                            }
+                            Intent::Redraw
+                        }
+                        _ => Intent::Redraw,
+                    },
                     KeyCode::Char('o') => {
                         if let Some(fb) = self.flat.get(self.selected) {
                             if let Some(path) =

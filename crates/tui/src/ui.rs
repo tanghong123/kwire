@@ -871,15 +871,24 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
     } else {
         "\u{25b8}"
     };
+    let toggle_hint = if app.focus == Focus::Activity {
+        if app.activity_expanded {
+            "space collapse"
+        } else {
+            "space expand"
+        }
+    } else {
+        "tab to focus"
+    };
     let header_text = if app.activity_expanded {
         format!(
-            "{} ACTIVITY  {} downloading \u{00b7} {} connecting \u{00b7} {} queued{}  tab to focus",
-            arrow, downloading_count, connecting_count, queued_count, speed_str
+            "{} ACTIVITY  {} downloading \u{00b7} {} connecting \u{00b7} {} queued{}  {}",
+            arrow, downloading_count, connecting_count, queued_count, speed_str, toggle_hint
         )
     } else {
         format!(
-            "{} ACTIVITY  {} downloading \u{00b7} {} queued{}  tab to expand",
-            arrow, downloading_count, queued_count, speed_str
+            "{} ACTIVITY  {} downloading \u{00b7} {} queued{}  {}",
+            arrow, downloading_count, queued_count, speed_str, toggle_hint
         )
     };
     let header_style = if app.focus == Focus::Activity {
