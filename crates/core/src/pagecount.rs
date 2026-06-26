@@ -37,7 +37,29 @@ pub fn page_count(path: &Path) -> Option<u32> {
     {
         Some("pdf") => pdf_page_count(path),
         Some("epub") => epub_spine_count(path),
-        _ => None,
+        // No (or unknown) extension — e.g. the CLI saves `<md5>.bin`. Fall back to
+        // sniffing the file's magic bytes so the page check still works.
+        _ => page_count_sniffed(path),
+    }
+}
+
+/// Detect the format by magic bytes when the extension is missing/unknown.
+///
+/// Reads the first 4 bytes: `%PDF` → PDF page count, `PK` (zip local-file
+/// header) → best-effort EPUB spine count (a non-epub zip simply yields `None`).
+/// Every IO/parse step is fallible and tolerated — never panics.
+fn page_count_sniffed(path: &Path) -> Option<u32> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut magic = [0u8; 4];
+    let n = file.read(&mut magic).ok()?;
+    let head = &magic[..n];
+    if head.starts_with(b"%PDF") {
+        pdf_page_count(path)
+    } else if head.starts_with(b"PK") {
+        epub_spine_count(path)
+    } else {
+        None
     }
 }
 
@@ -223,6 +245,65 @@ mod tests {
         let long_n = page_count(&long).unwrap();
         assert!(short_n < LOW_PAGE_THRESHOLD, "4-page pdf must be low");
         assert!(long_n >= LOW_PAGE_THRESHOLD, "42-page pdf must not be low");
+    }
+
+    #[test]
+    fn sniffs_pdf_by_magic_when_extension_is_bin() {
+        // The CLI saves `<md5>.bin`, so the extension fast-path can't fire. The
+        // content-sniff fallback must still recognize the PDF and count pages —
+        // matching the count it would report for the `.pdf`-named original.
+        let tmp = tempfile::tempdir().unwrap();
+        let pdf = write_pdf(tmp.path(), 7);
+        let by_ext = page_count(&pdf).unwrap();
+
+        let bin = tmp.path().join("aabbccddeeff00112233445566778899.bin");
+        std::fs::copy(&pdf, &bin).unwrap();
+        assert_eq!(page_count(&bin), Some(by_ext));
+        assert_eq!(by_ext, 7);
+    }
+
+    #[test]
+    fn sniffs_epub_zip_by_magic_when_extension_is_bin() {
+        // A zip (PK magic) with an EPUB structure must sniff to the spine count
+        // even without an `.epub` extension.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("00112233445566778899aabbccddeeff.bin");
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="c1"/>
+    <itemref idref="c2"/>
+  </spine>
+</package>"#;
+        let container = r#"<?xml version="1.0"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#;
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zw = zip::ZipWriter::new(file);
+        let opts: zip::write::FileOptions<()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zw.start_file("META-INF/container.xml", opts).unwrap();
+        zw.write_all(container.as_bytes()).unwrap();
+        zw.start_file("OEBPS/content.opf", opts).unwrap();
+        zw.write_all(opf.as_bytes()).unwrap();
+        zw.finish().unwrap();
+
+        assert_eq!(page_count(&path), Some(2));
+    }
+
+    #[test]
+    fn unknown_magic_bin_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("mystery.bin");
+        std::fs::write(&p, b"not a pdf or zip").unwrap();
+        assert_eq!(page_count(&p), None);
     }
 
     #[test]

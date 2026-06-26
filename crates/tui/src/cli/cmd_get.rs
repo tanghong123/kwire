@@ -186,6 +186,9 @@ async fn download_by_md5(
 
     let out_dir = PathBuf::from(out);
     let dest = out_dir.join(format!("{md5}.bin"));
+    // Keep a copy of the destination so we can inspect the saved file (page
+    // check) after the download completes — `dest` itself is moved into the req.
+    let dest_clone = dest.clone();
     let req = DownloadRequest {
         md5: md5.to_string(),
         dest,
@@ -211,6 +214,24 @@ async fn download_by_md5(
     for o in &outcomes {
         if let Err(e) = &o.result {
             anyhow::bail!("download failed: {e}");
+        }
+    }
+
+    // The download succeeded, which means the download layer already verified the
+    // md5 (a mismatch deletes the .part and permanent-errors). Now apply the SAME
+    // post-download page check the desktop/TUI do — warn when a file has
+    // suspiciously few pages (a sample, the wrong file, or a corrupt download).
+    // The saved file is `<md5>.bin`, so page_count sniffs the format by magic
+    // bytes. Print to stderr so stdout stays clean.
+    match libgen_core::pagecount::page_count(&dest_clone) {
+        Some(pages) if pages < libgen_core::pagecount::LOW_PAGE_THRESHOLD => {
+            eprintln!("⚠ md5 verified · {pages} pages — suspiciously few (sample/wrong/corrupt?)");
+        }
+        Some(pages) => {
+            eprintln!("✓ md5 verified · {pages} pages");
+        }
+        None => {
+            eprintln!("✓ md5 verified");
         }
     }
 
