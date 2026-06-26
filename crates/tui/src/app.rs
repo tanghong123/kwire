@@ -219,6 +219,7 @@ const COMMANDS: &[&str] = &[
     "reorganize",
     "download-series",
     "series",
+    "mouse",
     "quit",
     "help",
 ];
@@ -408,6 +409,10 @@ pub struct LastRects {
     pub book_rows: Vec<(Rect, usize)>,
     /// `(chip_rect, StatusFilter)` for each rendered filter chip.
     pub filter_chips: Vec<(Rect, StatusFilter)>,
+    /// `(chip_rect, list_index)` for each list chip in the strip.
+    pub list_chips: Vec<(Rect, usize)>,
+    /// `(row_rect, leg_index)` for each rendered activity leg row.
+    pub activity_rows: Vec<(Rect, usize)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +430,16 @@ pub struct ActiveTransfer {
     pub eta_secs: Option<u64>,
     /// Derived from the most-recent ViewBook that has this md5.
     pub title: String,
+}
+
+/// Return `true` when the terminal cell `(col, row)` falls inside `rect`.
+fn point_in_rect(col: u16, row: u16, rect: Rect) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && col >= rect.x
+        && col < rect.x + rect.width
+        && row >= rect.y
+        && row < rect.y + rect.height
 }
 
 /// Full TUI application state.  Only plain data — no I/O handles.
@@ -483,6 +498,10 @@ pub struct AppState {
     /// next keypress, then cleared automatically in `on_input`).
     pub status_msg: Option<String>,
 
+    /// Whether mouse capture is currently enabled.
+    /// Toggled by `:mouse`; the event loop acts on the change.
+    pub mouse_capture: bool,
+
     /// Submitted `:` commands, oldest first (for ↑/↓ history recall).
     pub cmd_history: Vec<String>,
 
@@ -533,11 +552,44 @@ impl AppState {
             completion_candidates: Vec::new(),
             completion_index: 0,
             status_msg: None,
+            mouse_capture: true,
             cmd_history: Vec::new(),
             cmd_history_cursor: None,
             cmd_history_draft: String::new(),
             all_lists: Vec::new(),
             active_list_idx: 0,
+        }
+    }
+
+    /// Return the same `Intent` that `Enter` would produce for the currently
+    /// selected book.  Used by the mouse handler to implement "click selected → Enter".
+    fn enter_action_for_selected(&self) -> Intent {
+        if let Some(fb) = self.flat.get(self.selected) {
+            if fb.book.discovery == "needs_selection" {
+                Intent::OpenPicker {
+                    flat_index: self.selected,
+                }
+            } else {
+                Intent::OpenDetail {
+                    flat_index: self.selected,
+                }
+            }
+        } else {
+            Intent::Redraw
+        }
+    }
+
+    /// Toggle mouse capture on/off and set a status message.
+    ///
+    /// The actual `EnableMouseCapture` / `DisableMouseCapture` crossterm calls
+    /// are performed by the event loop in `main.rs` after it reads
+    /// `app.mouse_capture`.
+    pub fn toggle_mouse_capture(&mut self) {
+        self.mouse_capture = !self.mouse_capture;
+        if self.mouse_capture {
+            self.status_msg = Some("Mouse capture: ON  (Shift/Option-drag for text select)".into());
+        } else {
+            self.status_msg = Some("Mouse capture: OFF  (re-enable with :mouse)".into());
         }
     }
 
@@ -1023,68 +1075,139 @@ impl AppState {
             }
 
             // ---------------------------------------------------------------
-            // Mouse: clicks map to the same intents as keys
+            // Mouse: clicks and wheel map to the same intents as keys.
+            // Wheel follows the CURSOR position (not keyboard focus).
+            // Single-click selects + focuses the pane; clicking the already-
+            // selected item performs its Enter action.
             // ---------------------------------------------------------------
-            Event::Mouse(me) => match me.kind {
-                MouseEventKind::ScrollDown => {
-                    // Wheel scrolls whichever pane holds focus (§6).
-                    match self.focus {
-                        Focus::List => self.move_selection(1),
-                        Focus::Activity => self.scroll_activity(1),
-                        Focus::Header => {}
+            Event::Mouse(me) => {
+                let col = me.column;
+                let row = me.row;
+                match me.kind {
+                    MouseEventKind::ScrollDown => {
+                        // Follow cursor position, not keyboard focus.
+                        if point_in_rect(col, row, self.last_rects.activity) {
+                            self.focus = Focus::Activity;
+                            self.scroll_activity(1);
+                            // Hover-to-select: keep the row under the cursor selected.
+                            let activity_rows = self.last_rects.activity_rows.clone();
+                            for (rect, leg_idx) in &activity_rows {
+                                if point_in_rect(col, row, *rect) {
+                                    self.activity_selected = *leg_idx;
+                                    break;
+                                }
+                            }
+                        } else if point_in_rect(col, row, self.last_rects.book_table) {
+                            self.focus = Focus::List;
+                            self.move_selection(1);
+                            // Hover-to-select: prefer the book under the cursor.
+                            let book_rows = self.last_rects.book_rows.clone();
+                            for (rect, flat_index) in &book_rows {
+                                if point_in_rect(col, row, *rect) {
+                                    self.selected = *flat_index;
+                                    break;
+                                }
+                            }
+                        } else {
+                            // Fallback to focus-based (header / unknown area).
+                            match self.focus {
+                                Focus::List => self.move_selection(1),
+                                Focus::Activity => self.scroll_activity(1),
+                                Focus::Header => {}
+                            }
+                        }
+                        Intent::Redraw
                     }
-                    Intent::Redraw
-                }
-                MouseEventKind::ScrollUp => {
-                    match self.focus {
-                        Focus::List => self.move_selection_up(),
-                        Focus::Activity => self.scroll_activity_up(),
-                        Focus::Header => {}
+                    MouseEventKind::ScrollUp => {
+                        if point_in_rect(col, row, self.last_rects.activity) {
+                            self.focus = Focus::Activity;
+                            self.scroll_activity_up();
+                            let activity_rows = self.last_rects.activity_rows.clone();
+                            for (rect, leg_idx) in &activity_rows {
+                                if point_in_rect(col, row, *rect) {
+                                    self.activity_selected = *leg_idx;
+                                    break;
+                                }
+                            }
+                        } else if point_in_rect(col, row, self.last_rects.book_table) {
+                            self.focus = Focus::List;
+                            self.move_selection_up();
+                            let book_rows = self.last_rects.book_rows.clone();
+                            for (rect, flat_index) in &book_rows {
+                                if point_in_rect(col, row, *rect) {
+                                    self.selected = *flat_index;
+                                    break;
+                                }
+                            }
+                        } else {
+                            match self.focus {
+                                Focus::List => self.move_selection_up(),
+                                Focus::Activity => self.scroll_activity_up(),
+                                Focus::Header => {}
+                            }
+                        }
+                        Intent::Redraw
                     }
-                    Intent::Redraw
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    let col = me.column;
-                    let row = me.row;
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        // 1. Book rows: select + focus List; second click → Enter.
+                        let book_rows = self.last_rects.book_rows.clone();
+                        for (rect, flat_index) in &book_rows {
+                            if point_in_rect(col, row, *rect) {
+                                let already =
+                                    self.selected == *flat_index && self.focus == Focus::List;
+                                self.focus = Focus::List;
+                                self.selected = *flat_index;
+                                if already {
+                                    return self.enter_action_for_selected();
+                                }
+                                return Intent::Redraw;
+                            }
+                        }
 
-                    // Hit-test book rows.
-                    let book_rows = self.last_rects.book_rows.clone();
-                    for (rect, flat_index) in &book_rows {
-                        if col >= rect.x
-                            && col < rect.x + rect.width
-                            && row >= rect.y
-                            && row < rect.y + rect.height
+                        // 2. List strip chips: switch list + focus Header (first click fires).
+                        let list_chips = self.last_rects.list_chips.clone();
+                        for (rect, list_idx) in &list_chips {
+                            if point_in_rect(col, row, *rect) && *list_idx < self.all_lists.len() {
+                                let id = self.all_lists[*list_idx].id.clone();
+                                self.active_list_idx = *list_idx;
+                                self.focus = Focus::Header;
+                                return Intent::SwitchList { id };
+                            }
+                        }
+
+                        // 3. Filter chips: set filter (first click fires).
+                        let filter_chips = self.last_rects.filter_chips.clone();
+                        for (rect, filter) in &filter_chips {
+                            if point_in_rect(col, row, *rect) {
+                                self.filter = *filter;
+                                self.rebuild_flat();
+                                return Intent::Redraw;
+                            }
+                        }
+
+                        // 4. Activity leg rows: select + focus Activity.
+                        let activity_rows = self.last_rects.activity_rows.clone();
+                        for (rect, leg_idx) in &activity_rows {
+                            if point_in_rect(col, row, *rect) {
+                                self.focus = Focus::Activity;
+                                self.activity_selected = *leg_idx;
+                                return Intent::Redraw;
+                            }
+                        }
+
+                        // 5. Activity header: toggle expand/collapse (first click fires).
+                        let act = self.last_rects.activity;
+                        if act.width > 0 && col >= act.x && col < act.x + act.width && row == act.y
                         {
-                            self.selected = *flat_index;
+                            self.activity_expanded = !self.activity_expanded;
                             return Intent::Redraw;
                         }
-                    }
 
-                    // Hit-test filter chips.
-                    let filter_chips = self.last_rects.filter_chips.clone();
-                    for (rect, filter) in &filter_chips {
-                        if col >= rect.x
-                            && col < rect.x + rect.width
-                            && row >= rect.y
-                            && row < rect.y + rect.height
-                        {
-                            self.filter = *filter;
-                            self.rebuild_flat();
-                            return Intent::Redraw;
-                        }
+                        Intent::Redraw
                     }
-
-                    // Hit-test activity header to toggle expand.
-                    let act = self.last_rects.activity;
-                    if col >= act.x && col < act.x + act.width && row == act.y {
-                        self.activity_expanded = !self.activity_expanded;
-                        return Intent::Redraw;
-                    }
-
-                    Intent::Redraw
+                    _ => Intent::Redraw,
                 }
-                _ => Intent::Redraw,
-            },
+            }
 
             Event::Resize(_, _) => Intent::Redraw,
             _ => Intent::Redraw,

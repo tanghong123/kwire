@@ -374,7 +374,10 @@ fn render_rule(frame: &mut Frame, area: Rect) {
 // 0  List strip
 // ---------------------------------------------------------------------------
 
-fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
+fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
+    // Clear previous list chips so we can rebuild for mouse hit-testing.
+    app.last_rects.list_chips.clear();
+
     // When no lists are loaded fall back to the bare wordmark.
     if app.all_lists.is_empty() {
         frame.render_widget(
@@ -461,6 +464,24 @@ fn render_list_strip(frame: &mut Frame, app: &AppState, area: Rect) {
 
     let has_left = scroll_x > 0;
     let has_right = scroll_x + area_w < total_width;
+
+    // Populate list_chips for mouse hit-testing: compute each list's on-screen
+    // column range after applying the scroll offset.
+    for (i, (start, end)) in list_col_ranges.iter().enumerate() {
+        let screen_start = start.saturating_sub(scroll_x);
+        let screen_end = end.saturating_sub(scroll_x).min(area_w);
+        if screen_end > screen_start {
+            app.last_rects.list_chips.push((
+                Rect::new(
+                    area.x + screen_start as u16,
+                    area.y,
+                    (screen_end - screen_start) as u16,
+                    1,
+                ),
+                i,
+            ));
+        }
+    }
 
     // Build visible spans by slicing each segment to the visible column window
     // [scroll_x, scroll_x + area_w).
@@ -798,7 +819,7 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
 // 3  Docked Activity pane  (BORDERLESS — plain line rendering)
 // ---------------------------------------------------------------------------
 
-fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
+fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
     // Count download states.
     let downloading_count = app
         .flat
@@ -912,6 +933,8 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
     // leg_idx counts download-book rows so activity_selected maps to them.
     // (#66: legs are ALWAYS selectable — no overflow condition.)
     let mut all_content: Vec<Line> = Vec::new();
+    // Parallel to all_content: Some(leg_idx) for transfer-leg rows, None for others.
+    let mut leg_map: Vec<Option<usize>> = Vec::new();
     let mut leg_idx: usize = 0;
 
     if !use_telemetry {
@@ -920,6 +943,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                 "  No active transfers.",
                 style_dim(),
             )));
+            leg_map.push(None);
         } else {
             for (host, versions) in &host_groups {
                 // Per-host aggregate speed
@@ -949,6 +973,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                     host_line,
                     Style::default().fg(C_WARM),
                 )));
+                leg_map.push(None); // host label — not a selectable leg
 
                 for (title, pct, fmt, eta_secs) in versions {
                     let is_leg_sel = activity_active && leg_idx == app.activity_selected;
@@ -990,6 +1015,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                             ),
                         ]));
                     }
+                    leg_map.push(Some(leg_idx)); // transfer-leg row — selectable
                     leg_idx += 1;
                 }
             }
@@ -1018,6 +1044,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                 host_line,
                 Style::default().fg(C_WARM),
             )));
+            leg_map.push(None); // host label — not a selectable leg
             for (title, pct, _) in transfers {
                 let is_leg_sel = activity_active && leg_idx == app.activity_selected;
                 let is_leg_dim = !activity_active && leg_idx == app.activity_selected;
@@ -1046,6 +1073,7 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
                         Span::styled(format!("  {}%  {}", pct, bar), style_muted()),
                     ]));
                 }
+                leg_map.push(Some(leg_idx)); // transfer-leg row — selectable
                 leg_idx += 1;
             }
         }
@@ -1084,6 +1112,46 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
         }
         display
     };
+
+    // Populate activity_rows for mouse hit-testing.
+    // Row 0 of the pane is the header (area.y); content starts at area.y + 1.
+    app.last_rects.activity_rows.clear();
+    let base_y = area.y + 1;
+    if n == 0 || n <= capacity {
+        // All content visible in order.
+        for (ci, lo) in leg_map.iter().enumerate() {
+            if let Some(li) = *lo {
+                let row_y = base_y + ci as u16;
+                if row_y < area.y + area.height {
+                    app.last_rects
+                        .activity_rows
+                        .push((Rect::new(area.x, row_y, area.width, 1), li));
+                }
+            }
+        }
+    } else {
+        let offset = app.activity_selected.min(n.saturating_sub(1));
+        let has_above = offset > 0;
+        let above_slots = usize::from(has_above);
+        let mut tfer_slots = capacity.saturating_sub(above_slots + 1).max(1);
+        let end_i = (offset + tfer_slots).min(n);
+        let has_below = end_i < n;
+        if !has_below {
+            tfer_slots = capacity.saturating_sub(above_slots).max(1);
+        }
+        let end_i = (offset + tfer_slots).min(n);
+        let content_base_y = base_y + above_slots as u16;
+        for (pos, ci) in (offset..end_i).enumerate() {
+            if let Some(li) = leg_map[ci] {
+                let row_y = content_base_y + pos as u16;
+                if row_y < area.y + area.height {
+                    app.last_rects
+                        .activity_rows
+                        .push((Rect::new(area.x, row_y, area.width, 1), li));
+                }
+            }
+        }
+    }
 
     // Combine header + windowed content and render as a plain Paragraph.
     let mut all_lines: Vec<Line> = Vec::with_capacity(1 + windowed.len());

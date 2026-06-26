@@ -4119,4 +4119,318 @@ mod tests {
             "reorganize modal must have a dim rule (─)"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Pass 4 — full mouse support (#55)
+    // -----------------------------------------------------------------------
+
+    fn mouse_scroll_down(column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn mouse_scroll_up(column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    /// Click a book row → selects it + focuses the List pane.
+    #[test]
+    fn mouse_click_book_row_selects_and_focuses_list() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // 2 books
+        assert_eq!(app.selected, 0);
+
+        // Manually set a book_rows rect for the second book (flat index 1) at screen row 5.
+        // The group-header occupies row 0; books are at rows 1+ relative to book_table.
+        let second_book_rect = ratatui::layout::Rect::new(0, 5, 80, 1);
+        app.last_rects.book_rows = vec![
+            (ratatui::layout::Rect::new(0, 4, 80, 1), 0),
+            (second_book_rect, 1),
+        ];
+
+        // Start with Activity focused to confirm focus switches.
+        app.focus = Focus::Activity;
+
+        let intent = app.on_input(mouse_left_click(10, 5));
+        assert_eq!(intent, Intent::Redraw, "first click returns Redraw");
+        assert_eq!(app.selected, 1, "click on second book row must select it");
+        assert_eq!(
+            app.focus,
+            Focus::List,
+            "click on book row must focus the List pane"
+        );
+    }
+
+    /// Click an already-selected book → performs Enter action (OpenDetail or OpenPicker).
+    #[test]
+    fn mouse_click_selected_book_fires_enter_intent() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.selected = 0;
+        app.focus = Focus::List;
+
+        // Put a rect for flat index 0 at row 3.
+        app.last_rects.book_rows = vec![(ratatui::layout::Rect::new(0, 3, 80, 1), 0)];
+
+        // First click: already selected (focus is List, selected == 0) → Enter intent.
+        let intent = app.on_input(mouse_left_click(5, 3));
+        assert!(
+            matches!(intent, Intent::OpenDetail { flat_index: 0 }),
+            "second click on selected book must emit OpenDetail, got {:?}",
+            intent
+        );
+    }
+
+    /// Click an already-selected needs_selection book → OpenPicker.
+    #[test]
+    fn mouse_click_selected_needs_selection_fires_open_picker() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        // flat[0] has discovery == "needs_selection".
+        app.selected = 0;
+        app.focus = Focus::List;
+        app.last_rects.book_rows = vec![(ratatui::layout::Rect::new(0, 3, 80, 1), 0)];
+
+        let intent = app.on_input(mouse_left_click(5, 3));
+        assert!(
+            matches!(intent, Intent::OpenPicker { flat_index: 0 }),
+            "click on selected needs_selection book must emit OpenPicker, got {:?}",
+            intent
+        );
+    }
+
+    /// Click a list chip → SwitchList intent + focuses Header.
+    #[test]
+    fn mouse_click_list_chip_switches_list_and_focuses_header() {
+        let mut app = AppState::new();
+        app.all_lists = vec![
+            crate::app::ListSummary {
+                id: "list1".into(),
+                title: "Classics".into(),
+                done: 0,
+                total: 3,
+            },
+            crate::app::ListSummary {
+                id: "list2".into(),
+                title: "Fiction".into(),
+                done: 1,
+                total: 5,
+            },
+        ];
+        app.active_list_idx = 0;
+        app.focus = Focus::List;
+
+        // Manually set a list chip rect for list index 1 at the strip row (row 0).
+        app.last_rects.list_chips = vec![
+            (ratatui::layout::Rect::new(0, 0, 20, 1), 0),
+            (ratatui::layout::Rect::new(21, 0, 20, 1), 1),
+        ];
+
+        let intent = app.on_input(mouse_left_click(25, 0));
+        assert!(
+            matches!(intent, Intent::SwitchList { ref id } if id == "list2"),
+            "click on list chip 1 must emit SwitchList {{id: list2}}, got {:?}",
+            intent
+        );
+        assert_eq!(
+            app.focus,
+            Focus::Header,
+            "clicking a list chip must focus the Header pane"
+        );
+        assert_eq!(app.active_list_idx, 1, "active_list_idx must update to 1");
+    }
+
+    /// Click a filter chip → sets that filter.
+    #[test]
+    fn mouse_click_filter_chip_sets_filter() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        assert_eq!(app.filter, StatusFilter::All);
+
+        // Manually set filter chip rects.
+        app.last_rects.filter_chips = vec![
+            (ratatui::layout::Rect::new(1, 1, 8, 1), StatusFilter::All),
+            (
+                ratatui::layout::Rect::new(10, 1, 12, 1),
+                StatusFilter::NeedsYou,
+            ),
+            (ratatui::layout::Rect::new(23, 1, 9, 1), StatusFilter::Done),
+        ];
+
+        let intent = app.on_input(mouse_left_click(25, 1));
+        assert_eq!(intent, Intent::Redraw, "filter chip click returns Redraw");
+        assert_eq!(
+            app.filter,
+            StatusFilter::Done,
+            "clicking the Done chip must set filter to Done"
+        );
+    }
+
+    /// Scroll wheel over the book table → scrolls + hover-selects, focuses List.
+    #[test]
+    fn mouse_wheel_over_book_table_scrolls_and_hover_selects() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // 2 books
+        assert_eq!(app.selected, 0);
+        app.focus = Focus::Activity; // start elsewhere
+
+        // Set book_table rect and book_rows.
+        app.last_rects.book_table = ratatui::layout::Rect::new(0, 3, 80, 20);
+        app.last_rects.book_rows = vec![
+            (ratatui::layout::Rect::new(0, 4, 80, 1), 0),
+            (ratatui::layout::Rect::new(0, 5, 80, 1), 1),
+        ];
+
+        // Scroll down with cursor over the book table.
+        let intent = app.on_input(mouse_scroll_down(10, 4));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(
+            app.focus,
+            Focus::List,
+            "wheel over book table must focus List"
+        );
+        // move_selection(1) moves selected from 0 → 1; hover-to-select on row 4 → flat 0.
+        // The hover-to-select clamps back to flat 0 because cursor is on row 4.
+        assert_eq!(
+            app.selected, 0,
+            "hover-to-select: cursor still over book 0 → selected stays at 0"
+        );
+    }
+
+    /// Scroll wheel over the activity pane → scrolls + focuses Activity.
+    #[test]
+    fn mouse_wheel_over_activity_pane_scrolls_and_focuses_activity() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        // Add some downloading books so activity_row_count > 0.
+        app.flat = (0..3)
+            .map(|i| make_downloading_flat_book(&format!("Book {}", i), 0, i))
+            .collect();
+        app.focus = Focus::List;
+
+        // Set the activity pane rect.
+        app.last_rects.activity = ratatui::layout::Rect::new(0, 25, 80, 5);
+
+        // Scroll down over the activity pane.
+        let intent = app.on_input(mouse_scroll_down(10, 26));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(
+            app.focus,
+            Focus::Activity,
+            "wheel over activity pane must focus Activity"
+        );
+        assert_eq!(
+            app.activity_selected, 1,
+            "ScrollDown over activity must advance activity_selected"
+        );
+    }
+
+    /// Click an activity leg row → selects + focuses Activity pane.
+    #[test]
+    fn mouse_click_activity_leg_selects_and_focuses_activity() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat = (0..2)
+            .map(|i| make_downloading_flat_book(&format!("Book {}", i), 0, i))
+            .collect();
+        app.focus = Focus::List;
+
+        // Activity pane occupies rows 25-29; header at row 25, legs at 26+.
+        app.last_rects.activity = ratatui::layout::Rect::new(0, 25, 80, 5);
+        app.last_rects.activity_rows = vec![
+            (ratatui::layout::Rect::new(0, 26, 80, 1), 0),
+            (ratatui::layout::Rect::new(0, 27, 80, 1), 1),
+        ];
+
+        // Click on the second leg (row 27, leg index 1).
+        let intent = app.on_input(mouse_left_click(10, 27));
+        assert_eq!(intent, Intent::Redraw, "activity leg click returns Redraw");
+        assert_eq!(
+            app.focus,
+            Focus::Activity,
+            "clicking an activity leg must focus the Activity pane"
+        );
+        assert_eq!(
+            app.activity_selected, 1,
+            "clicking leg 1 must set activity_selected to 1"
+        );
+    }
+
+    /// `:mouse` toggle: flips mouse_capture and sets status_msg.
+    #[test]
+    fn mouse_toggle_flips_capture_and_sets_status_msg() {
+        let mut app = AppState::new();
+        assert!(app.mouse_capture, "mouse capture starts ON");
+
+        // Toggle off.
+        app.toggle_mouse_capture();
+        assert!(!app.mouse_capture, "after first toggle: OFF");
+        assert!(
+            app.status_msg
+                .as_deref()
+                .map(|s| s.contains("OFF"))
+                .unwrap_or(false),
+            "status_msg must mention OFF after disabling"
+        );
+
+        // Toggle on again.
+        app.toggle_mouse_capture();
+        assert!(app.mouse_capture, "after second toggle: ON");
+        assert!(
+            app.status_msg
+                .as_deref()
+                .map(|s| s.contains("ON"))
+                .unwrap_or(false),
+            "status_msg must mention ON after re-enabling"
+        );
+    }
+
+    /// `:mouse` as a command-line input emits Intent::Command("mouse").
+    #[test]
+    fn colon_mouse_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "mouse".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(
+            intent,
+            Intent::Command("mouse".into()),
+            ":mouse must emit Intent::Command(\"mouse\")"
+        );
+    }
+
+    /// Clicking the activity header (row == activity.y) toggles expand/collapse.
+    #[test]
+    fn mouse_click_activity_header_toggles_expand() {
+        let mut app = AppState::new();
+        assert!(app.activity_expanded, "starts expanded");
+
+        // Set the activity pane rect; header is at area.y.
+        app.last_rects.activity = ratatui::layout::Rect::new(0, 25, 80, 5);
+
+        let intent = app.on_input(mouse_left_click(5, 25));
+        assert_eq!(intent, Intent::Redraw);
+        assert!(
+            !app.activity_expanded,
+            "clicking the activity header must collapse the pane"
+        );
+
+        let intent2 = app.on_input(mouse_left_click(5, 25));
+        assert_eq!(intent2, Intent::Redraw);
+        assert!(
+            app.activity_expanded,
+            "second click on the activity header must re-expand the pane"
+        );
+    }
 }

@@ -30,7 +30,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
-    event::{EnableMouseCapture, EventStream},
+    event::{DisableMouseCapture, EnableMouseCapture, EventStream},
     execute,
     terminal::{enable_raw_mode, EnterAlternateScreen},
 };
@@ -556,6 +556,16 @@ async fn handle_command_async(
         // #53 — add the selected book's series siblings to the current list
         "download-series" | "series" => {
             download_series_cmd(app, handles).await;
+        }
+        // #55 — toggle mouse capture on/off
+        "mouse" => {
+            app.toggle_mouse_capture();
+            // Apply the crossterm command immediately so the terminal responds.
+            if app.mouse_capture {
+                let _ = execute!(io::stdout(), EnableMouseCapture);
+            } else {
+                let _ = execute!(io::stdout(), DisableMouseCapture);
+            }
         }
         "" => {}
         other => {
