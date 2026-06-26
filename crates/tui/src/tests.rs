@@ -3714,4 +3714,409 @@ mod tests {
             "snapshot must render the 'esc close' hint"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // #64 / #67 / #68 — shared hint-builder & per-surface context-aware hints
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a FlatBook with one variation in the given state.
+    fn flat_book_with_state(state: &str) -> FlatBook {
+        FlatBook {
+            group_name: "G".into(),
+            group_index: 0,
+            book_index_in_group: 0,
+            book: libgen_engine::ViewBook {
+                id: "id-0".into(),
+                title: "Test Book".into(),
+                author: "Author".into(),
+                year: None,
+                pages: None,
+                backfilled: vec![],
+                seq: 1,
+                discovery: "matched".into(),
+                versions: vec![ViewVariation {
+                    md5: "a".repeat(32),
+                    title: "Test Book".into(),
+                    author: "Author".into(),
+                    fmt: "epub".into(),
+                    size: 1,
+                    size_bytes: None,
+                    year: None,
+                    publisher: String::new(),
+                    language: String::new(),
+                    pages: None,
+                    counted_pages: None,
+                    low_pages: false,
+                    host: None,
+                    state: state.into(),
+                    progress: 0,
+                    downloaded_bytes: None,
+                    total_bytes: None,
+                    speed_bps: None,
+                    eta_secs: None,
+                    output_path: Some("/tmp/test.epub".into()),
+                    score: 0.9,
+                    cover_url: None,
+                    last_error: None,
+                }],
+                acquisition: None,
+                review: false,
+                recommended_md5: None,
+                history: vec![],
+            },
+        }
+    }
+
+    #[test]
+    fn hint_bar_header_focus_shows_filter_and_quit() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Header;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(buf.contains("filter"), "header hint must include 'filter'");
+        assert!(buf.contains("q quit"), "header hint must include 'q quit'");
+        // ⏎ must NOT appear in main hint bar (only in Help).
+        assert!(
+            !buf.contains('\u{23ce}'),
+            "⏎ must NOT appear in the main hint bar (use Help screen)"
+        );
+    }
+
+    #[test]
+    fn hint_bar_list_done_book_shows_detail_and_open() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::List;
+        // Inject a 'done' book at index 0.
+        app.flat.clear();
+        app.flat.push(flat_book_with_state("done"));
+        app.selected = 0;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("d detail"),
+            "done-book hint must include 'd detail'"
+        );
+        assert!(
+            buf.contains("o open"),
+            "done-book hint must include 'o open'"
+        );
+        assert!(
+            !buf.contains('\u{23ce}'),
+            "⏎ must NOT appear in the main hint bar"
+        );
+    }
+
+    #[test]
+    fn hint_bar_list_downloading_book_shows_pause_cancel() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::List;
+        app.flat.clear();
+        app.flat.push(flat_book_with_state("downloading"));
+        app.selected = 0;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("p pause"),
+            "downloading hint must include 'p pause'"
+        );
+        assert!(
+            buf.contains("c cancel"),
+            "downloading hint must include 'c cancel'"
+        );
+        assert!(
+            !buf.contains('\u{23ce}'),
+            "⏎ must NOT appear in the main hint bar"
+        );
+    }
+
+    #[test]
+    fn hint_bar_list_needs_selection_shows_choose() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::List;
+        // Inject a needs_selection book.
+        let mut fb = flat_book_with_state("available");
+        fb.book.discovery = "needs_selection".into();
+        app.flat.clear();
+        app.flat.push(fb);
+        app.selected = 0;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("choose"),
+            "needs_selection hint must include 'choose'"
+        );
+    }
+
+    #[test]
+    fn hint_bar_activity_focus_shows_pause_cancel_retry() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Activity;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("p pause"),
+            "activity hint must include 'p pause'"
+        );
+        assert!(
+            buf.contains("c cancel"),
+            "activity hint must include 'c cancel'"
+        );
+        assert!(
+            buf.contains("r retry"),
+            "activity hint must include 'r retry'"
+        );
+        assert!(
+            !buf.contains('\u{23ce}'),
+            "⏎ must NOT appear in activity hint bar"
+        );
+    }
+
+    #[test]
+    fn detail_modal_hint_done_variation_shows_open_reveal_redownload() {
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat.clear();
+        app.flat.push(flat_book_with_state("done"));
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("o open"),
+            "done variation hint must include 'o open'"
+        );
+        assert!(
+            buf.contains("R reveal"),
+            "done variation hint must include 'R reveal'"
+        );
+        assert!(
+            buf.contains("re-download"),
+            "done variation hint must include 're-download'"
+        );
+        assert!(
+            buf.contains("esc back"),
+            "done variation hint must include 'esc back'"
+        );
+        // No ↑↓ navigate or tab in hint.
+        assert!(
+            !buf.contains('\u{23ce}'),
+            "⏎ must NOT appear in detail hint bar"
+        );
+    }
+
+    #[test]
+    fn detail_modal_hint_available_variation_shows_download() {
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat.clear();
+        app.flat.push(flat_book_with_state("available"));
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("download"),
+            "available variation hint must include 'download'"
+        );
+        // Must NOT show re-download, open, or reveal (those are for done state).
+        assert!(
+            !buf.contains("re-download"),
+            "available variation must NOT show 're-download'"
+        );
+        assert!(buf.contains("esc back"), "must include 'esc back'");
+    }
+
+    #[test]
+    fn detail_modal_hint_history_sub_focus_shows_esc_back() {
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat.clear();
+        app.flat.push(flat_book_with_state("done"));
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::History,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("esc back"),
+            "history sub-focus hint must be 'esc back'"
+        );
+    }
+
+    #[test]
+    fn settings_hint_toggle_field_shows_space_toggle() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        // Open settings, navigate to a Bool field (idx 7 = Sub-grouping).
+        app.open_settings(&Default::default());
+        app.settings_selected = 7; // Bool field
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("space toggle"),
+            "toggle field hint must include 'space toggle'"
+        );
+        assert!(
+            buf.contains("s save"),
+            "settings hint must include 's save'"
+        );
+        assert!(
+            !buf.contains('\u{23ce}'),
+            "⏎ must NOT appear in settings hint bar"
+        );
+    }
+
+    #[test]
+    fn settings_hint_number_field_shows_nudge() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        // Open settings, navigate to an F32 field (idx 2 = Auto-download threshold).
+        app.open_settings(&Default::default());
+        app.settings_selected = 2; // F32 field
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("nudge"),
+            "number field hint must include 'nudge'"
+        );
+        assert!(
+            buf.contains("s save"),
+            "settings hint must include 's save'"
+        );
+    }
+
+    #[test]
+    fn settings_hint_format_pref_field_shows_format_editor() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.open_settings(&Default::default());
+        app.settings_selected = 0; // FormatPref field
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("format editor"),
+            "format-pref field hint must include 'format editor'"
+        );
+    }
+
+    #[test]
+    fn enter_appears_only_in_help_screen() {
+        // ⏎ (U+23CE) should NOT appear in the main hint bar.
+        {
+            let backend = TestBackend::new(120, 30);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut app = AppState::new();
+            app.set_view(fixture_vm());
+            app.focus = Focus::List;
+            terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+            let buf = buffer_string(&terminal);
+            assert!(
+                !buf.contains('\u{23ce}'),
+                "⏎ must NOT appear on main screen (found it in buffer)"
+            );
+        }
+        // ⏎ SHOULD appear in the Help screen.
+        {
+            let backend = TestBackend::new(120, 30);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut app = AppState::new();
+            app.set_view(fixture_vm());
+            app.modal = Some(Modal::Help);
+            terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+            let buf = buffer_string(&terminal);
+            assert!(buf.contains('\u{23ce}'), "⏎ MUST appear in the Help screen");
+        }
+    }
+
+    #[test]
+    fn confirm_modal_has_rule_and_hint_row() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Confirm {
+            title: "My List".into(),
+            n_books: 5,
+            target_id: "list0".into(),
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("y confirm"),
+            "confirm hint must include 'y confirm'"
+        );
+        assert!(
+            buf.contains("esc cancel"),
+            "confirm hint must include 'esc cancel'"
+        );
+        // The dim rule (─ characters) should be present.
+        assert!(
+            buf.contains('\u{2500}'),
+            "confirm modal must have a dim rule (─)"
+        );
+    }
+
+    #[test]
+    fn reorganize_modal_has_rule_and_hint_row() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Reorganize {
+            diff: vec![("old/path/book.epub".into(), "new/path/book.epub".into())],
+            selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("y apply"),
+            "reorganize hint must include 'y apply'"
+        );
+        assert!(
+            buf.contains("esc cancel"),
+            "reorganize hint must include 'esc cancel'"
+        );
+        assert!(
+            buf.contains('\u{2500}'),
+            "reorganize modal must have a dim rule (─)"
+        );
+    }
 }

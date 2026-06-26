@@ -27,8 +27,8 @@ use ratatui::{
 };
 
 use crate::app::{
-    AppState, DetailSubFocus, EditBookField, Focus, Modal, SettingsEditor, StatusFilter,
-    FORMAT_EDITOR_FORMATS,
+    settings_field_kind, AppState, DetailSubFocus, EditBookField, Focus, Modal, SettingsEditor,
+    SettingsFieldKind, StatusFilter, FORMAT_EDITOR_FORMATS,
 };
 use crate::theme::{
     self, history_kind_color, score_color, style_dim, style_header, style_hint, style_muted,
@@ -1114,6 +1114,32 @@ fn render_command_line(frame: &mut Frame, app: &AppState, area: Rect) {
 // 5  Hint bar (always the very last row — shows hint keys or status message)
 // ---------------------------------------------------------------------------
 
+/// Returns a coarse hint-state token for the currently-selected book in the
+/// List pane.  Used by `render_hint_bar` to pick context-specific action chips.
+fn selected_book_hint_state(app: &AppState) -> &'static str {
+    let Some(fb) = app.flat.get(app.selected) else {
+        return "unknown";
+    };
+    let book = &fb.book;
+    if book.discovery == "needs_selection" {
+        return "needs_selection";
+    }
+    if book.versions.iter().any(|v| v.state == "downloading") {
+        return "downloading";
+    }
+    if book.versions.iter().any(|v| v.state == "done") {
+        return "done";
+    }
+    if book
+        .versions
+        .iter()
+        .any(|v| v.state == "failed" || v.state == "cancelled")
+    {
+        return "failed";
+    }
+    "unknown"
+}
+
 fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
     // The command-line input is rendered in its own row by render_command_line;
     // this bar shows a transient status message or the focus-appropriate hint keys.
@@ -1121,15 +1147,24 @@ fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
         // Transient status message — shown until the next keypress.
         Line::from(Span::styled(msg.as_str(), Style::default().fg(C_BRIGHT)))
     } else {
-        let hint = match app.focus {
+        // ⏎ is universal (shown only in the Help screen per #70) — never in the hint bar.
+        const GLOBALS: &str = "  : command \u{00b7} ? help \u{00b7} q quit";
+        let hint: String = match app.focus {
             Focus::Header => {
-                "\u{2190}\u{2192} filter chip  tab list  [ ] prev/next list  ? help  q quit"
+                format!("\u{2190}\u{2192} filter  [ ] list{GLOBALS}")
             }
             Focus::List => {
-                "\u{2191}\u{2193} move  \u{23ce} open  d detail  / filter  [ ] list  : cmd  tab activity  ? help  q quit"
+                let state = selected_book_hint_state(app);
+                match state {
+                    "needs_selection" => format!("choose  d detail{GLOBALS}"),
+                    "failed" => format!("r retry  d detail{GLOBALS}"),
+                    "done" => format!("d detail \u{00b7} o open{GLOBALS}"),
+                    "downloading" => format!("p pause \u{00b7} c cancel  d detail{GLOBALS}"),
+                    _ => format!("d detail{GLOBALS}"),
+                }
             }
             Focus::Activity => {
-                "\u{2191}\u{2193} select  p pause  c cancel  r resume  [ ] list  tab header  q quit"
+                format!("p pause \u{00b7} c cancel \u{00b7} r retry{GLOBALS}")
             }
         };
         Line::from(Span::styled(hint, style_hint()))
@@ -1210,10 +1245,11 @@ fn render_picker_modal(
         vertical: 1,
     });
 
-    // Layout: subheader (1) + column header row (1) + table rows + hint (1)
+    // Layout: subheader (1) + column header row (1) + table rows + rule (1) + hint (1)
     let split = Layout::vertical([
         Constraint::Length(1), // subheader
         Constraint::Min(1),    // table (header + rows)
+        Constraint::Length(1), // dim rule
         Constraint::Length(1), // hint
     ])
     .split(padded);
@@ -1334,15 +1370,14 @@ fn render_picker_modal(
 
     frame.render_stateful_widget(table, split[1], &mut table_state);
 
-    // Hint bar at bottom
+    // Dim rule + hint bar (⏎ omitted — see Help screen).
+    render_rule(frame, split[2]);
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("\u{2191}\u{2193} pick", style_hint()),
-            Span::styled("   space mark   ", style_hint()),
-            Span::styled("\u{23ce} download", Style::default().fg(C_DONE)),
-            Span::styled("   a all formats   v meta   esc cancel", style_hint()),
-        ])),
-        split[2],
+        Paragraph::new(Span::styled(
+            "\u{2191}\u{2193} pick  space mark  a all formats  v meta  esc cancel",
+            style_hint(),
+        )),
+        split[3],
     );
 }
 
@@ -1400,9 +1435,10 @@ fn render_detail_modal(
 
     let n_versions = fb.book.versions.len();
     let var_rows_h = (n_versions.max(1) + 1) as u16; // +1 for header row
+                                                     // Subtract all fixed rows: title(1)+subtitle(1)+blank(1)+VARIATIONS(1)+var_rows(n)+blank(1)+HISTORY(1)+rule(1)+hint(1).
     let history_h = padded
         .height
-        .saturating_sub(1 + 1 + 1 + 1 + var_rows_h + 1 + 1 + 1); // = available for history
+        .saturating_sub(1 + 1 + 1 + 1 + var_rows_h + 1 + 1 + 1 + 1); // = available for history
 
     let split = Layout::vertical([
         Constraint::Length(1),          // title line
@@ -1413,6 +1449,7 @@ fn render_detail_modal(
         Constraint::Length(1),          // blank
         Constraint::Length(1),          // HISTORY label
         Constraint::Min(history_h),     // history rows
+        Constraint::Length(1),          // dim rule
         Constraint::Length(1),          // hint
     ])
     .split(padded);
@@ -1698,16 +1735,39 @@ fn render_detail_modal(
 
     frame.render_widget(List::new(history_items), split[7]);
 
-    // Hint — spec base + added actions (tab/s/e/x/m kept per user decision).
+    // Dim rule above hint (⏎/↑↓/tab omitted per #64).
+    render_rule(frame, split[8]);
+
+    // Context-aware hint: varies by sub-focus and selected variation state.
+    let detail_hint: &str = match sub_focus {
+        DetailSubFocus::History => "esc back",
+        DetailSubFocus::Variations => {
+            let var_state = fb
+                .book
+                .versions
+                .get(detail_selected)
+                .map(|v| v.state.as_str())
+                .unwrap_or("available");
+            match var_state {
+                "done" => {
+                    "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
+                }
+                "downloading" => {
+                    "p pause \u{00b7} c cancel  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
+                }
+                "failed" | "cancelled" => {
+                    "r retry  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
+                }
+                _ => {
+                    // available / queued
+                    "download  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
+                }
+            }
+        }
+    };
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                "\u{2191}\u{2193} variation   o open file   R reveal in Finder   r re-download   esc back",
-                style_hint(),
-            ),
-            Span::styled("   tab\u{00b7}s\u{00b7}e\u{00b7}x\u{00b7}m", style_dim()),
-        ])),
-        split[8],
+        Paragraph::new(Span::styled(detail_hint, style_hint())),
+        split[9],
     );
 }
 
@@ -1741,7 +1801,13 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
         vertical: 1,
     });
 
-    let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(padded);
+    // Min(field list) + rule(1) + hint(1)
+    let split = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(padded);
 
     // Pull values from the staged draft (always present when modal is open).
     let draft = match &app.settings_draft {
@@ -1915,32 +1981,36 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
     let list = List::new(items).block(Block::default().borders(Borders::NONE));
     frame.render_widget(list, split[0]);
 
-    // Hint bar — context-sensitive.
-    let hint_line = match &draft.editor {
-        SettingsEditor::Editing(_) => Line::from(vec![
-            Span::styled("type to edit", style_hint()),
-            Span::styled(
-                "  \u{232b} delete  \u{23ce} commit  esc cancel",
-                style_hint(),
-            ),
-        ]),
-        SettingsEditor::FormatEditor { .. } => Line::from(vec![
-            Span::styled("\u{2191}\u{2193} move", style_hint()),
-            Span::styled("  spc toggle  J/K reorder  \u{23ce} done", style_hint()),
-        ]),
-        SettingsEditor::LangPicker { .. } => Line::from(vec![
-            Span::styled("\u{2191}\u{2193} pick", style_hint()),
-            Span::styled("  \u{23ce} select  esc cancel", style_hint()),
-        ]),
-        SettingsEditor::Viewing => Line::from(vec![
-            Span::styled("\u{2191}\u{2193} field", style_hint()),
-            Span::styled(
-                "   \u{23ce} edit   space toggle   s save   esc cancel",
-                style_hint(),
-            ),
-        ]),
+    // Dim rule + context-sensitive hint (⏎ omitted per #70).
+    render_rule(frame, split[1]);
+    let hint_text: String = match &draft.editor {
+        SettingsEditor::Editing(_) => "type \u{00b7} esc cancel".into(),
+        SettingsEditor::FormatEditor { .. } => {
+            "space toggle \u{00b7} J/K reorder \u{00b7} esc done".into()
+        }
+        SettingsEditor::LangPicker { .. } => "\u{2191}\u{2193} \u{00b7} esc".into(),
+        SettingsEditor::Viewing => {
+            let field_hint = match settings_field_kind(app.settings_selected) {
+                SettingsFieldKind::FormatPref => "format editor",
+                SettingsFieldKind::Language => "pick",
+                SettingsFieldKind::F32 | SettingsFieldKind::Usize | SettingsFieldKind::U32 => {
+                    "\u{2190}\u{2192} nudge"
+                }
+                SettingsFieldKind::Bool => "space toggle",
+                SettingsFieldKind::Text => "type",
+                SettingsFieldKind::ReadOnly => "",
+            };
+            if field_hint.is_empty() {
+                "s save \u{00b7} esc cancel".into()
+            } else {
+                format!("{field_hint}  s save \u{00b7} esc cancel")
+            }
+        }
     };
-    frame.render_widget(Paragraph::new(hint_line), split[1]);
+    frame.render_widget(
+        Paragraph::new(Span::styled(hint_text, style_hint())),
+        split[2],
+    );
 
     // ── Overlay: Format Editor sub-modal ─────────────────────────────────────
     if let SettingsEditor::FormatEditor {
@@ -2011,7 +2081,7 @@ fn render_format_editor(frame: &mut Frame, parent: Rect, rows: &[(bool, String)]
     );
     frame.render_widget(
         Paragraph::new(Span::styled(
-            "spc toggle  J/K reorder  \u{23ce} done",
+            "spc toggle  J/K reorder  esc done",
             style_hint(),
         )),
         split[1],
@@ -2083,7 +2153,12 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
     let cols =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(padded);
 
-    let split_left = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(cols[0]);
+    let split_left = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(cols[0]);
 
     // Left column
     let left_lines: Vec<Line> = vec![
@@ -2157,10 +2232,11 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
     let right_list: Vec<ListItem> = right_lines.into_iter().map(|l| ListItem::new(l)).collect();
     frame.render_widget(List::new(right_list), cols[1]);
 
-    // Bottom hint
+    // Dim rule + hint.
+    render_rule(frame, split_left[1]);
     frame.render_widget(
         Paragraph::new(Span::styled("? or esc  to close", style_hint())),
-        split_left[1],
+        split_left[2],
     );
 }
 
@@ -2169,7 +2245,7 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
 // ---------------------------------------------------------------------------
 
 fn render_confirm_modal(frame: &mut Frame, title: &str, n_books: usize) {
-    let area = centered_rect(60, 7, frame.area());
+    let area = centered_rect(60, 8, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -2187,13 +2263,25 @@ fn render_confirm_modal(frame: &mut Frame, title: &str, n_books: usize) {
         vertical: 1,
     });
 
-    let body_text = format!(
-        "Delete \"{title}\" and its {n_books} book(s)?\n\n  [y] Confirm    [n / Esc] Cancel"
-    );
+    // body (greedy) + rule (1) + hint (1)
+    let split = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(padded);
+
+    let body_text = format!("Delete \"{title}\" and its {n_books} book(s)?");
     let para = Paragraph::new(body_text)
         .style(style_normal())
         .alignment(Alignment::Left);
-    frame.render_widget(para, padded);
+    frame.render_widget(para, split[0]);
+
+    render_rule(frame, split[1]);
+    frame.render_widget(
+        Paragraph::new(Span::styled("y confirm  n / esc cancel", style_hint())),
+        split[2],
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2221,10 +2309,11 @@ fn render_reorganize_modal(frame: &mut Frame, diff: &[(String, String)], selecte
         vertical: 1,
     });
 
-    // subheader (1) + list (Min) + hint (1)
+    // subheader (1) + list (Min) + rule (1) + hint (1)
     let split = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
+        Constraint::Length(1),
         Constraint::Length(1),
     ])
     .split(padded);
@@ -2265,12 +2354,13 @@ fn render_reorganize_modal(frame: &mut Frame, diff: &[(String, String)], selecte
         .collect();
     frame.render_widget(List::new(items), split[1]);
 
+    render_rule(frame, split[2]);
     frame.render_widget(
         Paragraph::new(Span::styled(
-            "\u{2191}/\u{2193} scroll   [y] apply   [n / esc] cancel",
+            "\u{2191}\u{2193} scroll  y apply  n / esc cancel",
             style_hint(),
         )),
-        split[2],
+        split[3],
     );
 }
 
@@ -2320,10 +2410,7 @@ fn render_requery_modal(frame: &mut Frame, app: &AppState, book_flat_index: usiz
         split[1],
     );
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            "  \u{23ce} search    esc cancel",
-            style_hint(),
-        )),
+        Paragraph::new(Span::styled("  type  esc cancel", style_hint())),
         split[2],
     );
 }
@@ -2412,7 +2499,7 @@ fn render_edit_book_modal(
     );
     frame.render_widget(
         Paragraph::new(Span::styled(
-            "tab switch field    \u{23ce} save    esc cancel",
+            "tab switch field  s save  esc cancel",
             style_hint(),
         )),
         split[6],
@@ -2424,7 +2511,7 @@ fn render_edit_book_modal(
 // ---------------------------------------------------------------------------
 
 fn render_confirm_book_remove_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize) {
-    let area = centered_rect(60, 7, frame.area());
+    let area = centered_rect(60, 8, frame.area());
     frame.render_widget(Clear, area);
 
     let book_title = app
@@ -2448,12 +2535,25 @@ fn render_confirm_book_remove_modal(frame: &mut Frame, app: &AppState, book_flat
         vertical: 1,
     });
 
-    let body_text =
-        format!("Remove \"{book_title}\" from the list?\n\n  [y] Confirm    [n / Esc] Cancel");
+    // body (greedy) + rule (1) + hint (1)
+    let split = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(padded);
+
+    let body_text = format!("Remove \"{book_title}\" from the list?");
     let para = Paragraph::new(body_text)
         .style(style_normal())
         .alignment(Alignment::Left);
-    frame.render_widget(para, padded);
+    frame.render_widget(para, split[0]);
+
+    render_rule(frame, split[1]);
+    frame.render_widget(
+        Paragraph::new(Span::styled("y confirm  n / esc cancel", style_hint())),
+        split[2],
+    );
 }
 
 // ---------------------------------------------------------------------------
