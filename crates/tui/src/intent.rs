@@ -19,6 +19,15 @@ pub enum Intent {
         md5: String,
     },
 
+    /// Request one or more candidate variations for download at once (each md5
+    /// armed as its own copy). Used by the Picker's multi-select (`space`/`a`)
+    /// and the List view's "fetch all preferred formats" (`a`).
+    RequestVariations {
+        group_path: Vec<usize>,
+        book_index: usize,
+        md5s: Vec<String>,
+    },
+
     /// Re-queue a failed/not-found book.
     Retry {
         group_path: Vec<usize>,

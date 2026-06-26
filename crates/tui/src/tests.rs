@@ -379,6 +379,82 @@ mod tests {
         );
     }
 
+    /// `[`/`]` include the aggregate "All" stop in the rotation:
+    /// All → list0 → list1 → All (and back with `[`).
+    #[test]
+    fn bracket_cycle_includes_all_stop() {
+        use crate::app::ALL_LIST_ID;
+        let mut app = AppState::new();
+        app.all_lists = vec![
+            crate::app::ListSummary {
+                id: "L1".into(),
+                title: "List 1".into(),
+                done: 0,
+                total: 1,
+            },
+            crate::app::ListSummary {
+                id: "L2".into(),
+                title: "List 2".into(),
+                done: 0,
+                total: 1,
+            },
+        ];
+        app.active_list_idx = 0;
+        assert!(!app.all_active);
+
+        // `]` from L1 → L2.
+        let i = app.on_input(key(KeyCode::Char(']')));
+        assert!(matches!(i, Intent::SwitchList { ref id } if id == "L2"));
+        assert!(!app.all_active);
+        assert_eq!(app.active_list_idx, 1);
+
+        // `]` from the LAST list → All (the aggregate stop activates).
+        let i = app.on_input(key(KeyCode::Char(']')));
+        assert!(matches!(i, Intent::SwitchList { ref id } if id == ALL_LIST_ID));
+        assert!(app.all_active, "] off the last list lands on the All stop");
+
+        // `]` from All → first list.
+        let i = app.on_input(key(KeyCode::Char(']')));
+        assert!(matches!(i, Intent::SwitchList { ref id } if id == "L1"));
+        assert!(!app.all_active);
+        assert_eq!(app.active_list_idx, 0);
+
+        // `[` from the FIRST list → All.
+        let i = app.on_input(key(KeyCode::Char('[')));
+        assert!(matches!(i, Intent::SwitchList { ref id } if id == ALL_LIST_ID));
+        assert!(app.all_active, "[ off the first list lands on the All stop");
+
+        // `[` from All → last list.
+        let i = app.on_input(key(KeyCode::Char('[')));
+        assert!(matches!(i, Intent::SwitchList { ref id } if id == "L2"));
+        assert!(!app.all_active);
+        assert_eq!(app.active_list_idx, 1);
+    }
+
+    /// With a single real list the rotation is still All ⇄ that list.
+    #[test]
+    fn bracket_cycle_single_list_toggles_all() {
+        use crate::app::ALL_LIST_ID;
+        let mut app = AppState::new();
+        app.all_lists = vec![crate::app::ListSummary {
+            id: "L1".into(),
+            title: "Manual".into(),
+            done: 0,
+            total: 1,
+        }];
+        app.active_list_idx = 0;
+
+        // `]` off the only list → All.
+        let i = app.on_input(key(KeyCode::Char(']')));
+        assert!(matches!(i, Intent::SwitchList { ref id } if id == ALL_LIST_ID));
+        assert!(app.all_active);
+
+        // `]` from All → back to the only list.
+        let i = app.on_input(key(KeyCode::Char(']')));
+        assert!(matches!(i, Intent::SwitchList { ref id } if id == "L1"));
+        assert!(!app.all_active);
+    }
+
     /// `←/→` navigate filter chips ONLY when Header is focused.
     #[test]
     fn left_right_filter_chips_header_pane_only() {
@@ -554,14 +630,29 @@ mod tests {
         assert_eq!(app.selected, 0);
     }
 
-    /// `↑` from the Header wraps back into the List.
+    /// `↑` from the Header lands on the TOP book row (mirrors ↓-from-Header),
+    /// even when the list cursor was previously mid-list.
     #[test]
-    fn up_from_header_wraps_to_list() {
+    fn up_from_header_selects_top() {
         let mut app = AppState::new();
         app.set_view(fixture_vm());
         app.focus = Focus::Header;
+        app.selected = 1; // cursor parked mid-list
         app.on_input(key(KeyCode::Up));
-        assert_eq!(app.focus, Focus::List, "↑ from Header wraps back to List");
+        assert_eq!(app.focus, Focus::List, "↑ from Header focuses List");
+        assert_eq!(app.selected, 0, "↑ from Header lands on the first book");
+    }
+
+    /// `k` from the Header also lands on the top book row.
+    #[test]
+    fn k_from_header_selects_top() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Header;
+        app.selected = 1;
+        app.on_input(key(KeyCode::Char('k')));
+        assert_eq!(app.focus, Focus::List);
+        assert_eq!(app.selected, 0, "k from Header lands on the first book");
     }
 
     /// Detail modal: `d` on a focused variation emits a Select (download) intent.
@@ -1427,6 +1518,64 @@ mod tests {
         );
     }
 
+    /// Picker `a` fetches ALL preferred-format copies (epub + pdf in the fixture)
+    /// in one shot and closes the modal.
+    #[test]
+    fn picker_a_fetches_all_preferred() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Picker {
+            book_flat_index: 0,
+            selected: 0,
+        });
+        let intent = app.on_input(key(KeyCode::Char('a')));
+        match intent {
+            // Fixture book 0 has an epub (idx 0) and pdf (idx 1); both preferred.
+            Intent::RequestVariations { md5s, .. } => assert_eq!(md5s.len(), 2),
+            other => panic!("expected RequestVariations, got {:?}", other),
+        }
+        assert!(app.modal.is_none(), "picker closes after fetching");
+    }
+
+    /// Picker `v` opens a metadata snapshot popup for the focused candidate.
+    #[test]
+    fn picker_v_opens_metadata_snapshot() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Picker {
+            book_flat_index: 0,
+            selected: 0,
+        });
+        app.on_input(key(KeyCode::Char('v')));
+        match &app.modal {
+            Some(Modal::Snapshot { parent, .. }) => {
+                assert!(
+                    matches!(parent.as_deref(), Some(Modal::Picker { .. })),
+                    "snapshot returns to the Picker on Esc"
+                );
+            }
+            other => panic!("expected Snapshot, got {:?}", other),
+        }
+        // Esc restores the Picker.
+        app.on_input(key(KeyCode::Esc));
+        assert!(matches!(app.modal, Some(Modal::Picker { .. })));
+    }
+
+    /// List-view `a` fetches all preferred-format copies for the focused book.
+    #[test]
+    fn list_a_fetches_all_preferred_formats() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.selected = 0; // book with epub + pdf candidates
+        let intent = app.on_input(key(KeyCode::Char('a')));
+        match intent {
+            Intent::RequestVariations { md5s, .. } => {
+                assert_eq!(md5s.len(), 2, "epub + pdf both requested");
+            }
+            other => panic!("expected RequestVariations, got {:?}", other),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // BUG 1 — theme bg uses Color::Reset
     // -----------------------------------------------------------------------
@@ -1811,7 +1960,8 @@ mod tests {
 
     #[test]
     fn render_detail_modal_selected_variant_visible() {
-        // Render detail modal with selected=1 — the buffer should show the ▶ marker.
+        // Render detail modal with selected=1 — the buffer should show the shared
+        // selected-line accent (green ▌ left bar) on the chosen variation.
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();
@@ -1824,10 +1974,10 @@ mod tests {
         });
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let content = buffer_string(&terminal);
-        // ▶ (U+25B6) should appear in the buffer as the selection marker.
+        // ▌ (U+258C) is the shared selected-line accent marker.
         assert!(
-            content.contains('\u{25b6}'),
-            "detail modal selected row must show ▶ marker"
+            content.contains('\u{258c}'),
+            "detail modal selected row must show the ▌ accent marker"
         );
     }
 
@@ -4680,10 +4830,10 @@ mod tests {
             history_selected: 0,
         });
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
-        // Verify the ▶ marker is still present (modal rendered correctly).
+        // Verify the selected-line accent (▌) is present (modal rendered correctly).
         let content = buffer_string(&terminal);
         assert!(
-            content.contains('\u{25b6}') || content.contains("Ambiguous"),
+            content.contains('\u{258c}') || content.contains("Ambiguous"),
             "detail modal must render book content at 132 cols"
         );
     }

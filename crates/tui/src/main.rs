@@ -52,7 +52,7 @@ use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::app::{AppState, ListSummary, Modal};
+use crate::app::{AppState, ListSummary, Modal, ALL_LIST_ID};
 use crate::guard::TerminalGuard;
 use crate::intent::Intent;
 
@@ -365,6 +365,13 @@ async fn dispatch_intent(
         } => {
             select_candidate(app, handles, group_path, book_index, md5).await;
         }
+        Intent::RequestVariations {
+            group_path,
+            book_index,
+            md5s,
+        } => {
+            request_variations(app, handles, group_path, book_index, md5s).await;
+        }
         Intent::Retry {
             group_path,
             book_index,
@@ -636,7 +643,12 @@ async fn refresh_active_view(app: &mut AppState, handles: &EngineHandles) {
         let orch = lib.arc_for(&id);
         (id, orch)
     };
-    if let Some(orch_arc) = orch_arc {
+    if id == ALL_LIST_ID {
+        // Aggregate "All" stop: merge every loaded list into one view.
+        if let Some(vm) = build_aggregate_view(handles).await {
+            app.set_view(vm);
+        }
+    } else if let Some(orch_arc) = orch_arc {
         let snap = orch_arc.lock().await.snapshot();
         if let Ok(snap) = snap {
             let vm = build_with_id(id, &snap);
@@ -644,6 +656,44 @@ async fn refresh_active_view(app: &mut AppState, handles: &EngineHandles) {
         }
     }
     refresh_all_list_summaries(app, handles).await;
+}
+
+/// Build the aggregate "All" [`ViewModel`]: every loaded list's groups
+/// concatenated into one view (each group name prefixed with its list title so
+/// the origin stays clear). `format_pref`/settings come from the first list.
+async fn build_aggregate_view(handles: &EngineHandles) -> Option<libgen_engine::ViewModel> {
+    let pairs = {
+        let lib = handles.library.lock().await;
+        lib.all_arcs()
+    };
+    let mut groups: Vec<libgen_engine::ViewGroup> = Vec::new();
+    let mut settings: Option<libgen_engine::ViewListSettings> = None;
+    let mut format_pref: Vec<String> = Vec::new();
+    for (id, orch_arc) in pairs {
+        let snap = orch_arc.lock().await.snapshot();
+        if let Ok(snap) = snap {
+            let vm = build_with_id(id, &snap);
+            if settings.is_none() {
+                settings = Some(vm.settings.clone());
+                format_pref = vm.format_pref.clone();
+            }
+            let list_title = vm.title.clone();
+            for mut g in vm.groups {
+                g.name = format!("{} \u{203a} {}", list_title, g.name);
+                groups.push(g);
+            }
+        }
+    }
+    let total: usize = groups.iter().map(|g| g.books.len()).sum();
+    Some(libgen_engine::ViewModel {
+        id: ALL_LIST_ID.to_string(),
+        title: "All".to_string(),
+        subtitle: format!("{total} book(s) across all lists"),
+        format_pref,
+        settings: settings?,
+        is_manual: false,
+        groups,
+    })
 }
 
 /// Recompute summaries for ALL loaded lists and update `app.all_lists`.
@@ -710,6 +760,33 @@ async fn select_candidate(
             return;
         }
         // Ensure goal = Complete so the engine downloads it.
+        let _ = guard.set_goal_one(&group_path, book_index, Goal::Complete);
+    }
+    handles.engine_wake.notify_one();
+    refresh_active_view(app, handles).await;
+}
+
+/// Arm one or more candidate variations of a book for download at once (each
+/// md5 fetched as its own copy). Used by the Picker's multi-select and the
+/// "fetch all preferred formats" actions. Drives the book to `Complete` so the
+/// engine downloads every armed variation.
+async fn request_variations(
+    app: &mut AppState,
+    handles: &EngineHandles,
+    group_path: Vec<usize>,
+    book_index: usize,
+    md5s: Vec<String>,
+) {
+    let Some(orch_arc) = active_orch(handles).await else {
+        return;
+    };
+    {
+        let mut guard = orch_arc.lock().await;
+        for md5 in &md5s {
+            if let Err(e) = guard.request_variation(&group_path, book_index, md5) {
+                tracing::warn!("request_variation({md5}) failed: {e}");
+            }
+        }
         let _ = guard.set_goal_one(&group_path, book_index, Goal::Complete);
     }
     handles.engine_wake.notify_one();

@@ -10,6 +10,11 @@ use ratatui::layout::Rect;
 
 use crate::intent::Intent;
 
+/// Sentinel list id for the aggregate "All" stop in the list strip — the view
+/// that merges every loaded reading list. Mirrors the engine's `current`
+/// sentinel (`crates/engine/src/state.rs`).
+pub const ALL_LIST_ID: &str = "__all__";
+
 // ---------------------------------------------------------------------------
 // Settings modal constants + types
 // ---------------------------------------------------------------------------
@@ -519,6 +524,11 @@ pub struct AppState {
     /// Index into `all_lists` for the currently displayed list.
     pub active_list_idx: usize,
 
+    /// `true` when the aggregate "All" stop in the list strip is the active
+    /// selection (the `__all__` sentinel view), rather than a single real list.
+    /// The `[`/`]` cycle steps onto this as one extra stop before the first list.
+    pub all_active: bool,
+
     // ── Marquee scroll state (Detail modal · Title·Author column) ─────────────
     /// Character offset into the selected variation's "Title · Author" string.
     /// The rendered text starts at this offset and is clipped to the column width.
@@ -570,6 +580,7 @@ impl AppState {
             cmd_history_draft: String::new(),
             all_lists: Vec::new(),
             active_list_idx: 0,
+            all_active: false,
             marquee_offset: 0,
             marquee_forward: true,
             marquee_pause: 0,
@@ -880,8 +891,12 @@ impl AppState {
                                         self.scroll_activity_up();
                                     }
                                 }
-                                // arrow-cross: ↑ from Header wraps back into the List.
-                                Focus::Header => self.focus = Focus::List,
+                                // arrow-cross: ↑ from Header lands on the TOP book
+                                // row (mirrors ↓-from-Header), never mid-list.
+                                Focus::Header => {
+                                    self.focus = Focus::List;
+                                    self.selected = 0;
+                                }
                             }
                         }
                         Intent::Redraw
@@ -904,8 +919,11 @@ impl AppState {
                                     self.scroll_activity_up();
                                 }
                             }
-                            // arrow-cross: k from Header wraps back into the List.
-                            Focus::Header => self.focus = Focus::List,
+                            // arrow-cross: k from Header lands on the TOP book row.
+                            Focus::Header => {
+                                self.focus = Focus::List;
+                                self.selected = 0;
+                            }
                         }
                         Intent::Redraw
                     }
@@ -1096,25 +1114,53 @@ impl AppState {
                         Intent::Redraw
                     }
                     KeyCode::Char('?') => Intent::OpenHelp,
-                    // `[` / `]` — GLOBAL list cycle: works from any pane, never changes focus.
+                    // `[` / `]` — GLOBAL list cycle: works from any pane, never
+                    // changes focus. The rotation includes the aggregate "All"
+                    // stop as one extra position before the first real list:
+                    //   All → list0 → list1 → … → All  (and back with `[`).
                     KeyCode::Char('[') => {
-                        if self.all_lists.len() > 1 {
-                            let new_idx = self
-                                .active_list_idx
-                                .checked_sub(1)
-                                .unwrap_or(self.all_lists.len() - 1);
-                            self.active_list_idx = new_idx;
-                            let id = self.all_lists[new_idx].id.clone();
-                            return Intent::SwitchList { id };
+                        let n = self.all_lists.len();
+                        if n >= 1 {
+                            if self.all_active {
+                                // All → last real list.
+                                self.all_active = false;
+                                self.active_list_idx = n - 1;
+                                let id = self.all_lists[n - 1].id.clone();
+                                return Intent::SwitchList { id };
+                            } else if self.active_list_idx == 0 {
+                                // First list → All.
+                                self.all_active = true;
+                                return Intent::SwitchList {
+                                    id: ALL_LIST_ID.to_string(),
+                                };
+                            } else {
+                                self.active_list_idx -= 1;
+                                let id = self.all_lists[self.active_list_idx].id.clone();
+                                return Intent::SwitchList { id };
+                            }
                         }
                         Intent::Redraw
                     }
                     KeyCode::Char(']') => {
-                        if self.all_lists.len() > 1 {
-                            let new_idx = (self.active_list_idx + 1) % self.all_lists.len();
-                            self.active_list_idx = new_idx;
-                            let id = self.all_lists[new_idx].id.clone();
-                            return Intent::SwitchList { id };
+                        let n = self.all_lists.len();
+                        if n >= 1 {
+                            if self.all_active {
+                                // All → first real list.
+                                self.all_active = false;
+                                self.active_list_idx = 0;
+                                let id = self.all_lists[0].id.clone();
+                                return Intent::SwitchList { id };
+                            } else if self.active_list_idx + 1 >= n {
+                                // Last list → All.
+                                self.all_active = true;
+                                return Intent::SwitchList {
+                                    id: ALL_LIST_ID.to_string(),
+                                };
+                            } else {
+                                self.active_list_idx += 1;
+                                let id = self.all_lists[self.active_list_idx].id.clone();
+                                return Intent::SwitchList { id };
+                            }
                         }
                         Intent::Redraw
                     }
@@ -1134,8 +1180,20 @@ impl AppState {
                         }
                         Intent::Redraw
                     }
+                    // `a` — fetch ALL preferred-format copies for the focused book:
+                    // one top-ranked candidate per format in the list's format
+                    // preference, each armed as its own download.
                     KeyCode::Char('a') => {
-                        // Request all preferred format variations — UI-only stub for Stage 3.
+                        if let Some(fb) = self.flat.get(self.selected) {
+                            let md5s = self.preferred_format_md5s(&fb.book);
+                            if !md5s.is_empty() {
+                                return Intent::RequestVariations {
+                                    group_path: vec![fb.group_index],
+                                    book_index: fb.book_index_in_group,
+                                    md5s,
+                                };
+                            }
+                        }
                         Intent::Redraw
                     }
                     // #50 book-level actions from list view.
@@ -1271,6 +1329,7 @@ impl AppState {
                             if point_in_rect(col, row, *rect) && *list_idx < self.all_lists.len() {
                                 let id = self.all_lists[*list_idx].id.clone();
                                 self.active_list_idx = *list_idx;
+                                self.all_active = false;
                                 self.focus = Focus::Header;
                                 return Intent::SwitchList { id };
                             }
@@ -1355,8 +1414,8 @@ impl AppState {
                             self.modal = None;
                             Intent::Redraw
                         }
-                        KeyCode::Enter => {
-                            // Select the chosen variation.
+                        // Enter / d — pick THIS copy (the canonical single choose).
+                        KeyCode::Enter | KeyCode::Char('d') => {
                             if let Some(fb) = self.flat.get(flat_index) {
                                 if let Some(v) = fb.book.versions.get(sel) {
                                     let md5 = v.md5.clone();
@@ -1392,8 +1451,42 @@ impl AppState {
                             });
                             Intent::Redraw
                         }
+                        // `a` — fetch ALL preferred-format copies (one per format),
+                        // each armed as its own download.
                         KeyCode::Char('a') => {
-                            // Request all preferred format variations — stub.
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                let md5s = self.preferred_format_md5s(&fb.book);
+                                if !md5s.is_empty() {
+                                    self.modal = None;
+                                    return Intent::RequestVariations {
+                                        group_path: vec![fb.group_index],
+                                        book_index: fb.book_index_in_group,
+                                        md5s,
+                                    };
+                                }
+                            }
+                            Intent::Redraw
+                        }
+                        // `v` — show the focused candidate's metadata snapshot.
+                        KeyCode::Char('v') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                if let Some(v) = fb.book.versions.get(sel) {
+                                    let lines = build_variation_snapshot_lines(v);
+                                    let parent = Modal::Picker {
+                                        book_flat_index: flat_index,
+                                        selected: sel,
+                                    };
+                                    self.modal = Some(Modal::Snapshot {
+                                        title: format!(
+                                            " {} \u{00b7} {} ",
+                                            v.fmt,
+                                            &v.md5[..8.min(v.md5.len())]
+                                        ),
+                                        lines,
+                                        parent: Some(Box::new(parent)),
+                                    });
+                                }
+                            }
                             Intent::Redraw
                         }
                         _ => Intent::Redraw,
@@ -2732,6 +2825,37 @@ impl AppState {
     }
 
     /// Rebuild the flat ordered book list from the current view + filter.
+    /// The md5s of the top-ranked candidate for each format in the active list's
+    /// format preference, in preference order (one copy per preferred format).
+    /// Falls back to the single best candidate when no version matches a
+    /// preferred format. Used by the "fetch all preferred formats" actions.
+    pub fn preferred_format_md5s(&self, book: &ViewBook) -> Vec<String> {
+        let prefs: &[String] = self
+            .view
+            .as_ref()
+            .map(|v| v.format_pref.as_slice())
+            .unwrap_or(&[]);
+        let mut out: Vec<String> = Vec::new();
+        for pref in prefs {
+            if let Some(v) = book
+                .versions
+                .iter()
+                .find(|v| v.fmt.eq_ignore_ascii_case(pref))
+            {
+                if !out.contains(&v.md5) {
+                    out.push(v.md5.clone());
+                }
+            }
+        }
+        // No preferred format present → fall back to the single best candidate.
+        if out.is_empty() {
+            if let Some(v) = book.versions.first() {
+                out.push(v.md5.clone());
+            }
+        }
+        out
+    }
+
     pub fn rebuild_flat(&mut self) {
         self.flat.clear();
         let vm = match &self.view {

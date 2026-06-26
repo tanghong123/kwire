@@ -413,11 +413,21 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
     }
     let mut segs: Vec<Seg> = Vec::new();
 
-    let prefix = format!(" All {}/{}", all_done, all_total);
+    // The aggregate "All" stop. Highlighted (starred + title style) when it is
+    // the active selection — cycled onto via `[`/`]` like any real list.
+    let prefix = if app.all_active {
+        format!(" \u{2605} All {}/{}", all_done, all_total)
+    } else {
+        format!(" All {}/{}", all_done, all_total)
+    };
     let mut cumulative: usize = prefix.chars().count();
     segs.push(Seg {
         text: prefix,
-        style: style_muted(),
+        style: if app.all_active {
+            style_title()
+        } else {
+            style_muted()
+        },
     });
 
     // Store the [start, end) column range of each list segment (excluding
@@ -425,7 +435,7 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
     let mut list_col_ranges: Vec<(usize, usize)> = Vec::new();
 
     for (i, list) in app.all_lists.iter().enumerate() {
-        let is_active = i == app.active_list_idx;
+        let is_active = !app.all_active && i == app.active_list_idx;
         let text = if is_active {
             format!("   \u{2605} {} {}/{}", list.title, list.done, list.total)
         } else {
@@ -459,8 +469,8 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
         .copied()
         .unwrap_or((0, 0));
 
-    let scroll_x: usize = if total_width <= area_w {
-        0 // everything fits — no scroll
+    let scroll_x: usize = if total_width <= area_w || app.all_active {
+        0 // everything fits (or "All" is active, anchored at column 0) — no scroll
     } else {
         // We want [scroll_x, scroll_x + area_w) to contain [active_start, active_end).
         // Try scrolling just far enough to show the start of the active list.
@@ -713,13 +723,43 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                     .or_else(|| book.versions.first())
                     .unwrap();
 
+                // A book can complete MORE than one copy (e.g. an epub AND a
+                // pdf). Surface every downloaded variation on the row: list all
+                // done formats and a "N copies" badge so multi-copy books are
+                // visibly distinct (the Detail view breaks them out per row).
+                let done_fmts: Vec<&str> = book
+                    .versions
+                    .iter()
+                    .filter(|v| v.state == "done")
+                    .map(|v| v.fmt.as_str())
+                    .collect();
+                let n_done = done_fmts.len();
+
                 let state_label = match best.state.as_str() {
+                    "done" if n_done >= 2 => format!("\u{2713} {} copies", n_done),
                     "done" => "\u{2713} done".to_string(),
+                    "downloading" if n_done >= 1 => {
+                        // One copy in flight while ≥1 already finished.
+                        format!(
+                            "{} {}% \u{00b7} +{} done",
+                            theme::spinner(app.tick),
+                            best.progress,
+                            n_done
+                        )
+                    }
                     "downloading" => format!("{} {}%", theme::spinner(app.tick), best.progress),
                     "failed" | "cancelled" => "\u{2717} failed".to_string(),
                     "queued" => "\u{00b7} queued".to_string(),
                     "paused" => "\u{23f8} paused".to_string(),
                     _ => best.state.clone(),
+                };
+
+                // Format cell shows ALL done formats joined (epub+pdf) when more
+                // than one completed; otherwise the best variation's format.
+                let fmt_label = if n_done >= 2 {
+                    done_fmts.join("+")
+                } else {
+                    best.fmt.clone()
                 };
 
                 let size_label = if best.size > 0 {
@@ -728,7 +768,7 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                     "\u{2014}".to_string()
                 };
 
-                (best.fmt.clone(), size_label, state_label, best.progress)
+                (fmt_label, size_label, state_label, best.progress)
             };
 
         let bar = theme::progress_bar(display_progress, 10);
@@ -1488,7 +1528,7 @@ fn render_picker_modal(
     render_rule(frame, split[2]);
     frame.render_widget(
         Paragraph::new(hint_line(
-            "\u{2191}\u{2193} pick  space mark  a all formats  v meta  esc cancel",
+            "\u{2191}\u{2193} pick  \u{23ce} this copy  a all formats  v meta  esc cancel",
         ))
         .style(style_hint()),
         split[3],
@@ -2368,8 +2408,7 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
 
     let right_rows: &[HelpRow] = &[
         HelpRow::Head("ACT ON SELECTION  (List pane)"),
-        HelpRow::Key("space", "mark a copy"),
-        HelpRow::Key("d", "download focused copy"),
+        HelpRow::Key("\u{23ce}", "choose a copy (picker)"),
         HelpRow::Key("a", "fetch all preferred formats"),
         HelpRow::Key("r", "retry \u{00b7} re-download"),
         HelpRow::Key("p \u{00b7} c", "pause \u{00b7} cancel"),
