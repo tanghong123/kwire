@@ -821,7 +821,11 @@ impl AppState {
                                     }
                                 }
                                 Focus::Activity => self.scroll_activity(1),
-                                Focus::Header => {} // ←/→ navigate chips; ↓ is no-op
+                                // arrow-cross: ↓ from Header (filter chips) → top of List.
+                                Focus::Header => {
+                                    self.focus = Focus::List;
+                                    self.selected = 0;
+                                }
                             }
                         }
                         Intent::Redraw
@@ -838,7 +842,11 @@ impl AppState {
                                 }
                             }
                             Focus::Activity => self.scroll_activity(1),
-                            Focus::Header => {}
+                            // arrow-cross: j from Header (filter chips) → top of List.
+                            Focus::Header => {
+                                self.focus = Focus::List;
+                                self.selected = 0;
+                            }
                         }
                         Intent::Redraw
                     }
@@ -856,7 +864,14 @@ impl AppState {
                             }
                         } else {
                             match self.focus {
-                                Focus::List => self.move_selection_up(),
+                                Focus::List => {
+                                    // arrow-cross: ↑ at top of List → Header (filter chips).
+                                    if self.selected == 0 {
+                                        self.focus = Focus::Header;
+                                    } else {
+                                        self.move_selection_up();
+                                    }
+                                }
                                 Focus::Activity => {
                                     // #65 arrow-cross: ↑ at top → focus List
                                     if self.activity_selected == 0 {
@@ -865,14 +880,22 @@ impl AppState {
                                         self.scroll_activity_up();
                                     }
                                 }
-                                Focus::Header => {}
+                                // arrow-cross: ↑ from Header wraps back into the List.
+                                Focus::Header => self.focus = Focus::List,
                             }
                         }
                         Intent::Redraw
                     }
                     KeyCode::Char('k') => {
                         match self.focus {
-                            Focus::List => self.move_selection_up(),
+                            Focus::List => {
+                                // arrow-cross: k at top of List → Header (filter chips).
+                                if self.selected == 0 {
+                                    self.focus = Focus::Header;
+                                } else {
+                                    self.move_selection_up();
+                                }
+                            }
                             Focus::Activity => {
                                 // #65 arrow-cross: k at top → focus List
                                 if self.activity_selected == 0 {
@@ -881,7 +904,8 @@ impl AppState {
                                     self.scroll_activity_up();
                                 }
                             }
-                            Focus::Header => {}
+                            // arrow-cross: k from Header wraps back into the List.
+                            Focus::Header => self.focus = Focus::List,
                         }
                         Intent::Redraw
                     }
@@ -1515,6 +1539,25 @@ impl AppState {
                             }
                             Intent::Redraw
                         }
+                        // Download the currently-focused variation (its copy).
+                        // Only meaningful while the Variations list is focused.
+                        KeyCode::Char('d') => {
+                            if sf == DetailSubFocus::Variations {
+                                if let Some(fb) = self.flat.get(flat_index) {
+                                    if let Some(v) = fb.book.versions.get(sel) {
+                                        let md5 = v.md5.clone();
+                                        let intent = Intent::Select {
+                                            group_path: vec![fb.group_index],
+                                            book_index: fb.book_index_in_group,
+                                            md5,
+                                        };
+                                        self.modal = None;
+                                        return intent;
+                                    }
+                                }
+                            }
+                            Intent::Redraw
+                        }
                         // #49 manual re-query: open inline search input.
                         KeyCode::Char('s') => {
                             if let Some(fb) = self.flat.get(flat_index) {
@@ -1587,10 +1630,9 @@ impl AppState {
                                 if let Some(fb) = self.flat.get(flat_index) {
                                     let n = fb.book.history.len();
                                     if n > 0 {
-                                        // history is oldest-first; display is reversed
-                                        let real_idx = n
-                                            .saturating_sub(1)
-                                            .saturating_sub(hist_sel.min(n.saturating_sub(1)));
+                                        // history is displayed chronologically (oldest-first),
+                                        // so the selected row maps directly to the real index.
+                                        let real_idx = hist_sel.min(n.saturating_sub(1));
                                         if let Some(ev) = fb.book.history.get(real_idx) {
                                             let lines = build_history_snapshot_lines(ev);
                                             self.modal = Some(Modal::Snapshot {

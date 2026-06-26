@@ -1814,7 +1814,7 @@ fn render_detail_modal(
     // History list — windowed so it can scroll; highlight the selected row.
     let n_hist = fb.book.history.len();
     let win_h = split[7].height as usize;
-    // history_selected is 0 = most-recent (top of the reversed list).
+    // Chronological order: index 0 = oldest (top), newest at the bottom.
     let hist_sel = history_selected.min(n_hist.saturating_sub(1));
     // Compute scroll offset so hist_sel stays inside the visible window.
     let scroll_offset = if win_h == 0 || n_hist == 0 {
@@ -1827,7 +1827,6 @@ fn render_detail_modal(
         .book
         .history
         .iter()
-        .rev()
         .enumerate()
         .skip(scroll_offset)
         .take(win_h)
@@ -1889,7 +1888,7 @@ fn render_detail_modal(
                 }
                 _ => {
                     // available / queued
-                    "download  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
+                    "d download  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
                 }
             }
         }
@@ -2327,6 +2326,7 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
             style_header(),
         )),
         make_key_line("space", "mark a copy"),
+        make_key_line("d", "download focused copy  (detail view)"),
         make_key_line("a", "fetch all preferred formats"),
         make_key_line("r", "retry \u{00b7} re-download"),
         make_key_line("p \u{00b7} c", "pause \u{00b7} cancel"),

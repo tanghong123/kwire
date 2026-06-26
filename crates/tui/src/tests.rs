@@ -504,6 +504,87 @@ mod tests {
         assert_eq!(app.activity_selected, 1, "↑ must retreat activity_selected");
     }
 
+    /// `↑` at the top of the book list crosses focus up into the Header.
+    #[test]
+    fn up_at_list_top_crosses_to_header() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        assert_eq!(app.focus, Focus::List);
+        assert_eq!(app.selected, 0);
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(
+            app.focus,
+            Focus::Header,
+            "↑ at list top must focus Header (filter chips)"
+        );
+        assert_eq!(app.selected, 0, "selection stays at the first book");
+    }
+
+    #[test]
+    fn k_at_list_top_crosses_to_header() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.on_input(key(KeyCode::Char('k')));
+        assert_eq!(
+            app.focus,
+            Focus::Header,
+            "'k' at list top must focus Header"
+        );
+    }
+
+    /// `↓` from the Header crosses down into the top of the book list.
+    #[test]
+    fn down_from_header_crosses_to_list_top() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Header;
+        app.selected = 1;
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(app.focus, Focus::List, "↓ from Header must focus List");
+        assert_eq!(app.selected, 0, "↓ from Header lands on the first book");
+    }
+
+    #[test]
+    fn j_from_header_crosses_to_list_top() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Header;
+        app.on_input(key(KeyCode::Char('j')));
+        assert_eq!(app.focus, Focus::List, "'j' from Header must focus List");
+        assert_eq!(app.selected, 0);
+    }
+
+    /// `↑` from the Header wraps back into the List.
+    #[test]
+    fn up_from_header_wraps_to_list() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Header;
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(app.focus, Focus::List, "↑ from Header wraps back to List");
+    }
+
+    /// Detail modal: `d` on a focused variation emits a Select (download) intent.
+    #[test]
+    fn detail_d_downloads_focused_variation() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection()); // first book has 2 versions
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 1,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        let intent = app.on_input(key(KeyCode::Char('d')));
+        assert!(
+            matches!(intent, Intent::Select { .. }),
+            "d on a variation must emit Select, got {:?}",
+            intent
+        );
+        assert!(app.modal.is_none(), "detail modal closes after download");
+    }
+
     /// Detail modal: ↓ at bottom of Variations crosses to History.
     #[test]
     fn detail_down_at_variations_bottom_crosses_to_history() {
