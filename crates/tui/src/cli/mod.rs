@@ -6,6 +6,7 @@
 
 pub mod cmd_get;
 pub mod cmd_search;
+pub mod emitter;
 
 use anyhow::Result;
 use clap::Subcommand;

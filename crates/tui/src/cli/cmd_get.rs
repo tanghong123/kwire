@@ -1,4 +1,8 @@
 //! `kwire get <arg…>` — download by MD5 or by title search + best-match pick.
+//!
+//! Progress is streamed live: a `\r`-updated progress line when stdout is a
+//! TTY, periodic newlines when piped.  Lifecycle events (connecting, done, …)
+//! go to stderr so stdout stays clean.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,6 +17,8 @@ use libgen_core::queue::{DownloadRequest, HostLimits, Progress, SchedulerBuilder
 use libgen_engine::{build_search, Config};
 use reqwest::Client;
 use tokio::sync::mpsc;
+
+use super::emitter::CliEmitter;
 
 #[derive(ClapArgs)]
 pub struct GetArgs {
@@ -56,11 +62,14 @@ pub async fn run(args: GetArgs) -> Result<()> {
 
     // Detect whether arg is a bare MD5 (32 lowercase hex chars).
     if is_md5(&query) {
-        return download_by_md5(&query, &args.site, &args.out, client).await;
+        let emitter = CliEmitter::new();
+        return download_by_md5(&query, &args.site, &args.out, client, &emitter).await;
     }
 
     // Title search path.
     let (title, author) = parse_title_author(&query, args.author.as_deref());
+
+    eprintln!("searching  {title}");
 
     let cfg = Config::from_env();
     let search_client = build_search(&cfg).map_err(|e| anyhow::anyhow!(e))?;
@@ -87,7 +96,7 @@ pub async fn run(args: GetArgs) -> Result<()> {
         .context("searching mirrors")?;
 
     if candidates.is_empty() {
-        println!("No candidates found. Try: kwire search \"{}\"", title);
+        eprintln!("no candidates found — try: kwire search \"{title}\"");
         return Ok(());
     }
 
@@ -96,41 +105,28 @@ pub async fn run(args: GetArgs) -> Result<()> {
     let outcome = matching::evaluate(&input, candidates, &settings);
 
     if outcome.ranked.is_empty() {
-        println!(
-            "No matching candidates found. Try: kwire search \"{}\"",
-            title
-        );
+        eprintln!("no matching candidates — try: kwire search \"{title}\"");
         return Ok(());
     }
 
     let best = &outcome.ranked[0];
 
-    // Print chosen candidate.
-    let authors_str = if best.authors.is_empty() {
-        String::from("(unknown author)")
-    } else {
-        best.authors.join(", ")
-    };
-    let fmt_str = best
-        .extension
-        .as_ref()
-        .map(|e| e.ext().to_ascii_uppercase())
-        .unwrap_or_else(|| "?".to_string());
-    let size_str = best
-        .size_bytes
-        .map(super::cmd_search::human_size)
-        .unwrap_or_else(|| "?".to_string());
+    // Print the chosen candidate's metadata (two-line format, same as `search`).
+    println!("{}", super::cmd_search::format_candidate(1, best));
 
-    println!(
-        "Chosen: {} · {} · {} · {} · {}",
-        best.title, authors_str, best.md5, fmt_str, size_str
-    );
-
-    download_by_md5(&best.md5, &args.site, &args.out, client).await
+    let emitter = CliEmitter::new();
+    download_by_md5(&best.md5, &args.site, &args.out, client, &emitter).await
 }
 
 /// Download a single md5 using `--site`, saving to `--out`.
-async fn download_by_md5(md5: &str, site: &str, out: &str, client: Client) -> Result<()> {
+/// Progress is streamed live through `emitter`.
+async fn download_by_md5(
+    md5: &str,
+    site: &str,
+    out: &str,
+    client: Client,
+    emitter: &CliEmitter,
+) -> Result<()> {
     let resolver = build_site_resolver(site, &client)
         .with_context(|| format!("building resolver for site {site:?}"))?;
     let chain = ResolverChain::new(vec![resolver]);
@@ -143,7 +139,6 @@ async fn download_by_md5(md5: &str, site: &str, out: &str, client: Client) -> Re
     );
 
     let out_dir = PathBuf::from(out);
-    // Use md5.bin as the temp dest; the file gets renamed after md5 verification.
     let dest = out_dir.join(format!("{md5}.bin"));
     let req = DownloadRequest {
         md5: md5.to_string(),
@@ -154,37 +149,18 @@ async fn download_by_md5(md5: &str, site: &str, out: &str, client: Client) -> Re
 
     let (tx, mut rx) = mpsc::channel::<Progress>(256);
 
-    // Spawn a simple progress printer.
-    let printer = tokio::spawn(async move {
-        while let Some(ev) = rx.recv().await {
-            match ev {
-                Progress::Done {
-                    md5,
-                    path,
-                    bytes_written,
-                    ..
-                } => {
-                    println!("Saved: {} ({} bytes)", path.display(), bytes_written);
-                    let _ = md5; // silence unused warning
-                }
-                Progress::Failed { md5, error } => {
-                    eprintln!("Failed {md5}: {error}");
-                }
-                Progress::Resolved {
-                    total_bytes, host, ..
-                } => {
-                    let sz = total_bytes
-                        .map(super::cmd_search::human_size)
-                        .unwrap_or_else(|| "?".to_string());
-                    eprintln!("Resolving via {host} ({sz})…");
-                }
-                _ => {}
-            }
-        }
-    });
+    // Drain progress events on this task, streaming them live through the emitter.
+    // We collect the events here so we don't need to move `emitter` into a spawn.
+    let run_handle = {
+        let scheduler = Arc::clone(&scheduler);
+        tokio::spawn(async move { scheduler.run(vec![req], tx).await })
+    };
 
-    let outcomes = scheduler.run(vec![req], tx).await;
-    let _ = printer.await;
+    while let Some(ev) = rx.recv().await {
+        emitter.print_progress(&ev);
+    }
+
+    let outcomes = run_handle.await.context("scheduler task panicked")?;
 
     for o in &outcomes {
         if let Err(e) = &o.result {
@@ -297,5 +273,48 @@ mod tests {
         let (title, author) = parse_title_author("Treasure Island", Some("Stevenson"));
         assert_eq!(title, "Treasure Island");
         assert_eq!(author, "Stevenson");
+    }
+
+    // --- CliEmitter integration: progress formatting used by download_by_md5 ---
+
+    #[test]
+    fn emitter_progress_line_contains_percent() {
+        // Validate that the progress-line formatter (via the emitter module)
+        // produces the expected format for a Bytes event.
+        use super::super::emitter::format_progress_line;
+        let line = format_progress_line(500, Some(1000), Some(512 * 1024), Some(10));
+        assert!(line.contains("50%"), "pct: {line:?}");
+        assert!(line.contains("512 KB/s"), "speed: {line:?}");
+        assert!(line.contains("10s"), "eta: {line:?}");
+    }
+
+    #[test]
+    fn emitter_print_progress_done_does_not_panic() {
+        let emitter = CliEmitter { is_tty: false };
+        let p = Progress::Done {
+            md5: "a".repeat(32),
+            host: "libgen.li".into(),
+            path: PathBuf::from("/tmp/out.epub"),
+            bytes_written: 4096,
+        };
+        // Must not panic; output goes to stdout/stderr which we ignore in tests.
+        emitter.print_progress(&p);
+    }
+
+    #[test]
+    fn emitter_print_progress_bytes_non_tty_does_not_panic() {
+        let emitter = CliEmitter { is_tty: false };
+        // At 50 % → multiple of 10, so this will println! on non-TTY.
+        let p = Progress::Bytes {
+            md5: "b".repeat(32),
+            leg_id: 0,
+            is_hedge: false,
+            host: "libgen.li".into(),
+            bytes_done: 500,
+            total_bytes: Some(1000),
+            speed_bps: Some(1024),
+            eta_secs: Some(5),
+        };
+        emitter.print_progress(&p);
     }
 }

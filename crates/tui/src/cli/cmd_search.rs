@@ -1,4 +1,4 @@
-//! `kwire search <query…>` — one-shot search, prints numbered candidates.
+//! `kwire search <query…>` — one-shot search, streams ranked candidates live.
 
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
@@ -37,6 +37,9 @@ pub async fn run(args: SearchArgs) -> Result<()> {
         ..Default::default()
     };
 
+    // Activity line: let the user know we're hitting the network.
+    eprintln!("searching  {query}");
+
     let mut candidates = client.search(&input).await.context("searching mirrors")?;
 
     // Optional format filter.
@@ -56,13 +59,19 @@ pub async fn run(args: SearchArgs) -> Result<()> {
         });
     }
 
+    let total = candidates.len();
     candidates.truncate(args.limit);
+    let showing = candidates.len();
 
     if candidates.is_empty() {
-        println!("No candidates found for {:?}.", query);
+        eprintln!("no candidates found for {query:?}");
         return Ok(());
     }
 
+    // Activity line: how many came back vs. how many we're showing.
+    eprintln!("found {total}  showing {showing}");
+
+    // Stream each candidate to stdout live (one per iteration).
     for (i, c) in candidates.iter().enumerate() {
         println!("{}", format_candidate(i + 1, c));
     }
@@ -70,45 +79,58 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     Ok(())
 }
 
-/// Format one candidate as the two-line display described in the spec.
+/// Format one candidate as a two-line entry.
+///
+/// Line 1: `N. FMT  Title — Authors`
+/// Line 2: `   size · year · Npg · score · source`
+///
+/// Fields that are unavailable are omitted from line 2.  `FMT` (the file
+/// format) is omitted when unknown; authors are omitted when empty.
 pub fn format_candidate(index: usize, c: &Candidate) -> String {
-    // Line 1: `N. <title> — <authors>`
-    let authors = if c.authors.is_empty() {
-        String::new()
-    } else {
-        c.authors.join(", ")
-    };
+    // ── Line 1 ─────────────────────────────────────────────────────────────
+    let fmt_prefix = c
+        .extension
+        .as_ref()
+        .map(|e| format!("{}  ", e.ext().to_ascii_uppercase()))
+        .unwrap_or_default();
+
+    let authors = c.authors.join(", ");
     let line1 = if authors.is_empty() {
-        format!("{}. {}", index, c.title)
+        format!("{index}. {fmt_prefix}{}", c.title)
     } else {
-        format!("{}. {} — {}", index, c.title, authors)
+        format!("{index}. {fmt_prefix}{} — {authors}", c.title)
     };
 
-    // Line 2: `  <md5>  <year> · <pages>p · <format> · <size>`
+    // ── Line 2 ─────────────────────────────────────────────────────────────
     let mut meta: Vec<String> = Vec::new();
+
+    if let Some(sz) = c.size_bytes {
+        meta.push(human_size(sz));
+    }
     if let Some(y) = c.year {
         meta.push(y.to_string());
     }
     if let Some(p) = c.pages {
-        meta.push(format!("{}p", p));
+        meta.push(format!("{p}pg"));
     }
-    if let Some(ref ext) = c.extension {
-        meta.push(ext.ext().to_ascii_uppercase());
-    }
-    if let Some(sz) = c.size_bytes {
-        meta.push(human_size(sz));
+
+    // Score: always include — useful for judging match quality.
+    meta.push(format!("{:.2}", c.score));
+
+    if let Some(ref src) = c.source_host {
+        meta.push(src.clone());
     }
 
     let line2 = if meta.is_empty() {
-        format!("  {}", c.md5)
+        String::new()
     } else {
-        format!("  {}  {}", c.md5, meta.join(" · "))
+        format!("   {}", meta.join(" · "))
     };
 
-    format!("{}\n{}", line1, line2)
+    format!("{line1}\n{line2}")
 }
 
-/// Format bytes as a human-readable string (e.g. "4.8 MB").
+/// Format bytes as a human-readable string (e.g. `"4.8 MB"`).
 pub fn human_size(bytes: u64) -> String {
     const MB: u64 = 1024 * 1024;
     const KB: u64 = 1024;
@@ -117,7 +139,7 @@ pub fn human_size(bytes: u64) -> String {
     } else if bytes >= KB {
         format!("{:.0} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
@@ -138,6 +160,8 @@ mod tests {
         pages: Option<u32>,
         extension: Option<Format>,
         size_bytes: Option<u64>,
+        score: f32,
+        source_host: Option<&str>,
     ) -> Candidate {
         Candidate {
             md5: md5.to_string(),
@@ -149,9 +173,9 @@ mod tests {
             pages,
             extension,
             size_bytes,
-            source_host: None,
+            source_host: source_host.map(str::to_string),
             cover_url: None,
-            score: 0.0,
+            score,
             job: None,
         }
     }
@@ -166,16 +190,31 @@ mod tests {
             Some(312),
             Some(Format::Epub),
             Some(2 * 1024 * 1024),
+            0.95_f32,
+            Some("libgen.li"),
         );
         let s = format_candidate(1, &c);
         let lines: Vec<&str> = s.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0], "1. Treasure Island — Robert Louis Stevenson");
-        assert!(lines[1].contains("1df204c78842ffe549166ffcb984babc"));
-        assert!(lines[1].contains("1883"));
-        assert!(lines[1].contains("312p"));
-        assert!(lines[1].contains("EPUB"));
-        assert!(lines[1].contains("2.0 MB"));
+        // Line 1: format + title + author
+        assert!(lines[0].starts_with("1. EPUB"), "line1: {}", lines[0]);
+        assert!(lines[0].contains("Treasure Island"), "title: {}", lines[0]);
+        assert!(
+            lines[0].contains("Robert Louis Stevenson"),
+            "author: {}",
+            lines[0]
+        );
+        // Line 2: metadata (no md5; pages use "pg" suffix)
+        assert!(lines[1].contains("2.0 MB"), "size: {}", lines[1]);
+        assert!(lines[1].contains("1883"), "year: {}", lines[1]);
+        assert!(lines[1].contains("312pg"), "pages: {}", lines[1]);
+        assert!(lines[1].contains("0.95"), "score: {}", lines[1]);
+        assert!(lines[1].contains("libgen.li"), "source: {}", lines[1]);
+        // md5 must NOT appear in the output
+        assert!(
+            !s.contains("1df204c78842ffe549166ffcb984babc"),
+            "md5 must not be in output"
+        );
     }
 
     #[test]
@@ -189,12 +228,15 @@ mod tests {
             None,
             None,
             None,
+            0.0_f32,
+            None,
         );
         let s = format_candidate(2, &c);
         let lines: Vec<&str> = s.lines().collect();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0], "2. Unknown Book");
-        assert_eq!(lines[1], "  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        // Line 2 has only the score (0.00) and no extra fields.
+        assert!(lines[1].contains("0.00"), "score: {}", lines[1]);
     }
 
     #[test]
@@ -208,20 +250,47 @@ mod tests {
             None,
             Some(Format::Pdf),
             Some(500 * 1024),
+            0.75_f32,
+            None,
         );
         let s = format_candidate(3, &c);
         let lines: Vec<&str> = s.lines().collect();
-        assert!(lines[1].contains("2021"));
-        assert!(!lines[1].contains('p'), "no pages field should appear");
-        assert!(lines[1].contains("PDF"));
-        assert!(lines[1].contains("500 KB"));
+        // Line 1 has "PDF" from the format prefix.
+        assert!(lines[0].contains("PDF"), "line1: {}", lines[0]);
+        assert!(lines[1].contains("2021"), "year: {}", lines[1]);
+        assert!(
+            !lines[1].contains("pg"),
+            "no pages field should appear: {}",
+            lines[1]
+        );
+        assert!(lines[1].contains("500 KB"), "size: {}", lines[1]);
+        assert!(lines[1].contains("0.75"), "score: {}", lines[1]);
+    }
+
+    #[test]
+    fn format_candidate_no_format_extension() {
+        // When extension is None, no FMT prefix on line 1.
+        let c = make_candidate(
+            "Mystery Book",
+            &["Someone"],
+            "cccccccccccccccccccccccccccccccc",
+            None,
+            None,
+            None,
+            None,
+            0.5_f32,
+            None,
+        );
+        let s = format_candidate(4, &c);
+        let line1 = s.lines().next().unwrap();
+        assert_eq!(line1, "4. Mystery Book — Someone");
     }
 
     #[test]
     fn human_size_formatting() {
-        assert_eq!(super::human_size(2 * 1024 * 1024), "2.0 MB");
-        assert_eq!(super::human_size(512 * 1024), "512 KB");
-        assert_eq!(super::human_size(999), "999 B");
-        assert_eq!(super::human_size(1536 * 1024), "1.5 MB");
+        assert_eq!(human_size(2 * 1024 * 1024), "2.0 MB");
+        assert_eq!(human_size(512 * 1024), "512 KB");
+        assert_eq!(human_size(999), "999 B");
+        assert_eq!(human_size(1536 * 1024), "1.5 MB");
     }
 }
