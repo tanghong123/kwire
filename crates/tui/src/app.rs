@@ -5,7 +5,7 @@
 //! unit-testable because they take and return plain data.
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
-use libgen_engine::{AppSettings, ViewBook, ViewGroup, ViewModel};
+use libgen_engine::{AppSettings, ViewBook, ViewEvent, ViewGroup, ViewModel, ViewVariation};
 use ratatui::layout::Rect;
 
 use crate::intent::Intent;
@@ -363,6 +363,14 @@ pub enum Modal {
         diff: Vec<(String, String)>,
         /// Highlighted/scroll row within the diff list.
         selected: usize,
+    },
+    /// Generic snapshot popup: a centered sub-modal with a title and a list of
+    /// `(label, value)` rows.  Esc returns to `parent` (or closes if `None`).
+    Snapshot {
+        title: String,
+        lines: Vec<(String, String)>,
+        /// Modal to return to on Esc; `None` means close entirely.
+        parent: Option<Box<Modal>>,
     },
 }
 
@@ -825,21 +833,32 @@ impl AppState {
                         self.cmd_history_draft = String::new();
                         Intent::Redraw
                     }
-                    KeyCode::Enter => {
-                        if let Some(fb) = self.flat.get(self.selected) {
-                            if fb.book.discovery == "needs_selection" {
-                                Intent::OpenPicker {
-                                    flat_index: self.selected,
-                                }
-                            } else {
-                                Intent::OpenDetail {
-                                    flat_index: self.selected,
-                                }
+                    // #70 universal Enter: dispatch by current focus.
+                    KeyCode::Enter => match self.focus {
+                        // Activity pane: open a leg snapshot for the focused transfer.
+                        Focus::Activity => {
+                            if let Some(m) = self.build_leg_snapshot_modal() {
+                                self.modal = Some(m);
                             }
-                        } else {
                             Intent::Redraw
                         }
-                    }
+                        // List / Header: existing open-detail / open-picker behaviour.
+                        _ => {
+                            if let Some(fb) = self.flat.get(self.selected) {
+                                if fb.book.discovery == "needs_selection" {
+                                    Intent::OpenPicker {
+                                        flat_index: self.selected,
+                                    }
+                                } else {
+                                    Intent::OpenDetail {
+                                        flat_index: self.selected,
+                                    }
+                                }
+                            } else {
+                                Intent::Redraw
+                            }
+                        }
+                    },
                     KeyCode::Char('d') => Intent::OpenDetail {
                         flat_index: self.selected,
                     },
@@ -1077,6 +1096,23 @@ impl AppState {
     // -----------------------------------------------------------------------
 
     fn handle_modal_input(&mut self, ev: Event) -> Intent {
+        // Snapshot popup: Esc returns to the parent modal; all other keys are no-ops.
+        // Handled here (before the clone below) so we can take ownership of `parent`.
+        if matches!(&self.modal, Some(Modal::Snapshot { .. })) {
+            if let Event::Key(KeyEvent {
+                code: KeyCode::Esc, ..
+            }) = ev
+            {
+                let parent_modal = if let Some(Modal::Snapshot { parent, .. }) = self.modal.take() {
+                    parent.map(|b| *b)
+                } else {
+                    None
+                };
+                self.modal = parent_modal;
+            }
+            return Intent::Redraw;
+        }
+
         let modal = match &self.modal {
             Some(m) => m.clone(),
             None => return Intent::Redraw,
@@ -1320,6 +1356,51 @@ impl AppState {
                                 };
                                 self.modal = None;
                                 return intent;
+                            }
+                            Intent::Redraw
+                        }
+                        // #70 universal Enter: open a snapshot popup for the focused row.
+                        KeyCode::Enter => {
+                            let parent_detail = Modal::Detail {
+                                book_flat_index: flat_index,
+                                selected: sel,
+                                sub_focus: sf.clone(),
+                                history_selected: hist_sel,
+                            };
+                            if sf == DetailSubFocus::Variations {
+                                if let Some(fb) = self.flat.get(flat_index) {
+                                    if let Some(v) = fb.book.versions.get(sel) {
+                                        let lines = build_variation_snapshot_lines(v);
+                                        self.modal = Some(Modal::Snapshot {
+                                            title: format!(
+                                                " {} \u{00b7} {} ",
+                                                v.fmt,
+                                                &v.md5[..8.min(v.md5.len())]
+                                            ),
+                                            lines,
+                                            parent: Some(Box::new(parent_detail)),
+                                        });
+                                    }
+                                }
+                            } else {
+                                // DetailSubFocus::History
+                                if let Some(fb) = self.flat.get(flat_index) {
+                                    let n = fb.book.history.len();
+                                    if n > 0 {
+                                        // history is oldest-first; display is reversed
+                                        let real_idx = n
+                                            .saturating_sub(1)
+                                            .saturating_sub(hist_sel.min(n.saturating_sub(1)));
+                                        if let Some(ev) = fb.book.history.get(real_idx) {
+                                            let lines = build_history_snapshot_lines(ev);
+                                            self.modal = Some(Modal::Snapshot {
+                                                title: format!(" {} ", ev.kind),
+                                                lines,
+                                                parent: Some(Box::new(parent_detail)),
+                                            });
+                                        }
+                                    }
+                                }
                             }
                             Intent::Redraw
                         }
@@ -1599,6 +1680,11 @@ impl AppState {
                     _ => Intent::Redraw,
                 }
             }
+
+            // Snapshot is handled via the early-return at the top of this function
+            // (needs ownership of `parent`).  This arm is unreachable but required
+            // for exhaustiveness.
+            Modal::Snapshot { .. } => Intent::Redraw,
         }
     }
 
@@ -2130,6 +2216,59 @@ impl AppState {
         keys.get(self.activity_selected).map(|k| (*k).clone())
     }
 
+    /// Build a [`Modal::Snapshot`] for the Activity-pane leg at `activity_selected`.
+    ///
+    /// Mirrors the iteration order in `render_activity` so the index stays in sync.
+    /// Returns `None` when there are no active legs or the selection is out of range.
+    fn build_leg_snapshot_modal(&self) -> Option<Modal> {
+        // ViewModel path: host_groups sorted by host name (BTreeMap).
+        let mut host_groups: std::collections::BTreeMap<String, Vec<(&FlatBook, &ViewVariation)>> =
+            std::collections::BTreeMap::new();
+        for fb in &self.flat {
+            for v in &fb.book.versions {
+                if v.state == "downloading" {
+                    let host = v.host.as_deref().unwrap_or("unknown").to_string();
+                    host_groups.entry(host).or_default().push((fb, v));
+                }
+            }
+        }
+
+        let target = self.activity_selected;
+        let mut leg_idx = 0usize;
+
+        if !host_groups.is_empty() {
+            for (host, legs) in &host_groups {
+                for (fb, v) in legs {
+                    if leg_idx == target {
+                        let telemetry = self.transfers.get(&v.md5);
+                        let lines = build_leg_snapshot_lines(&fb.book.title, host, v, telemetry);
+                        return Some(Modal::Snapshot {
+                            title: format!(" {} \u{00b7} {} ", v.fmt, &v.md5[..8.min(v.md5.len())]),
+                            lines,
+                            parent: None,
+                        });
+                    }
+                    leg_idx += 1;
+                }
+            }
+        } else {
+            // Telemetry-only path: sorted by md5 (same order as focused_transfer_md5).
+            let mut keys: Vec<&String> = self.transfers.keys().collect();
+            keys.sort();
+            if let Some(md5) = keys.get(target) {
+                let t = &self.transfers[*md5];
+                let lines = build_transfer_snapshot_lines(t);
+                return Some(Modal::Snapshot {
+                    title: format!(" leg \u{00b7} {} ", &md5[..8.min(md5.len())]),
+                    lines,
+                    parent: None,
+                });
+            }
+        }
+
+        None
+    }
+
     /// Handle key events while in command-line mode (`:`).
     fn handle_command_input(&mut self, ev: Event) -> Intent {
         match ev {
@@ -2453,4 +2592,218 @@ pub struct StatusCounts {
     pub cannot: usize,
     pub in_progress: usize,
     pub done: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot content builders (called from on_input / handle_modal_input)
+// ---------------------------------------------------------------------------
+
+/// Build the `(label, value)` rows for a **variation snapshot** popup.
+pub fn build_variation_snapshot_lines(v: &ViewVariation) -> Vec<(String, String)> {
+    let dash = "\u{2014}".to_string();
+    let mut lines = vec![
+        ("Title".to_string(), v.title.clone()),
+        (
+            "Author".to_string(),
+            if v.author.is_empty() {
+                dash.clone()
+            } else {
+                v.author.clone()
+            },
+        ),
+        ("Format".to_string(), v.fmt.clone()),
+        (
+            "Size".to_string(),
+            if v.size > 0 {
+                format!("{} MB", v.size)
+            } else {
+                dash.clone()
+            },
+        ),
+        (
+            "Year".to_string(),
+            v.year
+                .map(|y| y.to_string())
+                .unwrap_or_else(|| dash.clone()),
+        ),
+        (
+            "Pages".to_string(),
+            v.pages
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| dash.clone()),
+        ),
+        (
+            "Publisher".to_string(),
+            if v.publisher.is_empty() {
+                dash.clone()
+            } else {
+                v.publisher.clone()
+            },
+        ),
+        (
+            "Language".to_string(),
+            if v.language.is_empty() {
+                dash.clone()
+            } else {
+                v.language.clone()
+            },
+        ),
+        (
+            "Source host".to_string(),
+            v.host.as_deref().unwrap_or("\u{2014}").to_string(),
+        ),
+        ("MD5".to_string(), v.md5.clone()),
+        ("Match score".to_string(), format!("{:.2}", v.score)),
+        ("State".to_string(), v.state.clone()),
+    ];
+    if v.state == "done" {
+        if let Some(path) = &v.output_path {
+            lines.push(("Output path".to_string(), path.clone()));
+        }
+    }
+    lines
+}
+
+/// Build the `(label, value)` rows for a **history-event snapshot** popup.
+pub fn build_history_snapshot_lines(ev: &ViewEvent) -> Vec<(String, String)> {
+    let secs = ev.at_ms / 1000;
+    let time_str = format!(
+        "{:02}:{:02}:{:02}",
+        (secs / 3600) % 24,
+        (secs / 60) % 60,
+        secs % 60
+    );
+    let mut lines = vec![
+        ("Timestamp".to_string(), time_str),
+        ("Kind".to_string(), ev.kind.clone()),
+    ];
+    // Wrap detail at ~46 chars so it fits inside the popup's value column.
+    let wrapped = snap_wrap_text(&ev.detail, 46);
+    for (i, chunk) in wrapped.iter().enumerate() {
+        let label = if i == 0 {
+            "Detail".to_string()
+        } else {
+            String::new()
+        };
+        lines.push((label, chunk.clone()));
+    }
+    lines
+}
+
+/// Build `(label, value)` rows for a **leg snapshot** (ViewModel data + optional
+/// live telemetry).
+fn build_leg_snapshot_lines(
+    book_title: &str,
+    host: &str,
+    v: &ViewVariation,
+    telemetry: Option<&ActiveTransfer>,
+) -> Vec<(String, String)> {
+    let mut lines = vec![
+        ("Book".to_string(), book_title.to_string()),
+        ("Host".to_string(), host.to_string()),
+        ("MD5".to_string(), v.md5.clone()),
+        ("Format".to_string(), v.fmt.clone()),
+        ("State".to_string(), v.state.clone()),
+        ("Progress".to_string(), format!("{}%", v.progress)),
+    ];
+    if let Some(t) = telemetry {
+        let bytes_str = match (t.bytes_done, t.total_bytes) {
+            (done, Some(total)) => {
+                format!("{} / {}", snap_fmt_bytes(done), snap_fmt_bytes(total))
+            }
+            (done, None) => snap_fmt_bytes(done),
+        };
+        lines.push(("Bytes".to_string(), bytes_str));
+        if let Some(speed) = t.speed_bps {
+            lines.push(("Speed".to_string(), snap_fmt_speed(speed)));
+        }
+        if let Some(eta) = t.eta_secs {
+            lines.push(("ETA".to_string(), format!("{}s", eta)));
+        }
+    } else {
+        if let Some(db) = v.downloaded_bytes {
+            let bytes_str = match v.total_bytes {
+                Some(total) => format!("{} / {}", snap_fmt_bytes(db), snap_fmt_bytes(total)),
+                None => snap_fmt_bytes(db),
+            };
+            lines.push(("Bytes".to_string(), bytes_str));
+        }
+        if let Some(eta) = v.eta_secs {
+            lines.push(("ETA".to_string(), format!("{}s", eta)));
+        }
+    }
+    if let Some(err) = &v.last_error {
+        lines.push(("Error".to_string(), err.clone()));
+    }
+    lines
+}
+
+/// Build `(label, value)` rows for a **leg snapshot** using telemetry-only data
+/// (when the ViewModel has no downloading versions).
+fn build_transfer_snapshot_lines(t: &ActiveTransfer) -> Vec<(String, String)> {
+    let mut lines = vec![
+        ("Book".to_string(), t.title.clone()),
+        ("Host".to_string(), t.host.clone()),
+        ("MD5".to_string(), t.md5.clone()),
+        ("State".to_string(), "downloading".to_string()),
+    ];
+    let bytes_str = match (t.bytes_done, t.total_bytes) {
+        (done, Some(total)) => format!("{} / {}", snap_fmt_bytes(done), snap_fmt_bytes(total)),
+        (done, None) => snap_fmt_bytes(done),
+    };
+    lines.push(("Bytes".to_string(), bytes_str));
+    if let Some(speed) = t.speed_bps {
+        lines.push(("Speed".to_string(), snap_fmt_speed(speed)));
+    }
+    if let Some(eta) = t.eta_secs {
+        lines.push(("ETA".to_string(), format!("{}s", eta)));
+    }
+    lines
+}
+
+/// Word-wrap `text` to at most `width` chars per line.
+fn snap_wrap_text(text: &str, width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.len() + 1 + word.len() <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            out.push(std::mem::take(&mut current));
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+fn snap_fmt_bytes(b: u64) -> String {
+    if b >= 1_000_000 {
+        format!("{:.1} MB", b as f64 / 1_000_000.0)
+    } else if b >= 1_000 {
+        format!("{} KB", b / 1_000)
+    } else {
+        format!("{} B", b)
+    }
+}
+
+fn snap_fmt_speed(bps: u64) -> String {
+    if bps >= 1_000_000 {
+        format!("{:.1} MB/s", bps as f64 / 1_000_000.0)
+    } else if bps >= 1_000 {
+        format!("{} KB/s", bps / 1_000)
+    } else {
+        format!("{} B/s", bps)
+    }
 }

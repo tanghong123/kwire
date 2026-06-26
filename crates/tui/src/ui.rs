@@ -150,6 +150,9 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
                 render_confirm_book_remove_modal(frame, app, book_flat_index)
             }
             Modal::Reorganize { diff, selected } => render_reorganize_modal(frame, &diff, selected),
+            Modal::Snapshot { title, lines, .. } => {
+                render_snapshot_modal(frame, &title, &lines);
+            }
         }
     }
 }
@@ -2495,4 +2498,71 @@ fn make_key_line<'a>(key: &'a str, action: &'a str) -> Line<'a> {
         Span::styled(format!("{:<10}", key), Style::default().fg(C_DONE)),
         Span::styled(action, style_normal()),
     ])
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot popup (variation / history-event / leg)
+// ---------------------------------------------------------------------------
+
+/// Render a generic label/value snapshot popup.
+///
+/// Layout (inside the rounded border):
+/// ```
+/// 2-cell margin ─┐
+///   Label        Value
+///   ...
+///   ──────────────  ← dim rule
+///   esc  close      ← hint
+/// └─ 2-cell margin
+/// ```
+fn render_snapshot_modal(frame: &mut Frame, title: &str, lines: &[(String, String)]) {
+    let n = lines.len() as u16;
+    // border(2) + top-margin(1) + content rows + rule(1) + hint(1) + bottom-margin(1)
+    let height = (n + 6).max(8).min(28);
+    let width = 72u16;
+    let area = centered_rect(width, height, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(style_dim())
+        .title(Span::styled(title, style_dim()))
+        .style(style_normal());
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+
+    // Layout: content rows (greedy) + dim rule (1) + hint (1).
+    let split = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(padded);
+
+    // Label / value rows.
+    let content_lines: Vec<Line> = lines
+        .iter()
+        .map(|(label, value)| {
+            Line::from(vec![
+                Span::styled(format!("{:<18}", label), style_dim()),
+                Span::styled(value.clone(), style_normal()),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(content_lines), split[0]);
+
+    // Dim horizontal rule above hint.
+    render_rule(frame, split[1]);
+
+    // Hint row.
+    frame.render_widget(
+        Paragraph::new(Span::styled("esc  close", style_hint())),
+        split[2],
+    );
 }

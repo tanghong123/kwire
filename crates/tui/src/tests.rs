@@ -12,7 +12,7 @@ mod tests {
     };
     use libgen_core::model::{BookInput, BookRequest, DownloadList, Group};
     use libgen_engine::viewmodel::build_with_id;
-    use libgen_engine::{ViewBook, ViewVariation};
+    use libgen_engine::{ViewBook, ViewEvent, ViewVariation};
     use ratatui::{backend::TestBackend, Terminal};
 
     use crate::app::{
@@ -3443,6 +3443,275 @@ mod tests {
                 "The Wonderful Wizard of Oz".to_string(),
                 "The Marvelous Land of Oz".to_string(),
             ]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Pass 3a — #70 universal Enter: snapshot popup open / close / content
+    // -----------------------------------------------------------------------
+
+    /// Enter in Detail/Variations opens a Snapshot with variation data.
+    #[test]
+    fn enter_in_detail_variations_opens_variation_snapshot() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Redraw);
+        match &app.modal {
+            Some(Modal::Snapshot { lines, parent, .. }) => {
+                assert!(
+                    lines.iter().any(|(l, _)| l == "MD5"),
+                    "variation snapshot must contain MD5 field"
+                );
+                assert!(
+                    lines.iter().any(|(l, _)| l == "Match score"),
+                    "variation snapshot must contain Match score field"
+                );
+                assert!(
+                    lines.iter().any(|(l, _)| l == "Format"),
+                    "variation snapshot must contain Format field"
+                );
+                assert!(
+                    lines.iter().any(|(l, _)| l == "State"),
+                    "variation snapshot must contain State field"
+                );
+                assert!(
+                    matches!(parent.as_deref(), Some(Modal::Detail { .. })),
+                    "Snapshot parent must be the Detail modal"
+                );
+            }
+            other => panic!("expected Snapshot modal, got {:?}", other),
+        }
+    }
+
+    /// Esc from Snapshot (opened from Detail) returns to the Detail modal.
+    #[test]
+    fn snapshot_esc_returns_to_detail_modal() {
+        use crate::app::DetailSubFocus;
+        let detail = Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        };
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Snapshot {
+            title: " test ".to_string(),
+            lines: vec![("Label".to_string(), "Value".to_string())],
+            parent: Some(Box::new(detail.clone())),
+        });
+        let intent = app.on_input(key(KeyCode::Esc));
+        assert_eq!(intent, Intent::Redraw);
+        assert_eq!(
+            app.modal,
+            Some(detail),
+            "Esc from Snapshot must return to parent Detail modal"
+        );
+    }
+
+    /// Other keys while Snapshot is open are no-ops (Redraw, modal stays).
+    #[test]
+    fn snapshot_non_esc_keys_are_noop() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Snapshot {
+            title: " t ".to_string(),
+            lines: vec![],
+            parent: None,
+        });
+        let intent = app.on_input(key(KeyCode::Down));
+        assert_eq!(intent, Intent::Redraw);
+        assert!(
+            matches!(app.modal, Some(Modal::Snapshot { .. })),
+            "non-Esc keys must keep the Snapshot open"
+        );
+    }
+
+    /// Enter in Detail/History (with an event) opens a Snapshot with history data.
+    /// History popup cannot be driven live (no history in the seeded DB), so this
+    /// is covered by injecting a ViewEvent directly into the flat list.
+    #[test]
+    fn enter_in_detail_history_opens_history_snapshot() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        // Inject a history event into the first flat book.
+        app.flat[0].book.history = vec![ViewEvent {
+            at_ms: 1_000_000,
+            md5: None,
+            fmt: None,
+            kind: "queued".to_string(),
+            detail: "Book was queued for discovery".to_string(),
+        }];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::History,
+            history_selected: 0,
+        });
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Redraw);
+        match &app.modal {
+            Some(Modal::Snapshot {
+                title,
+                lines,
+                parent,
+            }) => {
+                assert!(
+                    title.contains("queued"),
+                    "history snapshot title must contain event kind"
+                );
+                assert!(
+                    lines.iter().any(|(l, _)| l == "Timestamp"),
+                    "history snapshot must contain Timestamp field"
+                );
+                assert!(
+                    lines.iter().any(|(l, _)| l == "Kind"),
+                    "history snapshot must contain Kind field"
+                );
+                assert!(
+                    lines
+                        .iter()
+                        .any(|(l, v)| l == "Detail" && v.contains("queued")),
+                    "history snapshot must contain Detail field with event text"
+                );
+                assert!(
+                    matches!(parent.as_deref(), Some(Modal::Detail { .. })),
+                    "Snapshot parent must be the Detail modal"
+                );
+            }
+            other => panic!("expected Snapshot modal, got {:?}", other),
+        }
+    }
+
+    /// Enter in Detail/History when history is empty is a no-op.
+    #[test]
+    fn enter_in_detail_history_with_no_history_is_noop() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // no history events
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::History,
+            history_selected: 0,
+        });
+        app.on_input(key(KeyCode::Enter));
+        // Modal must stay as Detail (no snapshot opened for empty history).
+        assert!(
+            matches!(app.modal, Some(Modal::Detail { .. })),
+            "Enter in History with no events must not open Snapshot"
+        );
+    }
+
+    /// Enter in Activity with a downloading leg opens a Snapshot with leg data.
+    /// Leg snapshot cannot be driven live (no active downloads in the seeded DB),
+    /// so we inject a downloading FlatBook directly.
+    #[test]
+    fn enter_in_activity_with_downloading_opens_leg_snapshot() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        // Replace flat with a single downloading book.
+        app.flat = vec![make_downloading_flat_book("My Downloading Book", 0, 0)];
+        app.focus = Focus::Activity;
+        app.activity_selected = 0;
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Redraw);
+        match &app.modal {
+            Some(Modal::Snapshot { lines, parent, .. }) => {
+                assert!(
+                    lines
+                        .iter()
+                        .any(|(l, v)| l == "Book" && v == "My Downloading Book"),
+                    "leg snapshot must contain book title"
+                );
+                assert!(
+                    lines.iter().any(|(l, _)| l == "Host"),
+                    "leg snapshot must contain Host field"
+                );
+                assert!(
+                    lines.iter().any(|(l, _)| l == "MD5"),
+                    "leg snapshot must contain MD5 field"
+                );
+                assert!(
+                    lines.iter().any(|(l, _)| l == "Progress"),
+                    "leg snapshot must contain Progress field"
+                );
+                assert!(
+                    parent.is_none(),
+                    "leg snapshot from Activity must have no parent (Esc closes entirely)"
+                );
+            }
+            other => panic!("expected Snapshot modal, got {:?}", other),
+        }
+    }
+
+    /// Esc from a leg snapshot (no parent) closes the modal entirely.
+    #[test]
+    fn snapshot_esc_with_no_parent_closes_modal() {
+        let mut app = AppState::new();
+        app.modal = Some(Modal::Snapshot {
+            title: " leg ".to_string(),
+            lines: vec![("Host".to_string(), "libgen.li".to_string())],
+            parent: None,
+        });
+        let intent = app.on_input(key(KeyCode::Esc));
+        assert_eq!(intent, Intent::Redraw);
+        assert!(
+            app.modal.is_none(),
+            "Esc from Snapshot with no parent must close the modal"
+        );
+    }
+
+    /// Enter in Activity with no active transfers is a no-op.
+    #[test]
+    fn enter_in_activity_with_no_transfers_is_noop() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // no downloading versions
+        app.focus = Focus::Activity;
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Redraw);
+        assert!(
+            app.modal.is_none(),
+            "Enter in Activity with no transfers must not open any modal"
+        );
+    }
+
+    /// Render test: snapshot modal renders without panic and shows content + hint.
+    #[test]
+    fn render_snapshot_modal_shows_content_and_hint() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Snapshot {
+            title: " epub \u{00b7} abcd1234 ".to_string(),
+            lines: vec![
+                ("Title".to_string(), "Treasure Island".to_string()),
+                ("Author".to_string(), "R. L. Stevenson".to_string()),
+                ("MD5".to_string(), "a".repeat(32)),
+                ("Match score".to_string(), "0.90".to_string()),
+                ("State".to_string(), "done".to_string()),
+            ],
+            parent: None,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains("Treasure Island"),
+            "snapshot must render the book title value"
+        );
+        assert!(
+            content.contains("esc"),
+            "snapshot must render the 'esc close' hint"
         );
     }
 }
