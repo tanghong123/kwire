@@ -2105,4 +2105,214 @@ mod tests {
             "rendered output must contain the edit buffer '0.90'"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // #45 — :pause / :start / :start-all command parsing (pure reducer side)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn command_buf_pause_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "pause".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Command("pause".into()));
+    }
+
+    #[test]
+    fn command_buf_start_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "start".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Command("start".into()));
+    }
+
+    #[test]
+    fn command_buf_resume_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "resume".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Command("resume".into()));
+    }
+
+    #[test]
+    fn command_buf_start_all_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "start-all".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Command("start-all".into()));
+    }
+
+    #[test]
+    fn command_buf_resume_all_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "resume-all".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Command("resume-all".into()));
+    }
+
+    // -----------------------------------------------------------------------
+    // #48 — Confirm modal (delete-list) state machine
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn confirm_modal_y_emits_confirm_delete_intent() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Confirm {
+            title: "Test List".into(),
+            n_books: 2,
+            target_id: "list42".into(),
+        });
+        let intent = app.on_input(key(KeyCode::Char('y')));
+        assert_eq!(
+            intent,
+            Intent::ConfirmDelete {
+                id: "list42".into()
+            },
+            "y in Confirm modal must emit ConfirmDelete"
+        );
+        assert!(app.modal.is_none(), "Confirm modal must close after y");
+    }
+
+    #[test]
+    fn confirm_modal_n_closes_without_delete() {
+        let mut app = AppState::new();
+        app.modal = Some(Modal::Confirm {
+            title: "My List".into(),
+            n_books: 5,
+            target_id: "list7".into(),
+        });
+        let intent = app.on_input(key(KeyCode::Char('n')));
+        assert_eq!(intent, Intent::Redraw, "n must not emit delete");
+        assert!(app.modal.is_none(), "modal must close after n");
+    }
+
+    #[test]
+    fn confirm_modal_esc_closes_without_delete() {
+        let mut app = AppState::new();
+        app.modal = Some(Modal::Confirm {
+            title: "My List".into(),
+            n_books: 3,
+            target_id: "list9".into(),
+        });
+        let intent = app.on_input(key(KeyCode::Esc));
+        assert_eq!(intent, Intent::Redraw, "Esc must not emit delete");
+        assert!(app.modal.is_none(), "modal must close after Esc");
+    }
+
+    #[test]
+    fn render_confirm_modal_does_not_panic() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Confirm {
+            title: "Test List".into(),
+            n_books: 2,
+            target_id: "list1".into(),
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains("Test List"),
+            "confirm modal must show the list title"
+        );
+        assert!(
+            content.contains("2 book"),
+            "confirm modal must show the book count"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #53 — :add-md5 / :refresh-mirrors / :cleanup / :delete command parsing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn command_add_md5_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        let cmd = "add-md5 aabbccddeeff00112233445566778899";
+        for c in cmd.chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(
+            intent,
+            Intent::Command("add-md5 aabbccddeeff00112233445566778899".into())
+        );
+    }
+
+    #[test]
+    fn command_refresh_mirrors_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "refresh-mirrors".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Command("refresh-mirrors".into()));
+    }
+
+    #[test]
+    fn command_cleanup_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "cleanup".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Command("cleanup".into()));
+    }
+
+    #[test]
+    fn command_delete_emits_command_intent() {
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':')));
+        for c in "delete".chars() {
+            app.on_input(key(KeyCode::Char(c)));
+        }
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(intent, Intent::Command("delete".into()));
+    }
+
+    #[test]
+    fn new_commands_appear_in_tab_completion() {
+        // All new commands must be discoverable via Tab-completion.
+        let mut app = AppState::new();
+        app.on_input(key(KeyCode::Char(':'))); // enter command mode, buf = ""
+        app.on_input(key(KeyCode::Tab)); // open wildmenu with all commands
+
+        let new_cmds = &[
+            "pause",
+            "start",
+            "resume",
+            "start-all",
+            "resume-all",
+            "delete",
+            "add-md5",
+            "refresh-mirrors",
+            "cleanup",
+        ];
+        for &cmd in new_cmds {
+            assert!(
+                app.completion_candidates.iter().any(|c| c == cmd),
+                "command '{cmd}' must appear in Tab-completion candidates"
+            );
+        }
+    }
 }

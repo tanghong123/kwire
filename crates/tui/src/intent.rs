@@ -68,4 +68,7 @@ pub enum Intent {
 
     /// Close the Settings modal without persisting any changes.
     DiscardSettings,
+
+    /// The user confirmed the delete-list modal; delete list with this id.
+    ConfirmDelete { id: String },
 }
