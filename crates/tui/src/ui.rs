@@ -1,12 +1,17 @@
 //! ratatui render pass — derives everything from [`AppState`].
 //!
-//! The layout follows §4 exactly:
+//! The layout (top → bottom):
 //! ```
 //! Length(1)       — list strip
 //! Length(1)       — status-filter row
+//! Length(1)       — dim ─── separator rule
 //! Min(8)          — book Table
+//! Length(1)       — dim ─── separator rule
 //! Length(N)       — docked Activity pane  (N=1 collapsed, N=5 expanded)
-//! Length(1)       — key-hint bar / command line
+//! Length(1)       — dim ─── separator rule  (always present)
+//! [ Length(1)     — :command-line row         (only when : active) ]
+//! [ Length(1)     — dim ─── separator rule    (only when : active) ]
+//! Length(1)       — key-hint bar
 //! ```
 
 use std::collections::BTreeMap;
@@ -50,31 +55,55 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
         ACTIVITY_COLLAPSED_H
     };
 
-    let chunks = Layout::vertical([
-        Constraint::Length(1),          // 0 list strip
-        Constraint::Length(1),          // 1 status-filter row
-        Constraint::Min(8),             // 2 book Table
-        Constraint::Length(activity_h), // 3 docked Activity pane
-        Constraint::Length(1),          // 4 hint bar / command line
-    ])
-    .split(frame.area());
+    let cmd_active = app.command_buf.is_some();
 
-    // Store panel rects.
+    // Build layout constraints dynamically.  When `:` is active the
+    // command-line gets its own row plus an extra rule below it.
+    let mut constraints = vec![
+        Constraint::Length(1),          // 0  list strip
+        Constraint::Length(1),          // 1  status-filter row
+        Constraint::Length(1),          // 2  rule — header → list
+        Constraint::Min(8),             // 3  book table
+        Constraint::Length(1),          // 4  rule — list → activity
+        Constraint::Length(activity_h), // 5  docked activity pane
+        Constraint::Length(1),          // 6  rule — always present before bottom
+    ];
+    if cmd_active {
+        constraints.push(Constraint::Length(1)); // 7  :command-line row
+        constraints.push(Constraint::Length(1)); // 8  rule — cmd-line → hint
+    }
+    constraints.push(Constraint::Length(1)); // 7/9  hint bar
+
+    let chunks = Layout::vertical(constraints).split(frame.area());
+    let hint_idx = chunks.len() - 1;
+
+    // Store panel rects for mouse hit-testing.
     app.last_rects.list_strip = chunks[0];
     app.last_rects.filter_row = chunks[1];
-    app.last_rects.book_table = chunks[2];
-    app.last_rects.activity = chunks[3];
-    app.last_rects.hint_bar = chunks[4];
+    app.last_rects.book_table = chunks[3];
+    app.last_rects.activity = chunks[5];
+    app.last_rects.hint_bar = chunks[hint_idx];
 
     render_list_strip(frame, app, chunks[0]);
     render_filter_row(frame, app, chunks[1]);
-    render_book_table(frame, app, chunks[2]);
-    render_activity(frame, app, chunks[3]);
-    render_hint_bar(frame, app, chunks[4]);
+    render_rule(frame, chunks[2]);
+    render_book_table(frame, app, chunks[3]);
+    render_rule(frame, chunks[4]);
+    render_activity(frame, app, chunks[5]);
+    render_rule(frame, chunks[6]);
 
-    // Wildmenu: one line directly above the command-line hint bar.
-    if !app.completion_candidates.is_empty() && chunks[4].y > 0 {
-        render_wildmenu(frame, app, chunks[4]);
+    if cmd_active {
+        render_command_line(frame, app, chunks[7]);
+        render_rule(frame, chunks[8]);
+        render_hint_bar(frame, app, chunks[9]);
+    } else {
+        render_hint_bar(frame, app, chunks[7]);
+    }
+
+    // Wildmenu: one line directly above the command-line (cmd mode) or
+    // hint bar (normal mode).  In both cases that is chunks[7].
+    if !app.completion_candidates.is_empty() && chunks[7].y > 0 {
+        render_wildmenu(frame, app, chunks[7]);
     }
 
     // Overlay modal if one is open.
@@ -326,6 +355,16 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
             _ => {}
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rule helper — dim full-width single-line separator
+// ---------------------------------------------------------------------------
+
+/// Render a dim horizontal rule (`─` repeated to fill `area.width`) into `area`.
+fn render_rule(frame: &mut Frame, area: Rect) {
+    let line = "\u{2500}".repeat(area.width as usize);
+    frame.render_widget(Paragraph::new(Span::styled(line, style_dim())), area);
 }
 
 // ---------------------------------------------------------------------------
@@ -955,17 +994,30 @@ fn render_activity(frame: &mut Frame, app: &AppState, area: Rect) {
 }
 
 // ---------------------------------------------------------------------------
-// 4  Hint bar / command line
+// 4  Command-line row (only rendered when : is active)
 // ---------------------------------------------------------------------------
 
-fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
+fn render_command_line(frame: &mut Frame, app: &AppState, area: Rect) {
     let content = if let Some(ref buf) = app.command_buf {
         Line::from(vec![
             Span::styled(":", style_hint()),
             Span::styled(buf.as_str(), style_hint()),
-            Span::styled("\u{2588}", Style::default().fg(C_TEXT)), // cursor
+            Span::styled("\u{2588}", Style::default().fg(C_TEXT)), // block cursor
         ])
-    } else if let Some(ref msg) = app.status_msg {
+    } else {
+        Line::default()
+    };
+    frame.render_widget(Paragraph::new(content).style(style_hint()), area);
+}
+
+// ---------------------------------------------------------------------------
+// 5  Hint bar (always the very last row — shows hint keys or status message)
+// ---------------------------------------------------------------------------
+
+fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
+    // The command-line input is rendered in its own row by render_command_line;
+    // this bar shows a transient status message or the focus-appropriate hint keys.
+    let content = if let Some(ref msg) = app.status_msg {
         // Transient status message — shown until the next keypress.
         Line::from(Span::styled(msg.as_str(), Style::default().fg(C_BRIGHT)))
     } else {

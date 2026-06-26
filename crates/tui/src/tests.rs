@@ -1531,8 +1531,8 @@ mod tests {
         // Do a render to populate last_rects.book_rows.
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
 
-        // The first book row should be at approximately y=4 in our layout:
-        // row 0=list strip, 1=filter, 2=border, 3=header, 4=first data row.
+        // The first book row is at approximately y=4 in our layout:
+        // row 0=list strip, 1=filter, 2=rule, 3=first book-table row.
         // The book_rows rects are stored during render_book_table.
         // Click on the first book row.
         if let Some((rect, _)) = app.last_rects.book_rows.first().cloned() {
