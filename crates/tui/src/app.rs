@@ -518,6 +518,18 @@ pub struct AppState {
 
     /// Index into `all_lists` for the currently displayed list.
     pub active_list_idx: usize,
+
+    // ── Marquee scroll state (Detail modal · Title·Author column) ─────────────
+    /// Character offset into the selected variation's "Title · Author" string.
+    /// The rendered text starts at this offset and is clipped to the column width.
+    pub marquee_offset: usize,
+    /// `true` = scrolling forward (revealing the tail); `false` = scrolling back.
+    pub marquee_forward: bool,
+    /// Countdown (in ticks) for the pause held at each end of the ping-pong.
+    pub marquee_pause: u8,
+    /// The variation-selection index that was active when the marquee was last
+    /// reset.  A change here resets offset + direction.
+    pub marquee_detail_sel: usize,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -558,6 +570,10 @@ impl AppState {
             cmd_history_draft: String::new(),
             all_lists: Vec::new(),
             active_list_idx: 0,
+            marquee_offset: 0,
+            marquee_forward: true,
+            marquee_pause: 0,
+            marquee_detail_sel: 0,
         }
     }
 
@@ -590,6 +606,56 @@ impl AppState {
             self.status_msg = Some("Mouse capture: ON  (Shift/Option-drag for text select)".into());
         } else {
             self.status_msg = Some("Mouse capture: OFF  (re-enable with :mouse)".into());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Marquee helpers (Detail modal · Title·Author ping-pong scroll)
+    // -----------------------------------------------------------------------
+
+    /// Advance the marquee by one tick for the Detail modal's Title·Author field.
+    ///
+    /// `text_char_len` — Unicode character count of the full "Title · Author" string.
+    /// `col_w`         — Approximate terminal-cell width available for the column.
+    ///
+    /// Must be called once per render tick while the Detail modal is open.
+    pub fn advance_marquee(&mut self, text_char_len: usize, col_w: usize) {
+        if text_char_len <= col_w {
+            // Text fits: keep the offset at zero.
+            self.marquee_offset = 0;
+            self.marquee_forward = true;
+            self.marquee_pause = 0;
+            return;
+        }
+        let max_offset = text_char_len.saturating_sub(col_w);
+        if self.marquee_pause > 0 {
+            self.marquee_pause -= 1;
+            return;
+        }
+        if self.marquee_forward {
+            self.marquee_offset = (self.marquee_offset + 1).min(max_offset);
+            if self.marquee_offset >= max_offset {
+                self.marquee_forward = false;
+                self.marquee_pause = 8; // ~960 ms pause at the end
+            }
+        } else if self.marquee_offset == 0 {
+            self.marquee_forward = true;
+            self.marquee_pause = 8; // ~960 ms pause at the start
+        } else {
+            self.marquee_offset -= 1;
+        }
+    }
+
+    /// Reset the marquee when the variation selection changes.
+    ///
+    /// Call at the start of each Detail-modal render with the current
+    /// `detail_selected` index.  A change resets offset, direction, and pause.
+    pub fn reset_marquee_if_selection_changed(&mut self, new_sel: usize) {
+        if new_sel != self.marquee_detail_sel {
+            self.marquee_offset = 0;
+            self.marquee_forward = true;
+            self.marquee_pause = 0;
+            self.marquee_detail_sel = new_sel;
         }
     }
 

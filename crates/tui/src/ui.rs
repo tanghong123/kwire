@@ -9,6 +9,7 @@
 //! Length(1)       — dim ─── separator rule
 //! Length(N)       — docked Activity pane  (N=1 collapsed, N=5 expanded)
 //! Length(1)       — dim ─── separator rule  (always present)
+//! [ Length(1)     — WILDMENU row             (only when : active + wildmenu open) ]
 //! [ Length(1)     — :command-line row         (only when : active) ]
 //! [ Length(1)     — dim ─── separator rule    (only when : active) ]
 //! Length(1)       — key-hint bar
@@ -56,9 +57,14 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
     };
 
     let cmd_active = app.command_buf.is_some();
+    // When `:` is active and the wildmenu is open it gets its own row in the
+    // layout, sitting between the rule[6] and the command-line row.
+    let wildmenu_in_layout = cmd_active && !app.completion_candidates.is_empty();
 
     // Build layout constraints dynamically.  When `:` is active the
     // command-line gets its own row plus an extra rule below it.
+    // When the wildmenu is also open it inserts one more row above the
+    // command-line so it never overwrites the dim rule.
     let mut constraints = vec![
         Constraint::Length(1),          // 0  list strip
         Constraint::Length(1),          // 1  status-filter row
@@ -69,10 +75,13 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
         Constraint::Length(1),          // 6  rule — always present before bottom
     ];
     if cmd_active {
-        constraints.push(Constraint::Length(1)); // 7  :command-line row
-        constraints.push(Constraint::Length(1)); // 8  rule — cmd-line → hint
+        if wildmenu_in_layout {
+            constraints.push(Constraint::Length(1)); // 7  WILDMENU row
+        }
+        constraints.push(Constraint::Length(1)); // 7/8  :command-line row
+        constraints.push(Constraint::Length(1)); // 8/9  rule — cmd-line → hint
     }
-    constraints.push(Constraint::Length(1)); // 7/9  hint bar
+    constraints.push(Constraint::Length(1)); // hint bar (always last)
 
     let chunks = Layout::vertical(constraints).split(frame.area());
     let hint_idx = chunks.len() - 1;
@@ -93,18 +102,17 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
     render_rule(frame, chunks[6]);
 
     if cmd_active {
-        render_command_line(frame, app, chunks[7]);
-        render_rule(frame, chunks[8]);
-        render_hint_bar(frame, app, chunks[9]);
-    } else {
-        render_hint_bar(frame, app, chunks[7]);
+        if wildmenu_in_layout {
+            // Wildmenu gets its own allocated row; the dim rule[6] stays intact.
+            render_wildmenu(frame, app, chunks[7]);
+            render_command_line(frame, app, chunks[8]);
+            render_rule(frame, chunks[9]);
+        } else {
+            render_command_line(frame, app, chunks[7]);
+            render_rule(frame, chunks[8]);
+        }
     }
-
-    // Wildmenu: one line directly above the command-line (cmd mode) or
-    // hint bar (normal mode).  In both cases that is chunks[7].
-    if !app.completion_candidates.is_empty() && chunks[7].y > 0 {
-        render_wildmenu(frame, app, chunks[7]);
-    }
+    render_hint_bar(frame, app, chunks[hint_idx]);
 
     // Overlay modal if one is open.
     if let Some(modal) = app.modal.clone() {
@@ -344,9 +352,14 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
         outer[1],
     );
 
-    // Wildmenu: one line above the command-input box.
+    // Wildmenu: one line above the command-input box (empty screen has no
+    // separate layout row for it, so we paint directly above the box).
     if !app.completion_candidates.is_empty() && outer[1].y > 0 {
-        render_wildmenu(frame, app, outer[1]);
+        render_wildmenu(
+            frame,
+            app,
+            Rect::new(outer[1].x, outer[1].y - 1, outer[1].width, 1),
+        );
     }
 
     // Overlay modal (e.g. Help opened from empty state).
@@ -1271,7 +1284,8 @@ fn render_picker_modal(
     book_flat_index: usize,
     picker_selected: usize,
 ) {
-    let area = centered_rect(96, 26, frame.area());
+    // #72: widen to ~80% of 132 cols.
+    let area = centered_rect(105, 26, frame.area());
     frame.render_widget(Clear, area);
 
     let Some(fb) = app.flat.get(book_flat_index) else {
@@ -1455,16 +1469,20 @@ fn render_picker_modal(
 
 fn render_detail_modal(
     frame: &mut Frame,
-    app: &AppState,
+    app: &mut AppState,
     book_flat_index: usize,
     detail_selected: usize,
     sub_focus: &DetailSubFocus,
     history_selected: usize,
 ) {
-    let area = centered_rect(92, 30, frame.area());
+    // #62: widen to ~80% of 132 cols; reset marquee if variation selection changed.
+    app.reset_marquee_if_selection_changed(detail_selected);
+    let area = centered_rect(105, 30, frame.area());
     frame.render_widget(Clear, area);
 
-    let Some(fb) = app.flat.get(book_flat_index) else {
+    // Clone so we can mutably borrow `app` (for marquee) while still
+    // holding the book data.  FlatBook derives Clone.
+    let Some(fb) = app.flat.get(book_flat_index).cloned() else {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -1489,6 +1507,30 @@ fn render_detail_modal(
         horizontal: 2,
         vertical: 1,
     });
+
+    // #62 Marquee: compute an approximate column width for "Title · Author"
+    // so advance_marquee knows when the text overflows.
+    // Fixed cols: check(2) + Fmt(6) + Size(8) + Src(10) + Match(6) + Progress(9) = 41
+    // Min(14) State also eats space; leave that share (14) for the estimate.
+    let title_col_w = (padded.width as usize).saturating_sub(41 + 14).max(20);
+
+    // Compute the selected variation's full "Title · Author" string now, so we
+    // can advance the marquee before the row-builder loop below.
+    let sel_title_author: String = fb
+        .book
+        .versions
+        .get(detail_selected)
+        .map(|v| {
+            if v.author.is_empty() {
+                v.title.clone()
+            } else {
+                format!("{} \u{00b7} {}", v.title, v.author)
+            }
+        })
+        .unwrap_or_default();
+
+    // Advance the ping-pong offset once per render tick.
+    app.advance_marquee(sel_title_author.chars().count(), title_col_w);
 
     // Inner layout:
     //   title line (1)
@@ -1653,10 +1695,20 @@ fn render_detail_modal(
                 other => other.to_string(),
             };
             let host = v.host.as_deref().unwrap_or("\u{2014}");
-            let title_author = if v.author.is_empty() {
+            let title_author_full = if v.author.is_empty() {
                 v.title.clone()
             } else {
                 format!("{} \u{00b7} {}", v.title, v.author)
+            };
+            // #62 Marquee: for the selected row, start rendering from the current
+            // scroll offset so the tail of long strings becomes visible.
+            let title_author = if is_sel && app.marquee_offset > 0 {
+                title_author_full
+                    .chars()
+                    .skip(app.marquee_offset)
+                    .collect::<String>()
+            } else {
+                title_author_full
             };
             let row_style = if is_sel {
                 style_selected()
@@ -2628,15 +2680,13 @@ fn render_confirm_book_remove_modal(frame: &mut Frame, app: &AppState, book_flat
 // Wildmenu — Tab-completion strip shown above the command line
 // ---------------------------------------------------------------------------
 
-/// Render the Tab-completion wildmenu as a single line directly above
-/// `hint_rect` (i.e. at `hint_rect.y - 1`).  The currently highlighted
-/// candidate is drawn reversed (dark bg, accent fg); others are dim.
-fn render_wildmenu(frame: &mut Frame, app: &AppState, hint_rect: Rect) {
-    if hint_rect.y == 0 {
-        return;
-    }
-    let menu_area = Rect::new(hint_rect.x, hint_rect.y - 1, hint_rect.width, 1);
-
+/// Render the Tab-completion wildmenu into `area`.
+///
+/// The currently highlighted candidate is drawn reversed (dark bg, accent fg);
+/// others are dim.  The caller is responsible for allocating `area` — either
+/// a dedicated layout row (main render, #71) or a manually computed rect
+/// (empty screen).
+fn render_wildmenu(frame: &mut Frame, app: &AppState, area: Rect) {
     let mut spans: Vec<Span> = Vec::new();
     for (i, cand) in app.completion_candidates.iter().enumerate() {
         let is_active = i == app.completion_index;
@@ -2657,7 +2707,7 @@ fn render_wildmenu(frame: &mut Frame, app: &AppState, hint_rect: Rect) {
 
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::default().bg(C_PANEL)),
-        menu_area,
+        area,
     );
 }
 

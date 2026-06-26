@@ -4433,4 +4433,196 @@ mod tests {
             "second click on the activity header must re-expand the pane"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // #62 — Marquee scroll (Detail modal · Title·Author ping-pong)
+    // -----------------------------------------------------------------------
+
+    /// advance_marquee scrolls forward by 1 each tick when text overflows.
+    #[test]
+    fn marquee_advances_forward_when_overflowing() {
+        let mut app = AppState::new();
+        // text_char_len=20, col_w=10 → overflows by 10
+        app.advance_marquee(20, 10);
+        assert_eq!(app.marquee_offset, 1, "first tick: offset advances to 1");
+        assert!(app.marquee_forward, "still scrolling forward");
+        assert_eq!(app.marquee_pause, 0, "no pause yet");
+    }
+
+    /// advance_marquee reverses direction and starts a pause when max offset reached.
+    #[test]
+    fn marquee_reverses_at_end() {
+        let mut app = AppState::new();
+        // text_char_len=15, col_w=10 → max_offset=5
+        for _ in 0..5 {
+            app.advance_marquee(15, 10);
+        }
+        // offset should now be at max (5) and direction reversed.
+        assert_eq!(app.marquee_offset, 5, "offset reaches max");
+        assert!(
+            !app.marquee_forward,
+            "direction reversed after reaching end"
+        );
+        assert!(app.marquee_pause > 0, "pause countdown started at end");
+    }
+
+    /// Going backward from offset=0 reverses direction and starts a pause.
+    #[test]
+    fn marquee_reverses_at_zero_going_backward() {
+        let mut app = AppState::new();
+        // Manually place at offset=1, going backward.
+        app.marquee_offset = 1;
+        app.marquee_forward = false;
+        // First backward tick → offset becomes 0.
+        app.advance_marquee(15, 10);
+        assert_eq!(app.marquee_offset, 0, "offset decrements to 0");
+        // Second tick → at 0 going backward: reverses + starts pause.
+        app.advance_marquee(15, 10);
+        assert!(
+            app.marquee_forward,
+            "direction reversed back to forward at start"
+        );
+        assert!(app.marquee_pause > 0, "pause countdown started at start");
+    }
+
+    /// When text fits in the column, marquee resets to zero regardless of state.
+    #[test]
+    fn marquee_no_advance_when_text_fits() {
+        let mut app = AppState::new();
+        app.marquee_offset = 5;
+        app.marquee_forward = false;
+        // text_char_len=8 fits in col_w=10 → reset.
+        app.advance_marquee(8, 10);
+        assert_eq!(app.marquee_offset, 0, "offset reset when text fits");
+        assert!(app.marquee_forward, "direction reset to forward");
+        assert_eq!(app.marquee_pause, 0, "no pause when text fits");
+    }
+
+    /// reset_marquee_if_selection_changed resets state when selection changes.
+    #[test]
+    fn marquee_resets_on_selection_change() {
+        let mut app = AppState::new();
+        app.marquee_offset = 7;
+        app.marquee_forward = false;
+        app.marquee_pause = 4;
+        app.marquee_detail_sel = 0;
+
+        // Selection changes from 0 → 1.
+        app.reset_marquee_if_selection_changed(1);
+        assert_eq!(
+            app.marquee_offset, 0,
+            "offset must reset on selection change"
+        );
+        assert!(app.marquee_forward, "direction must reset to forward");
+        assert_eq!(app.marquee_pause, 0, "pause must clear on selection change");
+        assert_eq!(app.marquee_detail_sel, 1, "new selection index recorded");
+    }
+
+    /// reset_marquee_if_selection_changed is a no-op when selection is unchanged.
+    #[test]
+    fn marquee_no_reset_when_selection_unchanged() {
+        let mut app = AppState::new();
+        app.marquee_offset = 4;
+        app.marquee_detail_sel = 2;
+
+        app.reset_marquee_if_selection_changed(2); // same index
+        assert_eq!(
+            app.marquee_offset, 4,
+            "offset must not change when selection is the same"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #71 — Wildmenu layout: WILDMENU row is above the command-line (not over rule)
+    // -----------------------------------------------------------------------
+
+    /// When the wildmenu is open in cmd mode, the dim rule separator above the
+    /// command row must still be present in the buffer (not overwritten).
+    #[test]
+    fn wildmenu_does_not_overwrite_rule_above_cmd() {
+        // Use a 132×38 terminal — the reference size from the spec.
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.command_buf = Some(String::new());
+        app.completion_candidates = vec!["import".into(), "settings".into(), "add".into()];
+        app.completion_index = 0;
+        // activity_expanded = true by default (5 rows).
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let width = 132usize;
+        let get_row = |r: usize| -> String {
+            buf.content()[r * width..(r + 1) * width]
+                .iter()
+                .map(|c| c.symbol().to_string())
+                .collect()
+        };
+
+        // Layout (38 rows, activity=5, cmd+wildmenu+rule+hint=4):
+        // Fixed bottom: rule(1)+wildmenu(1)+cmd(1)+rule(1)+hint(1) = 5
+        // Fixed top: list(1)+filter(1)+rule(1) = 3
+        // activity: 5, rule: 1 → 3+book_h+1+5+1 = 10+book_h
+        // book_h = 38 - (1+1+1+1+5+1+1+1+1+1) = 38 - 14 = 24
+        // Row 33 = rule (before wildmenu), Row 34 = wildmenu
+        let rule_row = get_row(33);
+        let wildmenu_row = get_row(34);
+
+        assert!(
+            rule_row.contains('\u{2500}'),
+            "row 33 must be the rule separator (─); got: {}",
+            &rule_row[..rule_row.len().min(40)]
+        );
+        assert!(
+            wildmenu_row.contains("import"),
+            "row 34 must contain wildmenu candidate 'import'; got: {}",
+            &wildmenu_row[..wildmenu_row.len().min(40)]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #62 / #72 — Modal width tests
+    // -----------------------------------------------------------------------
+
+    /// Detail modal renders without panic at 132-col width (≈80% of 132 = 105).
+    #[test]
+    fn detail_modal_wide_render_does_not_panic() {
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        // Verify the ▶ marker is still present (modal rendered correctly).
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains('\u{25b6}') || content.contains("Ambiguous"),
+            "detail modal must render book content at 132 cols"
+        );
+    }
+
+    /// Picker modal renders without panic at 132-col width (≈80% of 132 = 105).
+    #[test]
+    fn picker_modal_wide_render_does_not_panic() {
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Picker {
+            book_flat_index: 0,
+            selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains("choose a copy"),
+            "picker modal must render at 132 cols"
+        );
+    }
 }
