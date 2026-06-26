@@ -58,6 +58,11 @@ pub struct MirrorConfig {
     pub download_resolvers: Vec<DownloadResolver>,
 }
 
+/// The default mirror configuration, baked into the binary via `include_str!`
+/// so a standalone `kwire` (Homebrew / release tarball) runs without an external
+/// `mirrors.toml`. Used as the fallback in [`MirrorConfig::load`].
+pub const DEFAULT_TOML: &str = include_str!("../../../mirrors.toml");
+
 impl MirrorConfig {
     /// Parse a `mirrors.toml` string. Mirrors/resolvers are returned sorted by
     /// ascending `priority`.
@@ -68,9 +73,13 @@ impl MirrorConfig {
         Ok(cfg)
     }
 
-    /// Load and parse a `mirrors.toml` file.
+    /// Load and parse a `mirrors.toml` file. If the file does not exist, fall
+    /// back to the embedded [`DEFAULT_TOML`] so a standalone binary still works.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
+        if !path.exists() {
+            return Self::from_toml(DEFAULT_TOML);
+        }
         let s =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         Self::from_toml(&s)
