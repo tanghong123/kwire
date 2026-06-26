@@ -16,6 +16,10 @@ pub struct SearchArgs {
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
 
+    /// Author for structured matching (matches title vs author separately).
+    #[arg(long)]
+    pub author: Option<String>,
+
     /// Filter by file extension (e.g. epub, pdf).
     #[arg(long)]
     pub format: Option<String>,
@@ -33,8 +37,21 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     let cfg = Config::from_env();
     let client = build_search(&cfg).map_err(|e| anyhow::anyhow!(e))?;
 
+    // Format preference for structured matching (from --format if given).
+    let mut format_pref = vec![];
+    if let Some(ref fmt_str) = args.format {
+        format_pref.push(Format::parse(fmt_str));
+    }
+
+    // The search input: structured (title + explicit --author) or freeform (the
+    // whole query is matched against each candidate's title+author combined).
     let input = BookInput {
         title: query.clone(),
+        authors: match &args.author {
+            Some(a) => vec![a.clone()],
+            None => vec![],
+        },
+        format_pref,
         ..Default::default()
     };
 
@@ -60,9 +77,26 @@ pub async fn run(args: SearchArgs) -> Result<()> {
         });
     }
 
-    // Score + rank with the SAME criteria as the desktop's "choose a copy"
-    // (matching::evaluate → score_candidate + format/language prefs + tie-breaks).
-    let mut candidates = matching::evaluate(&input, candidates, &ListSettings::default()).ranked;
+    let mut candidates = if args.author.is_some() {
+        // STRUCTURED path: title vs candidate title, author vs candidate author —
+        // same algorithm as the desktop's "choose a copy".
+        matching::evaluate(&input, candidates, &ListSettings::default()).ranked
+    } else {
+        // FREEFORM path: the whole query is "title + author" matched against each
+        // candidate's title+author combined. Sort by that score, deterministic
+        // tie-break by larger size then md5.
+        for c in &mut candidates {
+            c.score = matching::freeform_query_match(&query, c);
+        }
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.size_bytes.unwrap_or(0).cmp(&a.size_bytes.unwrap_or(0)))
+                .then_with(|| a.md5.cmp(&b.md5))
+        });
+        candidates
+    };
 
     let total = candidates.len();
     candidates.truncate(args.limit);

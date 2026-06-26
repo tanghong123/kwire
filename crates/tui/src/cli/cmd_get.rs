@@ -67,9 +67,7 @@ pub async fn run(args: GetArgs) -> Result<()> {
     }
 
     // Title search path.
-    let (title, author) = parse_title_author(&query, args.author.as_deref());
-
-    eprintln!("searching  {title}");
+    eprintln!("searching  {query}");
 
     let cfg = Config::from_env();
     let search_client = build_search(&cfg).map_err(|e| anyhow::anyhow!(e))?;
@@ -80,51 +78,87 @@ pub async fn run(args: GetArgs) -> Result<()> {
     }
 
     let input = BookInput {
-        title: title.clone(),
-        authors: if author.is_empty() {
-            vec![]
-        } else {
-            vec![author.clone()]
+        title: query.clone(),
+        authors: match &args.author {
+            Some(a) => vec![a.clone()],
+            None => vec![],
         },
         format_pref,
         ..Default::default()
     };
 
-    let candidates = search_client
+    let mut candidates = search_client
         .search(&input)
         .await
         .context("searching mirrors")?;
 
     if candidates.is_empty() {
-        eprintln!("no candidates found — try: kwire search \"{title}\"");
+        eprintln!("no candidates found — try: kwire search \"{query}\"");
         return Ok(());
     }
 
-    // Rank with the SAME match algorithm as the desktop (matching::evaluate),
-    // then act on its confidence decision.
     let settings = ListSettings::default();
-    let outcome = matching::evaluate(&input, candidates, &settings);
 
-    match outcome.status {
-        // Confident match → auto-download the best, exactly like the desktop.
-        RequestStatus::Matched => {
-            let best = &outcome.ranked[0];
+    if args.author.is_some() {
+        // STRUCTURED path: rank with the SAME match algorithm as the desktop
+        // (matching::evaluate), then act on its confidence decision.
+        let outcome = matching::evaluate(&input, candidates, &settings);
+        match outcome.status {
+            // Confident match → auto-download the best, exactly like the desktop.
+            RequestStatus::Matched => {
+                let best = &outcome.ranked[0];
+                println!("{}", super::cmd_search::format_candidate(1, best));
+                let emitter = CliEmitter::new();
+                download_by_md5(&best.md5, &args.site, &args.out, client, &emitter).await
+            }
+            // No confident match → degrade to search: show ranked candidates.
+            RequestStatus::NeedsSelection => {
+                eprintln!("no confident match — pick one and run:  kwire get <md5>");
+                for (i, c) in outcome.ranked.iter().take(args.limit).enumerate() {
+                    println!("{}", super::cmd_search::format_candidate(i + 1, c));
+                }
+                Ok(())
+            }
+            // Nothing usable.
+            _ => {
+                eprintln!("no matching candidates — try: kwire search \"{query}\"");
+                Ok(())
+            }
+        }
+    } else {
+        // FREEFORM path: the whole query is "title + author", matched against each
+        // candidate's title+author combined. Sort by that score (size desc, md5
+        // tie-break), then apply the SAME confidence bands the backend uses.
+        for c in &mut candidates {
+            c.score = matching::freeform_query_match(&query, c);
+        }
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| b.size_bytes.unwrap_or(0).cmp(&a.size_bytes.unwrap_or(0)))
+                .then_with(|| a.md5.cmp(&b.md5))
+        });
+
+        let auto = settings.auto_threshold;
+        let near = settings.near_threshold;
+        let top = candidates.first().map(|c| c.score).unwrap_or(0.0);
+
+        if candidates.is_empty() || top < near {
+            eprintln!("no matching candidates — try: kwire search \"{query}\"");
+            Ok(())
+        } else if top >= auto {
+            // Confident match → auto-download the best.
+            let best = &candidates[0];
             println!("{}", super::cmd_search::format_candidate(1, best));
             let emitter = CliEmitter::new();
             download_by_md5(&best.md5, &args.site, &args.out, client, &emitter).await
-        }
-        // No confident match → degrade to search: show the ranked candidates so the
-        // user can pick one and download it with `kwire get <md5>`.
-        RequestStatus::NeedsSelection => {
+        } else {
+            // Middling → degrade to a pick-one list, download nothing.
             eprintln!("no confident match — pick one and run:  kwire get <md5>");
-            for (i, c) in outcome.ranked.iter().take(args.limit).enumerate() {
+            for (i, c) in candidates.iter().take(args.limit).enumerate() {
                 println!("{}", super::cmd_search::format_candidate(i + 1, c));
             }
-            Ok(())
-        }
-        // Nothing usable.
-        _ => {
-            eprintln!("no matching candidates — try: kwire search \"{title}\"");
             Ok(())
         }
     }
@@ -199,6 +233,11 @@ pub fn is_md5(s: &str) -> bool {
 /// Split `"title, author"` on the LAST comma into `(title, author)`.
 /// `--author` wins when supplied.  Returns `(title, "")` when there is no
 /// comma and no explicit author.
+///
+/// No longer used by the default `get` path (replaced by the freeform
+/// title+author match), but kept (and still unit-tested) for the comma-split
+/// semantics.
+#[allow(dead_code)]
 pub fn parse_title_author(query: &str, explicit_author: Option<&str>) -> (String, String) {
     if let Some(a) = explicit_author {
         return (query.trim().to_string(), a.trim().to_string());

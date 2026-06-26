@@ -528,6 +528,35 @@ pub fn request_title_match(request_title: &str, candidate_title: &str) -> f32 {
     title_similarity(request_title, candidate_title)
 }
 
+/// Score a free-form "title + author" query against a candidate by comparing it
+/// to the candidate's title and authors COMBINED into one string. Used by the CLI
+/// when the user types `kwire search "Steve Jobs, Walter Isaacson"` — a single
+/// blob that means title + author, not "title only".
+///
+/// Unlike [`title_similarity`] (whose `0.5*token + 0.5*max(edit,token)` blend lets
+/// the `max` mask trailing padding, so a duplicated-author entry ties the clean
+/// one), this uses a LENGTH-SENSITIVE blend: `0.5*token_set_ratio + 0.5*edit`. The
+/// raw edit distance penalizes the extra padding, so a clean "Steve Jobs Walter
+/// Isaacson" outranks "Steve Jobs Walter Isaacson Walter Isaacson".
+pub fn freeform_query_match(query: &str, candidate: &Candidate) -> f32 {
+    // Combined candidate text: title followed by each non-empty author.
+    let mut combined = candidate.title.clone();
+    for a in &candidate.authors {
+        if !a.trim().is_empty() {
+            combined.push(' ');
+            combined.push_str(a);
+        }
+    }
+    let na = norm(query);
+    let nb = norm(&combined);
+    if na.is_empty() || nb.is_empty() {
+        return 0.0;
+    }
+    let token = token_set_ratio(&na, &nb);
+    let edit = normalized_levenshtein(&na, &nb) as f32;
+    (0.5 * token + 0.5 * edit).clamp(0.0, 1.0)
+}
+
 fn title_similarity(a: &str, b: &str) -> f32 {
     let na = norm(a);
     let nb = norm(b);
@@ -1557,6 +1586,27 @@ mod tests {
             "the secret garden",
             "the secret garth song"
         ));
+    }
+
+    #[test]
+    fn freeform_query_ranks_clean_combined_above_duplicated() {
+        // The CLI bug: a free-form "title + author" query must rank the cleanly
+        // catalogued copy (title="Steve Jobs", author="Walter Isaacson") above a
+        // malformed entry whose title duplicates the author
+        // ("Steve Jobs Walter Isaacson Walter Isaacson").
+        let query = "Steve Jobs, Walter Isaacson";
+        let clean = cand("Steve Jobs", &["Walter Isaacson"], Some(Format::Epub));
+        let dup = cand(
+            "Steve Jobs Walter Isaacson Walter Isaacson",
+            &[],
+            Some(Format::Epub),
+        );
+        let s_clean = freeform_query_match(query, &clean);
+        let s_dup = freeform_query_match(query, &dup);
+        assert!(
+            s_clean > s_dup,
+            "clean ({s_clean}) must outrank duplicated ({s_dup})"
+        );
     }
 
     #[test]
