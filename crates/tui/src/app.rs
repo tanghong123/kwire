@@ -202,10 +202,19 @@ impl SettingsDraft {
 const COMMANDS: &[&str] = &[
     "import",
     "add",
+    "add-md5",
     "open",
     "requery",
     "settings",
     "pause-all",
+    "pause",
+    "start-all",
+    "resume-all",
+    "start",
+    "resume",
+    "delete",
+    "refresh-mirrors",
+    "cleanup",
     "quit",
     "help",
 ];
@@ -287,6 +296,15 @@ pub enum Modal {
     Settings,
     /// Full help screen.
     Help,
+    /// Delete-list confirmation: "Delete '<title>' and its N books? [y/n]"
+    Confirm {
+        /// Human-readable list title.
+        title: String,
+        /// Number of books in the list.
+        n_books: usize,
+        /// The engine id (`"listN"`) of the list to delete.
+        target_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1038,6 +1056,27 @@ impl AppState {
                 },
                 _ => Intent::Redraw,
             },
+
+            Modal::Confirm { target_id, .. } => {
+                let id = target_id.clone();
+                match ev {
+                    Event::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            self.modal = None;
+                            Intent::ConfirmDelete { id }
+                        }
+                        KeyCode::Char('n')
+                        | KeyCode::Char('N')
+                        | KeyCode::Esc
+                        | KeyCode::Char('q') => {
+                            self.modal = None;
+                            Intent::Redraw
+                        }
+                        _ => Intent::Redraw,
+                    },
+                    _ => Intent::Redraw,
+                }
+            }
         }
     }
 

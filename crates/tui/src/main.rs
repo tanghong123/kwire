@@ -78,7 +78,7 @@ struct Cli {
 /// be kept alive for the duration of the process (dropping it flushes + closes
 /// the log file).
 fn setup_logging() -> Result<WorkerGuard> {
-    let dirs = ProjectDirs::from("", "", "kwire").context("cannot determine XDG state dir")?;
+    let dirs = ProjectDirs::from("", "", "kwire-tui").context("cannot determine XDG state dir")?;
     let state_dir = dirs.state_dir().unwrap_or_else(|| {
         // Fallback: use data_local_dir if state_dir isn't supported on this OS.
         dirs.data_local_dir()
@@ -422,6 +422,9 @@ async fn dispatch_intent(
         Intent::DiscardSettings => {
             // Draft already cleared and modal closed in on_input.
         }
+        Intent::ConfirmDelete { id } => {
+            execute_delete_list(app, handles, &id).await;
+        }
         Intent::Redraw => {}
     }
     Ok(false)
@@ -476,6 +479,35 @@ async fn handle_command_async(
         }
         "pause-all" => {
             pause_all_active(app, handles).await;
+        }
+        // #45 — per-list pause/start/resume
+        "pause" => {
+            pause_list(app, handles, if arg.is_empty() { None } else { Some(arg) }).await;
+        }
+        "start" | "resume" => {
+            start_list(app, handles, if arg.is_empty() { None } else { Some(arg) }).await;
+        }
+        // #45 — all-list start/resume
+        "start-all" | "resume-all" => {
+            start_all_lists(app, handles).await;
+        }
+        // #48 — delete list (shows confirm modal)
+        "delete" => {
+            show_delete_confirm(app, handles, if arg.is_empty() { None } else { Some(arg) }).await;
+        }
+        // #53 — misc commands
+        "refresh-mirrors" => {
+            refresh_mirrors_cmd(app, handles).await;
+        }
+        "cleanup" => {
+            cleanup_cmd(app, handles).await;
+        }
+        "add-md5" => {
+            if arg.is_empty() {
+                app.status_msg = Some("Usage: add-md5 <md5>".into());
+            } else {
+                add_md5_cmd(app, handles, arg).await;
+            }
         }
         "" => {}
         other => {
@@ -1038,6 +1070,322 @@ async fn pause_all_active(app: &mut AppState, handles: &EngineHandles) {
         }
     }
     refresh_active_view(app, handles).await;
+}
+
+// ---------------------------------------------------------------------------
+// #45 — per-list pause / start / resume
+// ---------------------------------------------------------------------------
+
+/// Resolve the engine-id of the list matching `name_hint` (case-insensitive
+/// substring of the title), falling back to the active list if `None`.
+async fn resolve_list_id(handles: &EngineHandles, name_hint: Option<&str>) -> Option<String> {
+    let lib = handles.library.lock().await;
+    if let Some(hint) = name_hint {
+        let lh = hint.to_lowercase();
+        // Collect (id, orch) pairs first so we can drop the lib lock before
+        // locking each orch.
+        let pairs: Vec<(String, _)> = lib
+            .lists
+            .iter()
+            .filter_map(|ll| lib.arc_for(&ll.id).map(|a| (ll.id.clone(), a)))
+            .collect();
+        drop(lib);
+        for (id, orch_arc) in pairs {
+            let guard = orch_arc.lock().await;
+            if let Ok(snap) = guard.snapshot() {
+                if snap.title.to_lowercase().contains(&lh) {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    } else {
+        Some(lib.current.clone())
+    }
+}
+
+/// Pause a list (by id): pauses all in-flight downloads and marks jobs Paused.
+async fn pause_list_by_id(app: &mut AppState, handles: &EngineHandles, id: &str) {
+    let orch_arc = {
+        let lib = handles.library.lock().await;
+        lib.arc_for(id)
+    };
+    let Some(orch_arc) = orch_arc else { return };
+    if let Ok(sched) = ensure_scheduler_from(&handles.scheduler, &handles.config, None).await {
+        if let Err(e) = orch_arc.lock().await.pause_all(&sched).await {
+            tracing::warn!("pause_list: {e}");
+        }
+    }
+    refresh_active_view(app, handles).await;
+}
+
+/// Pause the active list (or a named one if `name_hint` is given).
+async fn pause_list(app: &mut AppState, handles: &EngineHandles, name_hint: Option<&str>) {
+    let Some(id) = resolve_list_id(handles, name_hint).await else {
+        if let Some(hint) = name_hint {
+            app.status_msg = Some(format!("No list matching '{hint}'"));
+        }
+        return;
+    };
+    pause_list_by_id(app, handles, &id).await;
+    app.status_msg = Some("Paused".into());
+}
+
+/// Start/resume a list (by id): set goal Complete + resume paused/cancelled jobs.
+async fn start_list_by_id(app: &mut AppState, handles: &EngineHandles, id: &str) {
+    let orch_arc = {
+        let lib = handles.library.lock().await;
+        lib.arc_for(id)
+    };
+    let Some(orch_arc) = orch_arc else { return };
+    {
+        let mut guard = orch_arc.lock().await;
+        let _ = guard.set_goal_all(Goal::Complete);
+        if let Err(e) = guard.resume_all() {
+            tracing::warn!("start_list resume_all: {e}");
+        }
+    }
+    handles.engine_wake.notify_one();
+    refresh_active_view(app, handles).await;
+}
+
+/// Start/resume the active list (or a named one if `name_hint` is given).
+async fn start_list(app: &mut AppState, handles: &EngineHandles, name_hint: Option<&str>) {
+    let Some(id) = resolve_list_id(handles, name_hint).await else {
+        if let Some(hint) = name_hint {
+            app.status_msg = Some(format!("No list matching '{hint}'"));
+        }
+        return;
+    };
+    start_list_by_id(app, handles, &id).await;
+    app.status_msg = Some("Resumed".into());
+}
+
+/// Start/resume ALL loaded lists.
+async fn start_all_lists(app: &mut AppState, handles: &EngineHandles) {
+    let ids: Vec<String> = {
+        let lib = handles.library.lock().await;
+        lib.lists.iter().map(|ll| ll.id.clone()).collect()
+    };
+    for id in &ids {
+        let orch_arc = {
+            let lib = handles.library.lock().await;
+            lib.arc_for(id)
+        };
+        if let Some(orch_arc) = orch_arc {
+            let mut guard = orch_arc.lock().await;
+            let _ = guard.set_goal_all(Goal::Complete);
+            if let Err(e) = guard.resume_all() {
+                tracing::warn!("start_all resume_all for {id}: {e}");
+            }
+        }
+    }
+    handles.engine_wake.notify_one();
+    refresh_active_view(app, handles).await;
+    app.status_msg = Some(format!("Resumed {} list(s)", ids.len()));
+}
+
+// ---------------------------------------------------------------------------
+// #48 — delete list
+// ---------------------------------------------------------------------------
+
+/// Populate the Confirm modal for `:delete [<name>]`.
+async fn show_delete_confirm(app: &mut AppState, handles: &EngineHandles, name_hint: Option<&str>) {
+    let Some(id) = resolve_list_id(handles, name_hint).await else {
+        if let Some(hint) = name_hint {
+            app.status_msg = Some(format!("No list matching '{hint}'"));
+        } else {
+            app.status_msg = Some("No active list".into());
+        }
+        return;
+    };
+    // Snapshot to get title + book count.
+    let orch_arc = {
+        let lib = handles.library.lock().await;
+        lib.arc_for(&id)
+    };
+    let Some(orch_arc) = orch_arc else {
+        app.status_msg = Some("List not found".into());
+        return;
+    };
+    let (title, n_books) = {
+        let guard = orch_arc.lock().await;
+        match guard.snapshot() {
+            Ok(snap) => {
+                let n: usize = snap.groups.iter().map(|g| g.books.len()).sum();
+                (snap.title.clone(), n)
+            }
+            Err(_) => ("(unknown)".to_string(), 0),
+        }
+    };
+    app.modal = Some(crate::app::Modal::Confirm {
+        title,
+        n_books,
+        target_id: id,
+    });
+}
+
+/// Actually delete a list after the user confirmed in the modal.
+async fn execute_delete_list(app: &mut AppState, handles: &EngineHandles, id: &str) {
+    let store_id: i64 = match id.strip_prefix("list").and_then(|s| s.parse().ok()) {
+        Some(n) => n,
+        None => {
+            app.status_msg = Some(format!("Bad list id: {id}"));
+            return;
+        }
+    };
+
+    // Pause any in-flight downloads first.
+    let orch_arc = {
+        let lib = handles.library.lock().await;
+        lib.arc_for(id)
+    };
+    if let Some(orch_arc) = orch_arc {
+        let inflight: Vec<String> = {
+            let guard = orch_arc.lock().await;
+            guard
+                .snapshot()
+                .map(|snap| {
+                    use libgen_core::model::JobState;
+                    snap.groups
+                        .iter()
+                        .flat_map(|g| g.books.iter())
+                        .flat_map(|b| b.candidates.iter())
+                        .filter(|c| {
+                            matches!(
+                                c.job.as_ref().map(|j| &j.state),
+                                Some(
+                                    JobState::Resolving
+                                        | JobState::Downloading
+                                        | JobState::Verifying
+                                )
+                            )
+                        })
+                        .map(|c| c.md5.clone())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        if !inflight.is_empty() {
+            if let Ok(sched) =
+                ensure_scheduler_from(&handles.scheduler, &handles.config, None).await
+            {
+                for md5 in &inflight {
+                    sched.pause(md5).await;
+                }
+            }
+        }
+    }
+
+    // Delete from store.
+    let cfg = handles.config.lock().expect("config poisoned").clone();
+    let mut store = match open_store(&cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("delete_list: open_store: {e}");
+            app.status_msg = Some(format!("Delete failed: {e}"));
+            return;
+        }
+    };
+    if let Err(e) = store.delete_list(store_id) {
+        tracing::warn!("delete_list: delete_list: {e}");
+        app.status_msg = Some(format!("Delete failed: {e}"));
+        return;
+    }
+
+    // Remove from library and switch active list.
+    {
+        let mut lib = handles.library.lock().await;
+        lib.lists.retain(|l| l.id != id);
+        if lib.current == id {
+            lib.current = lib.lists.first().map(|l| l.id.clone()).unwrap_or_default();
+        }
+    }
+    tracing::info!(list = %id, "list deleted");
+    handles.engine_wake.notify_one();
+    refresh_active_view(app, handles).await;
+    refresh_all_list_summaries(app, handles).await;
+    app.status_msg = Some("List deleted".into());
+}
+
+// ---------------------------------------------------------------------------
+// #53 — misc commands
+// ---------------------------------------------------------------------------
+
+/// `:refresh-mirrors` — fetch live SLUM availability and cache it.
+async fn refresh_mirrors_cmd(app: &mut AppState, handles: &EngineHandles) {
+    match libgen_core::slum::SlumClient::live().fetch().await {
+        Ok(report) => {
+            let cfg = handles.config.lock().expect("config poisoned").clone();
+            let _ = report.save(cfg.slum_cache_path());
+            let n = report.sites.len();
+            info!("refresh_mirrors: cached {n} site(s)");
+            app.status_msg = Some(format!("Mirror availability refreshed ({n} sites)"));
+        }
+        Err(e) => {
+            tracing::warn!("refresh_mirrors: {e}");
+            app.status_msg = Some(format!("Refresh failed: {e}"));
+        }
+    }
+}
+
+/// `:cleanup` — move leftover `.part` files to the Trash.
+async fn cleanup_cmd(app: &mut AppState, handles: &EngineHandles) {
+    let out_dir = handles
+        .config
+        .lock()
+        .expect("config poisoned")
+        .effective_out_dir();
+    match tokio::task::spawn_blocking(move || libgen_core::orchestrator::trash_part_files(&out_dir))
+        .await
+    {
+        Ok((count, bytes)) => {
+            let msg = if count == 0 {
+                "No .part files to clean up.".into()
+            } else {
+                format!(
+                    "Moved {} .part file(s) ({:.1} MB) to Trash.",
+                    count,
+                    bytes as f64 / 1_048_576.0
+                )
+            };
+            info!("cleanup: {msg}");
+            app.status_msg = Some(msg);
+        }
+        Err(e) => {
+            tracing::warn!("cleanup spawn_blocking: {e}");
+            app.status_msg = Some(format!("Cleanup failed: {e}"));
+        }
+    }
+}
+
+/// `:add-md5 <md5>` — inject an MD5 as a manual candidate for the currently
+/// selected book in the active list, then set its goal to Complete.
+async fn add_md5_cmd(app: &mut AppState, handles: &EngineHandles, md5: &str) {
+    let Some(orch_arc) = active_orch(handles).await else {
+        app.status_msg = Some("No active list".into());
+        return;
+    };
+    // Get the selected book's position.
+    let pos = match app.flat.get(app.selected) {
+        Some(fb) => (vec![fb.group_index], fb.book_index_in_group),
+        None => {
+            app.status_msg = Some("No book selected".into());
+            return;
+        }
+    };
+    {
+        let mut guard = orch_arc.lock().await;
+        if let Err(e) = guard.add_manual_candidate(&pos.0, pos.1, md5) {
+            tracing::warn!("add_md5: {e}");
+            app.status_msg = Some(format!("Add MD5 failed: {e}"));
+            return;
+        }
+        let _ = guard.set_goal_one(&pos.0, pos.1, Goal::Complete);
+    }
+    handles.engine_wake.notify_one();
+    refresh_active_view(app, handles).await;
+    app.status_msg = Some(format!("Added MD5 {}", &md5[..md5.len().min(8)]));
 }
 
 /// Persist the staged settings draft: per-list settings → orchestrator,

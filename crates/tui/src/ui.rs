@@ -88,6 +88,11 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             } => render_detail_modal(frame, app, book_flat_index, selected),
             Modal::Settings => render_settings_modal(frame, app),
             Modal::Help => render_help_modal(frame, frame.area()),
+            Modal::Confirm {
+                title,
+                n_books,
+                target_id: _,
+            } => render_confirm_modal(frame, &title, n_books),
         }
     }
 }
@@ -1806,7 +1811,12 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
         make_key_line(":open <list>", "switch list"),
         make_key_line(":requery", "re-search & re-verify"),
         make_key_line(":settings", "open settings"),
-        make_key_line(":pause-all", "pause every download"),
+        make_key_line(":pause-all / :pause", "pause downloads"),
+        make_key_line(":start / :start-all", "resume downloads"),
+        make_key_line(":delete", "remove active list"),
+        make_key_line(":add-md5 <md5>", "inject MD5 for selection"),
+        make_key_line(":refresh-mirrors", "refresh mirror status"),
+        make_key_line(":cleanup", "remove .part files"),
     ];
 
     let right_list: Vec<ListItem> = right_lines.into_iter().map(|l| ListItem::new(l)).collect();
@@ -1817,6 +1827,38 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
         Paragraph::new(Span::styled("? or esc  to close", style_hint())),
         split_left[1],
     );
+}
+
+// ---------------------------------------------------------------------------
+// Confirm modal — `:delete` confirmation dialog
+// ---------------------------------------------------------------------------
+
+fn render_confirm_modal(frame: &mut Frame, title: &str, n_books: usize) {
+    let area = centered_rect(60, 7, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(C_NEEDS_YOU))
+        .title(Span::styled(" Delete list? ", style_title()))
+        .style(style_normal());
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+
+    let body_text = format!(
+        "Delete \"{title}\" and its {n_books} book(s)?\n\n  [y] Confirm    [n / Esc] Cancel"
+    );
+    let para = Paragraph::new(body_text)
+        .style(style_normal())
+        .alignment(Alignment::Left);
+    frame.render_widget(para, padded);
 }
 
 // ---------------------------------------------------------------------------
