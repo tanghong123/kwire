@@ -21,7 +21,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AppState, Focus, Modal, StatusFilter};
+use crate::app::{AppState, Focus, Modal, SettingsEditor, StatusFilter};
 use crate::theme::{
     self, history_kind_color, score_color, style_dim, style_header, style_hint, style_normal,
     style_selected, style_title, C_BACKDROP, C_BG, C_BRIGHT, C_DIM, C_DONE, C_FAINT, C_NEEDS_YOU,
@@ -1463,8 +1463,32 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
 
     let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(padded);
 
-    // Structured settings sections matching the mock:
-    // FORMATS, MATCHING, FILES, DOWNLOADS & MIRRORS
+    // Pull values from the staged draft (always present when modal is open).
+    let draft = match &app.settings_draft {
+        Some(d) => d,
+        None => return, // guard: shouldn't render without a draft
+    };
+
+    // Determine the display value for each field — show the edit buffer when
+    // this field is actively being edited.
+    let editing_idx: Option<usize> = match &draft.editor {
+        SettingsEditor::Editing(_) => Some(app.settings_selected),
+        _ => None,
+    };
+    let editing_buf: String = match &draft.editor {
+        SettingsEditor::Editing(buf) => format!("{buf}\u{258f}"), // block cursor at end
+        _ => String::new(),
+    };
+
+    let field_value = |idx: usize| -> String {
+        if editing_idx == Some(idx) {
+            editing_buf.clone()
+        } else {
+            draft.field_value(idx)
+        }
+    };
+
+    // Structured settings sections.
     #[derive(Clone)]
     enum SettingsRow {
         SectionHeader(&'static str),
@@ -1475,88 +1499,62 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
         },
     }
 
-    let (
-        fmt_pref,
-        language,
-        auto_thresh,
-        near_thresh,
-        keep_top,
-        naming,
-        sub_group,
-        max_conc,
-        per_host,
-        hedged,
-        search_mirrors,
-        dl_sites,
-    ) = if let Some(v) = &app.view {
-        let s = &v.settings;
-        (
-            s.format_pref.join(", "),
-            s.language.clone(),
-            format!("{:.2}", s.auto_threshold),
-            format!("{:.2}", s.near_threshold),
-            s.keep_top.to_string(),
-            s.naming_template.clone(),
-            "on".to_string(),
-            "8".to_string(),
-            "4".to_string(),
-            "off".to_string(),
-            "libgen.li  libgen.is  libgen.rs".to_string(),
-            "libgen.li  libgen.pw  ipfs".to_string(),
-        )
-    } else {
-        (
-            "epub, pdf".into(),
-            "any".into(),
-            "0.85".into(),
-            "0.40".into(),
-            "3".into(),
-            "{seq:02} - {authors} - {title}.{ext}".into(),
-            "on".into(),
-            "8".into(),
-            "4".into(),
-            "off".into(),
-            "libgen.li  libgen.is  libgen.rs".into(),
-            "libgen.li  libgen.pw  ipfs".into(),
-        )
-    };
-
-    let mut field_index = 0usize;
+    let mut fi = 0usize;
     let mut make_field = |label: &'static str, value: String| -> SettingsRow {
         let row = SettingsRow::Field {
             label,
             value,
-            index: field_index,
+            index: fi,
         };
-        field_index += 1;
+        fi += 1;
         row
     };
 
     let rows: Vec<SettingsRow> = vec![
         SettingsRow::SectionHeader("FORMATS"),
-        make_field("Preferred formats", fmt_pref),
-        make_field("Language", language),
+        make_field("Preferred formats", field_value(0)),
+        make_field("Language", field_value(1)),
         SettingsRow::SectionHeader("MATCHING"),
-        make_field("Auto-download at \u{2265}", auto_thresh),
-        make_field("Treat as not-found below", near_thresh),
-        make_field("Keep top copies", keep_top),
+        make_field("Auto-download at \u{2265}", field_value(2)),
+        make_field("Treat as not-found below", field_value(3)),
+        make_field("Keep top copies", field_value(4)),
         SettingsRow::SectionHeader("FILES"),
-        make_field("Download folder", "~/Books/Kwire".into()),
-        make_field("Naming template", naming),
-        make_field("Sub-grouping", sub_group),
+        make_field("Download folder", field_value(5)),
+        make_field("Naming template", field_value(6)),
+        make_field("Sub-grouping", field_value(7)),
         SettingsRow::SectionHeader("DOWNLOADS & MIRRORS"),
-        make_field(
-            "Max concurrent",
-            format!(
-                "{} per-host attempts {}  hedged {}",
-                max_conc, per_host, hedged
-            ),
-        ),
-        make_field("Search mirrors", search_mirrors),
-        make_field("Download sites", dl_sites),
+        make_field("Max concurrent", field_value(8)),
+        make_field("Per-host attempts", field_value(9)),
+        make_field("Hedged", field_value(10)),
+        // Display-only (no field index — not navigable):
+        // We stop calling make_field here to keep them outside the navigation range.
+        SettingsRow::SectionHeader(""),
     ];
+    // Append the display-only mirror rows without a field index.
+    // (We use a plain SettingsRow::Field with index = usize::MAX so they never
+    // match `settings_selected`.)
+    let display_only: Vec<SettingsRow> = vec![
+        SettingsRow::Field {
+            label: "Search mirrors",
+            value: "libgen.li  libgen.is  libgen.rs".into(),
+            index: usize::MAX,
+        },
+        SettingsRow::Field {
+            label: "Download sites",
+            value: "libgen.li  libgen.pw  ipfs".into(),
+            index: usize::MAX,
+        },
+    ];
+    let all_rows: Vec<SettingsRow> = rows
+        .into_iter()
+        .filter(|r| !matches!(r, SettingsRow::SectionHeader("")))
+        .chain(std::iter::once(SettingsRow::SectionHeader(
+            "MIRRORS (display only)",
+        )))
+        .chain(display_only)
+        .collect();
 
-    let items: Vec<ListItem> = rows
+    let items: Vec<ListItem> = all_rows
         .iter()
         .map(|row| match row {
             SettingsRow::SectionHeader(title) => ListItem::new(Line::from(vec![
@@ -1569,25 +1567,31 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
                 index,
             } => {
                 let is_sel = *index == app.settings_selected;
-                let value_display = if is_sel {
-                    if let Some(ref edit) = app.settings_edit {
-                        edit.clone()
-                    } else {
-                        value.clone()
-                    }
-                } else {
-                    value.clone()
-                };
-                let value_style = if is_sel {
+                let is_editing = editing_idx.map(|e| e == *index).unwrap_or(false);
+
+                let value_style = if is_editing {
+                    Style::default()
+                        .fg(C_BG)
+                        .bg(C_NEEDS_YOU)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_sel {
                     style_selected()
                 } else {
-                    Style::default().fg(C_NEEDS_YOU) // amber accent for field values
+                    Style::default().fg(C_NEEDS_YOU)
                 };
-                let edit_indicator = if is_sel { "  edit |" } else { "" };
+
+                let indicator = if is_editing {
+                    ""
+                } else if is_sel {
+                    "  \u{2502}"
+                } else {
+                    ""
+                };
+
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("  {:<26}", label), style_dim()),
-                    Span::styled(value_display, value_style),
-                    Span::styled(edit_indicator.to_string(), style_dim()),
+                    Span::styled(format!("  {:<28}", label), style_dim()),
+                    Span::styled(value.clone(), value_style),
+                    Span::styled(indicator, style_dim()),
                 ]))
             }
         })
@@ -1596,15 +1600,142 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
     let list = List::new(items).block(Block::default().borders(Borders::NONE));
     frame.render_widget(list, split[0]);
 
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("\u{2191}\u{2193} field", style_hint()),
+    // Hint bar — context-sensitive.
+    let hint_line = match &draft.editor {
+        SettingsEditor::Editing(_) => Line::from(vec![
+            Span::styled("type to edit", style_hint()),
             Span::styled(
-                "  \u{23ce} edit  space toggle  esc save & close",
+                "  \u{232b} delete  \u{23ce} commit  esc cancel",
                 style_hint(),
             ),
-        ])),
+        ]),
+        SettingsEditor::FormatEditor { .. } => Line::from(vec![
+            Span::styled("\u{2191}\u{2193} move", style_hint()),
+            Span::styled("  spc toggle  J/K reorder  \u{23ce} done", style_hint()),
+        ]),
+        SettingsEditor::LangPicker { .. } => Line::from(vec![
+            Span::styled("\u{2191}\u{2193} pick", style_hint()),
+            Span::styled("  \u{23ce} select  esc cancel", style_hint()),
+        ]),
+        SettingsEditor::Viewing => Line::from(vec![
+            Span::styled("\u{2191}\u{2193} field", style_hint()),
+            Span::styled(
+                "  \u{23ce} edit  spc toggle  \u{2190}\u{2192} nudge  esc save  q discard",
+                style_hint(),
+            ),
+        ]),
+    };
+    frame.render_widget(Paragraph::new(hint_line), split[1]);
+
+    // ── Overlay: Format Editor sub-modal ─────────────────────────────────────
+    if let SettingsEditor::FormatEditor {
+        rows: fmt_rows,
+        cursor,
+    } = &draft.editor
+    {
+        render_format_editor(frame, area, fmt_rows, *cursor);
+    }
+
+    // ── Overlay: Language picker popup ───────────────────────────────────────
+    if let SettingsEditor::LangPicker { options, selected } = &draft.editor {
+        render_lang_picker(frame, area, options, *selected);
+    }
+}
+
+/// Render the Format Editor sub-modal centred inside `parent`.
+fn render_format_editor(frame: &mut Frame, parent: Rect, rows: &[(bool, String)], cursor: usize) {
+    let area = centered_rect(42, 14, parent);
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(C_BRIGHT))
+        .title(Span::styled(" format editor ", style_header()))
+        .style(style_normal());
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let padded = inner.inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+
+    let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(padded);
+
+    let mut rank = 0usize;
+    let items: Vec<ListItem> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, (included, name))| {
+            let is_cur = i == cursor;
+            let rank_str = if *included {
+                rank += 1;
+                format!("{rank}")
+            } else {
+                " ".to_string()
+            };
+            let checkbox = if *included { "[x]" } else { "[ ]" };
+            let line_style = if is_cur {
+                style_selected()
+            } else if *included {
+                Style::default().fg(C_NEEDS_YOU)
+            } else {
+                style_dim()
+            };
+            ListItem::new(Line::from(Span::styled(
+                format!("{checkbox} {rank_str:<2} {name}"),
+                line_style,
+            )))
+        })
+        .collect();
+
+    frame.render_widget(
+        List::new(items).block(Block::default().borders(Borders::NONE)),
+        split[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "spc toggle  J/K reorder  \u{23ce} done",
+            style_hint(),
+        )),
         split[1],
+    );
+}
+
+/// Render the Language picker popup anchored near `parent`.
+fn render_lang_picker(frame: &mut Frame, parent: Rect, options: &[String], selected: usize) {
+    let h = (options.len() as u16 + 2).min(14);
+    let area = centered_rect(28, h, parent);
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(C_BRIGHT))
+        .title(Span::styled(" language ", style_header()))
+        .style(style_normal());
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let items: Vec<ListItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, opt)| {
+            let is_sel = i == selected;
+            let style = if is_sel {
+                style_selected()
+            } else {
+                style_dim()
+            };
+            ListItem::new(Line::from(Span::styled(format!("  {opt}"), style)))
+        })
+        .collect();
+
+    frame.render_widget(
+        List::new(items).block(Block::default().borders(Borders::NONE)),
+        inner,
     );
 }
 
