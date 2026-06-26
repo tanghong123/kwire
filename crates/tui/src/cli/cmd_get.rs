@@ -58,8 +58,8 @@ pub async fn run(args: GetArgs) -> Result<()> {
 
     // Detect whether arg is a bare MD5 (32 lowercase hex chars).
     if is_md5(&query) {
-        let emitter = CliEmitter::new();
-        return download_by_md5(&query, site, &args.out, &cfg, &emitter).await;
+        // Bare md5: no candidate metadata → no known size, no format label.
+        return download_by_md5(&query, site, &args.out, &cfg, None, None).await;
     }
 
     // Title search path.
@@ -103,8 +103,8 @@ pub async fn run(args: GetArgs) -> Result<()> {
             RequestStatus::Matched => {
                 let best = &outcome.ranked[0];
                 println!("{}", super::cmd_search::format_candidate(1, best));
-                let emitter = CliEmitter::new();
-                download_by_md5(&best.md5, site, &args.out, &cfg, &emitter).await
+                let label = best.extension.as_ref().map(|f| f.ext().to_uppercase());
+                download_by_md5(&best.md5, site, &args.out, &cfg, best.size_bytes, label).await
             }
             // No confident match → degrade to search: show ranked candidates.
             RequestStatus::NeedsSelection => {
@@ -146,8 +146,8 @@ pub async fn run(args: GetArgs) -> Result<()> {
             // Confident match → auto-download the best.
             let best = &candidates[0];
             println!("{}", super::cmd_search::format_candidate(1, best));
-            let emitter = CliEmitter::new();
-            download_by_md5(&best.md5, site, &args.out, &cfg, &emitter).await
+            let label = best.extension.as_ref().map(|f| f.ext().to_uppercase());
+            download_by_md5(&best.md5, site, &args.out, &cfg, best.size_bytes, label).await
         } else {
             // Middling → degrade to a pick-one list, download nothing.
             eprintln!("no confident match — pick one and run:  kwire get <md5>");
@@ -167,8 +167,12 @@ async fn download_by_md5(
     site: Option<&str>,
     out: &str,
     cfg: &Config,
-    emitter: &CliEmitter,
+    expected_size: Option<u64>,
+    format_label: Option<String>,
 ) -> Result<()> {
+    // The chronicle lines ("EPUB started on …") carry the format label when the
+    // caller knows it (title-search path); the bare-md5 path omits it.
+    let emitter = CliEmitter::with_label(format_label);
     // Use the engine's scheduler builder: full failover chain (auto-ordered by
     // SLUM health) when no `--site` is pinned, and a DOWNLOAD client with only a
     // connect timeout (no overall timeout — large streaming bodies must not be
@@ -184,7 +188,7 @@ async fn download_by_md5(
         md5: md5.to_string(),
         dest,
         resume_offset: 0,
-        expected_size: None,
+        expected_size,
     };
 
     let (tx, mut rx) = mpsc::channel::<Progress>(256);
@@ -349,7 +353,7 @@ mod tests {
 
     #[test]
     fn emitter_print_progress_done_does_not_panic() {
-        let emitter = CliEmitter { is_tty: false };
+        let emitter = CliEmitter::for_test(false);
         let p = Progress::Done {
             md5: "a".repeat(32),
             host: "libgen.li".into(),
@@ -362,7 +366,7 @@ mod tests {
 
     #[test]
     fn emitter_print_progress_bytes_non_tty_does_not_panic() {
-        let emitter = CliEmitter { is_tty: false };
+        let emitter = CliEmitter::for_test(false);
         // At 50 % → multiple of 10, so this will println! on non-TTY.
         let p = Progress::Bytes {
             md5: "b".repeat(32),

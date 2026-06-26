@@ -7,7 +7,10 @@
 //! newlines instead.
 
 use std::io::{self, IsTerminal, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
+use libgen_core::download::current_edge;
 use libgen_core::model::DownloadList;
 use libgen_core::orchestrator::Event;
 use libgen_core::queue::Progress;
@@ -25,13 +28,48 @@ pub struct CliEmitter {
     /// Whether stdout is a real terminal (TTY).  Drives `\r` vs newline for
     /// the `Bytes` progress line.
     pub is_tty: bool,
+    /// Uppercased format label (e.g. `"EPUB"`) for the desktop-style download
+    /// chronicle lines, when known.  `None` (bare-md5 path) omits the label.
+    pub format_label: Option<String>,
+    /// First host a leg resolved on — the "started on" host.  Used to decide
+    /// when the actual serving CDN edge differs (→ a "serving from" line).
+    /// `Mutex`/`Atomic` (not `Cell`/`RefCell`) so the type stays `Sync` for the
+    /// `EngineEmitter` trait.
+    start_host: Mutex<Option<String>>,
+    /// Whether the one-shot "serving from <edge>" line has already been emitted.
+    serving_emitted: AtomicBool,
 }
 
 impl CliEmitter {
-    /// Detect TTY from the real stdout.
-    pub fn new() -> Self {
+    /// Construct an emitter, detecting TTY from the real stdout and carrying an
+    /// uppercased format label (e.g. `"EPUB"`) for the chronicle lines when known
+    /// (`None` for the bare-md5 / search paths, which omit the label).
+    pub fn with_label(format_label: Option<String>) -> Self {
         CliEmitter {
             is_tty: io::stdout().is_terminal(),
+            format_label,
+            start_host: Mutex::new(None),
+            serving_emitted: AtomicBool::new(false),
+        }
+    }
+
+    /// Test-only constructor with an explicit `is_tty` (real stdout detection is
+    /// unreliable under the test harness).
+    #[cfg(test)]
+    pub fn for_test(is_tty: bool) -> Self {
+        CliEmitter {
+            is_tty,
+            format_label: None,
+            start_host: Mutex::new(None),
+            serving_emitted: AtomicBool::new(false),
+        }
+    }
+
+    /// Render the chronicle label prefix: `"EPUB "` when known, else empty.
+    fn label_prefix(&self) -> String {
+        match &self.format_label {
+            Some(l) => format!("{l} "),
+            None => String::new(),
         }
     }
 
@@ -40,22 +78,37 @@ impl CliEmitter {
     /// directly from `cmd_get` which drives the scheduler without the full
     /// engine.
     pub fn print_progress(&self, p: &Progress) {
+        let prefix = self.label_prefix();
         match p {
-            Progress::Resolved {
-                host, total_bytes, ..
-            } => {
-                let size_str = total_bytes
-                    .map(super::cmd_search::human_size)
-                    .unwrap_or_else(|| "?".to_string());
-                eprintln!("connecting  {host}  ({size_str})");
+            Progress::Resolved { host, .. } => {
+                // Desktop-style chronicle: announce the start ONCE, on the first
+                // leg to resolve (the "started on" host).
+                if let Ok(mut start) = self.start_host.lock() {
+                    if start.is_none() {
+                        *start = Some(host.clone());
+                        eprintln!("{prefix}started on {host}");
+                    }
+                }
             }
             Progress::Bytes {
+                md5,
                 bytes_done,
                 total_bytes,
                 speed_bps,
                 eta_secs,
                 ..
             } => {
+                // Surface the real CDN edge ONCE, when it differs from the host we
+                // started on (the mirror front-door) — "serving from <edge>".
+                if !self.serving_emitted.load(Ordering::Relaxed) {
+                    if let Some(edge) = current_edge(md5) {
+                        let started = self.start_host.lock().ok().and_then(|s| s.clone());
+                        if started.as_deref() != Some(edge.as_str()) {
+                            eprintln!("{prefix}serving from {edge}");
+                            self.serving_emitted.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
                 let bd = *bytes_done;
                 let tb = *total_bytes;
                 let spd = *speed_bps;
@@ -76,6 +129,7 @@ impl CliEmitter {
                 }
             }
             Progress::Done {
+                host,
                 path,
                 bytes_written,
                 ..
@@ -84,7 +138,10 @@ impl CliEmitter {
                     // End the in-place progress line with a real newline.
                     println!();
                 }
-                println!("saved  {}  ({bytes_written} bytes)", path.display());
+                // Chronicle (stderr) + the saved file location (stdout, pipe-friendly).
+                let size = super::cmd_search::human_size(*bytes_written);
+                eprintln!("{prefix}completed on {host} ({size})");
+                println!("saved  {}", path.display());
             }
             Progress::Failed { error, .. } => {
                 if self.is_tty {
@@ -104,6 +161,12 @@ impl CliEmitter {
                 from_host, error, ..
             } => {
                 eprintln!("failover  from {from_host}  {error}");
+            }
+            // Lead-up activity: a resume from an existing `.part` — one concise line
+            // so the user sees the transfer is continuing, not starting fresh.
+            Progress::Resuming { host, offset, .. } => {
+                let off = super::cmd_search::human_size(*offset);
+                eprintln!("{prefix}resuming on {host} (from {off})");
             }
             _ => {}
         }
@@ -147,33 +210,40 @@ impl EngineEmitter for CliEmitter {
 // Progress-line formatter
 // ---------------------------------------------------------------------------
 
-/// Format a download-progress status line:
-/// `⬇  47%  1.4 MB/s  eta 1m04s  ▰▰▰▰░░░░░░`
+/// Format a download-progress status line.
 ///
-/// When `total_bytes` is `None` (content-length not known), the percentage and
-/// bar are replaced with `?`.
+/// When `total_bytes` is known (and non-zero) the full readout is rendered:
+/// `⬇  47%  1.4 MB/s  eta 1m04s  ▰▰▰▰░░░░░░`.
+///
+/// When `total_bytes` is `None` (or 0) — common for libgen CDN mirrors that omit
+/// Content-Length — an *indeterminate* readout is rendered instead of a bogus
+/// `?%`/`??????????`/`eta ?`: the bytes downloaded so far plus speed, e.g.
+/// `⬇ 5.2 MB · 310 KB/s`.
 pub fn format_progress_line(
     bytes_done: u64,
     total_bytes: Option<u64>,
     speed_bps: Option<u64>,
     eta_secs: Option<u64>,
 ) -> String {
-    let (pct_str, bar) = match total_bytes.filter(|&t| t > 0) {
-        Some(total) => {
-            let pct = (bytes_done * 100 / total).min(100);
-            (format!("{pct:3}%"), format_bar(pct, 10))
-        }
-        None => ("  ?%".to_string(), "??????????".to_string()),
-    };
-
     let speed_str = speed_bps
         .map(format_speed)
         .unwrap_or_else(|| "?".to_string());
 
-    let eta_str = eta_secs.map(format_eta).unwrap_or_else(|| "?".to_string());
-
-    // ⬇ = U+2B07 DOWNWARDS BLACK ARROW
-    format!("\u{2B07} {pct_str}  {speed_str}  eta {eta_str}  {bar}")
+    match total_bytes.filter(|&t| t > 0) {
+        Some(total) => {
+            let pct = (bytes_done * 100 / total).min(100);
+            let bar = format_bar(pct, 10);
+            let eta_str = eta_secs.map(format_eta).unwrap_or_else(|| "?".to_string());
+            // ⬇ = U+2B07 DOWNWARDS BLACK ARROW
+            format!("\u{2B07} {pct:3}%  {speed_str}  eta {eta_str}  {bar}")
+        }
+        None => {
+            // Indeterminate: show progress as bytes-so-far + speed.
+            // · = U+00B7 MIDDLE DOT
+            let done_str = super::cmd_search::human_size(bytes_done);
+            format!("\u{2B07} {done_str} \u{00B7} {speed_str}")
+        }
+    }
 }
 
 /// Render a progress bar with `width` cells using filled (`▰`) / empty (`░`).
@@ -244,9 +314,18 @@ mod tests {
 
     #[test]
     fn progress_line_unknown_total() {
-        let line = format_progress_line(100, None, None, None);
-        assert!(line.contains("?%"), "pct unknown: {line:?}");
-        assert!(line.contains("??????????"), "bar unknown: {line:?}");
+        // No Content-Length: render bytes-so-far + speed, NOT a bogus %/bar/eta.
+        // 5_452_595 bytes ≈ 5.2 MB; 317_440 B/s ≈ 310 KB/s.
+        let line = format_progress_line(5_452_595, None, Some(317_440), None);
+        assert!(line.contains("5.2 MB"), "bytes: {line:?}");
+        assert!(line.contains("310 KB/s"), "speed: {line:?}");
+        assert!(line.contains('\u{2B07}'), "⬇ missing: {line:?}");
+        // Must NOT show the old indeterminate placeholders.
+        assert!(!line.contains("?%"), "should not show ?%: {line:?}");
+        assert!(
+            !line.contains('\u{2591}') && !line.contains('?'),
+            "should not show a ?-bar: {line:?}"
+        );
     }
 
     #[test]
@@ -315,7 +394,7 @@ mod tests {
     /// we can confirm no arm is missed.
     #[test]
     fn emitter_handles_download_done_without_panic() {
-        let emitter = CliEmitter { is_tty: false };
+        let emitter = CliEmitter::for_test(false);
         let shape = DownloadList {
             title: "test".into(),
             settings: Default::default(),
@@ -333,7 +412,7 @@ mod tests {
 
     #[test]
     fn emitter_handles_query_stage_without_panic() {
-        let emitter = CliEmitter { is_tty: false };
+        let emitter = CliEmitter::for_test(false);
         let shape = DownloadList {
             title: "test".into(),
             settings: Default::default(),
