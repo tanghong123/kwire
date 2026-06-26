@@ -21,7 +21,10 @@ pub const C_SOFTER: Color = Color::Rgb(0xcf, 0xca, 0xbf); // softer dim — embe
 pub const C_WARM: Color = Color::Rgb(0xcd, 0xbf, 0x9c); // warm amber — hosts, field values, tagline
 pub const C_BG: Color = Color::Reset; // background (terminal default)
 pub const C_PANEL: Color = Color::Reset; // panel background (terminal default)
-pub const C_SELECTED: Color = Color::Rgb(0x1b, 0x1a, 0x14); // selected row
+                                         // Shared "selected line" treatment: a FAINT GREEN background (not reverse-video)
+                                         // paired with a GREEN vertical left accent bar (`▌` in `C_SEL_ACCENT`).
+pub const C_SELECTED: Color = Color::Rgb(0x18, 0x20, 0x13); // selected row — faint green tint
+pub const C_SEL_ACCENT: Color = C_DONE; // green left accent bar on selected rows
 pub const C_BACKDROP: Color = Color::Rgb(0x12, 0x11, 0x0f); // modal dim overlay
 
 // ---------------------------------------------------------------------------
@@ -54,6 +57,13 @@ pub fn style_selected() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// The shared green left accent bar (`▌`) style for a selected list row —
+/// green glyph on the faint-green selected background. Used by every selectable
+/// list (main book table, detail variations, detail history, settings fields).
+pub fn style_sel_accent() -> Style {
+    Style::default().fg(C_SEL_ACCENT).bg(C_SELECTED)
+}
+
 pub fn style_hint() -> Style {
     Style::default().fg(C_DIM).bg(C_PANEL)
 }
@@ -66,11 +76,25 @@ pub fn style_for_state(state: &str) -> Style {
     let color = match state {
         "done" => C_DONE,
         "downloading" => C_DOWNLOADING,
-        "failed" | "cancelled" => C_FAILED,
+        "failed" | "cancelled" | "not_found" => C_FAILED,
         "paused" | "available" => C_NEEDS_YOU,
         _ => C_DIM, // queued / unknown
     };
     Style::default().fg(color)
+}
+
+/// Color for a status-filter chip, keyed by status family (audit palette).
+/// The active/selected chip is rendered bright + underlined by the caller and
+/// does not go through this function.
+pub fn filter_chip_color(label: &str) -> Color {
+    match label {
+        "Needs you" => C_NEEDS_YOU,     // amber
+        "Cannot" => C_FAILED,           // red
+        "In progress" => C_DOWNLOADING, // teal / blue
+        "Done" => C_DONE,               // green
+        // All / Check / Queued and anything else: dim metadata.
+        _ => C_DIM,
+    }
 }
 
 /// Render a `▰▱` block-character progress bar in `width` chars (min 2).
@@ -93,16 +117,20 @@ pub fn score_color(score: f64) -> Color {
 }
 
 /// Color for a history-event `kind` string, keyed by common substrings.
+/// Palette: done = green, downloading = blue, failed = red, retry = yellow,
+/// everything else = a neutral badge color.
 pub fn history_kind_color(kind: &str) -> Color {
     let k = kind.to_ascii_lowercase();
-    if k.contains("done") || k.contains("download") || k.contains("match") {
-        C_DONE
+    if k.contains("done") || k.contains("verif") || k.contains("match") {
+        C_DONE // green — success family
+    } else if k.contains("download") {
+        C_DOWNLOADING // blue — in flight
     } else if k.contains("fail") || k.contains("error") || k.contains("cancel") {
-        C_FAILED
-    } else if k.contains("start") || k.contains("resolv") || k.contains("queue") {
-        C_DOWNLOADING
+        C_FAILED // red
+    } else if k.contains("retry") || k.contains("rotat") || k.contains("failover") {
+        C_NEEDS_YOU // yellow — retry / rotation
     } else {
-        C_DIM
+        C_MUTED // neutral badge (born / discovered / selected / …)
     }
 }
 
