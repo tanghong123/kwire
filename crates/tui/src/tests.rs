@@ -520,6 +520,8 @@ mod tests {
         app.modal = Some(Modal::Detail {
             book_flat_index: 0,
             selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
         });
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
     }
@@ -1284,6 +1286,8 @@ mod tests {
         app.modal = Some(Modal::Detail {
             book_flat_index: 0,
             selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
         });
         let intent = app.on_input(key(KeyCode::Down));
         assert_eq!(intent, Intent::Redraw);
@@ -1292,6 +1296,8 @@ mod tests {
             Some(Modal::Detail {
                 book_flat_index: 0,
                 selected: 1,
+                sub_focus: crate::app::DetailSubFocus::Variations,
+                history_selected: 0,
             }),
             "Down inside detail modal should advance variation selected to 1"
         );
@@ -1304,6 +1310,8 @@ mod tests {
         app.modal = Some(Modal::Detail {
             book_flat_index: 0,
             selected: 1,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
         });
         let intent = app.on_input(key(KeyCode::Up));
         assert_eq!(intent, Intent::Redraw);
@@ -1312,6 +1320,8 @@ mod tests {
             Some(Modal::Detail {
                 book_flat_index: 0,
                 selected: 0,
+                sub_focus: crate::app::DetailSubFocus::Variations,
+                history_selected: 0,
             }),
             "Up inside detail modal should retreat variation selected to 0"
         );
@@ -1325,6 +1335,8 @@ mod tests {
         app.modal = Some(Modal::Detail {
             book_flat_index: 0,
             selected: 1,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
         });
         app.on_input(key(KeyCode::Down));
         assert_eq!(
@@ -1332,6 +1344,8 @@ mod tests {
             Some(Modal::Detail {
                 book_flat_index: 0,
                 selected: 1,
+                sub_focus: crate::app::DetailSubFocus::Variations,
+                history_selected: 0,
             }),
             "Down must not go past the last variation"
         );
@@ -1344,6 +1358,8 @@ mod tests {
         app.modal = Some(Modal::Detail {
             book_flat_index: 0,
             selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
         });
         app.on_input(key(KeyCode::Char('j')));
         assert_eq!(
@@ -1351,6 +1367,8 @@ mod tests {
             Some(Modal::Detail {
                 book_flat_index: 0,
                 selected: 1,
+                sub_focus: crate::app::DetailSubFocus::Variations,
+                history_selected: 0,
             }),
             "'j' must advance variation selected"
         );
@@ -1360,6 +1378,8 @@ mod tests {
             Some(Modal::Detail {
                 book_flat_index: 0,
                 selected: 0,
+                sub_focus: crate::app::DetailSubFocus::Variations,
+                history_selected: 0,
             }),
             "'k' must retreat variation selected"
         );
@@ -1375,6 +1395,8 @@ mod tests {
         app.modal = Some(Modal::Detail {
             book_flat_index: 0,
             selected: 1,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
         });
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let content = buffer_string(&terminal);
@@ -2314,5 +2336,413 @@ mod tests {
                 "command '{cmd}' must appear in Tab-completion candidates"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // #57 — detail sub-focus (Tab + history nav)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detail_modal_tab_toggles_sub_focus() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        // First Tab → History focused.
+        app.on_input(key(KeyCode::Tab));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 0,
+                sub_focus: DetailSubFocus::History,
+                history_selected: 0,
+            }),
+            "Tab should switch sub-focus to History"
+        );
+        // Second Tab → back to Variations.
+        app.on_input(key(KeyCode::Tab));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 0,
+                sub_focus: DetailSubFocus::Variations,
+                history_selected: 0,
+            }),
+            "Second Tab should toggle sub-focus back to Variations"
+        );
+    }
+
+    #[test]
+    fn detail_modal_history_nav_advances_history_selected() {
+        use crate::app::DetailSubFocus;
+        // Build a fixture with history events.
+        use libgen_core::model::{BookInput, BookRequest, DownloadList, Group};
+        use libgen_engine::viewmodel::build_with_id;
+        let mut g = Group::new("G");
+        let mut req = BookRequest::new(BookInput {
+            title: "Book With History".into(),
+            authors: vec!["Author".into()],
+            ..Default::default()
+        });
+        // Inject some history events.
+        req.log_event(None, None, "discovered", String::from("found candidates"));
+        req.log_event(None, None, "matched", String::from("auto-matched"));
+        req.log_event(None, None, "downloading", String::from("started"));
+        g.books.push(req);
+        let list = DownloadList {
+            title: "T".into(),
+            settings: libgen_core::model::ListSettings::default(),
+            groups: vec![g],
+        };
+        let vm = build_with_id("test".into(), &list);
+
+        let mut app = AppState::new();
+        app.set_view(vm);
+        // Focus History sub-pane.
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::History,
+            history_selected: 0,
+        });
+        // ↓ should advance history_selected.
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 0,
+                sub_focus: DetailSubFocus::History,
+                history_selected: 1,
+            }),
+            "Down with History focused should advance history_selected"
+        );
+    }
+
+    #[test]
+    fn detail_modal_history_scroll_clamps_at_last_event() {
+        use crate::app::DetailSubFocus;
+        use libgen_core::model::{BookInput, BookRequest, DownloadList, Group};
+        use libgen_engine::viewmodel::build_with_id;
+        let mut g = Group::new("G");
+        let mut req = BookRequest::new(BookInput {
+            title: "Book".into(),
+            authors: vec![],
+            ..Default::default()
+        });
+        req.log_event(None, None, "discovered", String::from("found"));
+        req.log_event(None, None, "matched", String::from("ok"));
+        g.books.push(req);
+        let list = DownloadList {
+            title: "T".into(),
+            settings: libgen_core::model::ListSettings::default(),
+            groups: vec![g],
+        };
+        let vm = build_with_id("test".into(), &list);
+        let mut app = AppState::new();
+        app.set_view(vm);
+
+        // Start at last event (index 1 of 2).
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::History,
+            history_selected: 1,
+        });
+        // ↓ must not go past the last event.
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 0,
+                sub_focus: DetailSubFocus::History,
+                history_selected: 1,
+            }),
+            "Down must clamp at the last history event"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #49 — manual re-query
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detail_modal_s_opens_requery_modal() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        app.on_input(key(KeyCode::Char('s')));
+        // Should now be in ReQuery modal with buf prefilled with the book's title.
+        match &app.modal {
+            Some(Modal::ReQuery {
+                book_flat_index: 0,
+                buf,
+            }) => {
+                assert!(
+                    !buf.is_empty(),
+                    "ReQuery buf should be pre-filled with book title"
+                );
+            }
+            other => panic!("expected Modal::ReQuery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn requery_modal_enter_emits_requery_book_intent() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::ReQuery {
+            book_flat_index: 0,
+            buf: "New Title".into(),
+        });
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(
+            intent,
+            Intent::ReQueryBook {
+                group_path: vec![0],
+                book_index: 0,
+                title: "New Title".into(),
+            },
+            "Enter in ReQuery modal should emit ReQueryBook"
+        );
+        assert!(app.modal.is_none(), "modal should be cleared after submit");
+    }
+
+    #[test]
+    fn requery_modal_esc_returns_to_detail() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::ReQuery {
+            book_flat_index: 0,
+            buf: "whatever".into(),
+        });
+        app.on_input(key(KeyCode::Esc));
+        assert!(
+            matches!(app.modal, Some(Modal::Detail { .. })),
+            "Esc in ReQuery should return to Detail modal"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #50 — book-level actions: edit / remove / mark-not-found
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detail_modal_e_opens_edit_book_modal() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        app.on_input(key(KeyCode::Char('e')));
+        match &app.modal {
+            Some(Modal::EditBook {
+                book_flat_index: 0,
+                title_buf,
+                field: crate::app::EditBookField::Title,
+                ..
+            }) => {
+                assert!(
+                    !title_buf.is_empty(),
+                    "EditBook title_buf should be pre-filled"
+                );
+            }
+            other => panic!("expected Modal::EditBook, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn edit_book_modal_enter_emits_edit_book_intent() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::EditBook {
+            book_flat_index: 0,
+            title_buf: "New Title".into(),
+            author_buf: "Author A, Author B".into(),
+            field: crate::app::EditBookField::Title,
+        });
+        let intent = app.on_input(key(KeyCode::Enter));
+        assert_eq!(
+            intent,
+            Intent::EditBook {
+                group_path: vec![0],
+                book_index: 0,
+                title: "New Title".into(),
+                authors: vec!["Author A".into(), "Author B".into()],
+            },
+            "Enter in EditBook modal should emit EditBook intent"
+        );
+        assert!(app.modal.is_none(), "modal should be cleared after submit");
+    }
+
+    #[test]
+    fn detail_modal_x_opens_confirm_remove() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        app.on_input(key(KeyCode::Char('x')));
+        assert_eq!(
+            app.modal,
+            Some(Modal::ConfirmBookRemove { book_flat_index: 0 }),
+            "'x' should open ConfirmBookRemove"
+        );
+    }
+
+    #[test]
+    fn confirm_remove_y_emits_remove_book_intent() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::ConfirmBookRemove { book_flat_index: 0 });
+        let intent = app.on_input(key(KeyCode::Char('y')));
+        assert_eq!(
+            intent,
+            Intent::RemoveBook {
+                group_path: vec![0],
+                book_index: 0,
+            },
+            "y in ConfirmBookRemove should emit RemoveBook"
+        );
+        assert!(app.modal.is_none(), "modal should be cleared after confirm");
+    }
+
+    #[test]
+    fn confirm_remove_n_returns_to_detail() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::ConfirmBookRemove { book_flat_index: 0 });
+        app.on_input(key(KeyCode::Char('n')));
+        assert!(
+            matches!(app.modal, Some(Modal::Detail { .. })),
+            "n in ConfirmBookRemove should return to Detail modal"
+        );
+    }
+
+    #[test]
+    fn detail_modal_m_emits_mark_not_found() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        let intent = app.on_input(key(KeyCode::Char('m')));
+        assert_eq!(
+            intent,
+            Intent::MarkNotFound {
+                group_path: vec![0],
+                book_index: 0,
+            },
+            "'m' in detail modal should emit MarkNotFound"
+        );
+        assert!(app.modal.is_none(), "modal should be cleared after mark");
+    }
+
+    #[test]
+    fn list_view_m_emits_mark_not_found() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        let intent = app.on_input(key(KeyCode::Char('m')));
+        assert_eq!(
+            intent,
+            Intent::MarkNotFound {
+                group_path: vec![0],
+                book_index: 0,
+            },
+            "'m' in list view should emit MarkNotFound for the selected book"
+        );
+    }
+
+    #[test]
+    fn list_view_x_opens_confirm_remove() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.on_input(key(KeyCode::Char('x')));
+        assert_eq!(
+            app.modal,
+            Some(Modal::ConfirmBookRemove { book_flat_index: 0 }),
+            "'x' in list view should open ConfirmBookRemove"
+        );
+    }
+
+    #[test]
+    fn list_view_e_opens_edit_book_modal() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.on_input(key(KeyCode::Char('e')));
+        match &app.modal {
+            Some(Modal::EditBook {
+                book_flat_index: 0,
+                title_buf,
+                field: crate::app::EditBookField::Title,
+                ..
+            }) => {
+                assert!(
+                    !title_buf.is_empty(),
+                    "EditBook title_buf should be pre-filled"
+                );
+            }
+            other => panic!("expected Modal::EditBook for list view 'e', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn render_requery_modal_does_not_panic() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::ReQuery {
+            book_flat_index: 0,
+            buf: "Treasure".into(),
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn render_edit_book_modal_does_not_panic() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::EditBook {
+            book_flat_index: 0,
+            title_buf: "Treasure Island".into(),
+            author_buf: "Stevenson".into(),
+            field: crate::app::EditBookField::Title,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn render_confirm_remove_modal_does_not_panic() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::ConfirmBookRemove { book_flat_index: 0 });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
     }
 }
