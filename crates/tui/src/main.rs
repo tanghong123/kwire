@@ -41,8 +41,9 @@ use libgen_core::orchestrator::Event;
 use libgen_core::queue::Progress;
 use libgen_engine::viewmodel::build_with_id;
 use libgen_engine::{
-    build_search, ensure_scheduler_from, open_store, spawn_with, AppState as EngineAppState,
-    BookStatePayload, Config, EngineEmitter, EngineHandles, Library, LoadedList,
+    build_search, ensure_scheduler_from, open_store, spawn_with, AppSettings,
+    AppState as EngineAppState, BookStatePayload, Config, EngineEmitter, EngineHandles, Library,
+    LoadedList,
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
@@ -415,6 +416,12 @@ async fn dispatch_intent(
                 .spawn()
                 .or_else(|_| std::process::Command::new("open").arg(&parent).spawn());
         }
+        Intent::SaveSettings => {
+            save_settings(app, handles).await;
+        }
+        Intent::DiscardSettings => {
+            // Draft already cleared and modal closed in on_input.
+        }
         Intent::Redraw => {}
     }
     Ok(false)
@@ -437,7 +444,13 @@ async fn handle_command_async(
     let arg = parts.next().unwrap_or("").trim();
     match cmd {
         "quit" | "q" => return Ok(true),
-        "settings" => app.modal = Some(Modal::Settings),
+        "settings" => {
+            let app_settings: AppSettings = {
+                let cfg = handles.config.lock().unwrap();
+                cfg.app.clone()
+            };
+            app.open_settings(&app_settings);
+        }
         "help" => app.modal = Some(Modal::Help),
         "import" => {
             if arg.is_empty() {
@@ -1024,5 +1037,74 @@ async fn pause_all_active(app: &mut AppState, handles: &EngineHandles) {
             tracing::warn!("pause_all: {e}");
         }
     }
+    refresh_active_view(app, handles).await;
+}
+
+/// Persist the staged settings draft: per-list settings → orchestrator,
+/// app-wide settings → `app-config.json` next to the DB.
+async fn save_settings(app: &mut AppState, handles: &EngineHandles) {
+    use libgen_core::model::{Format, ListSettings};
+    use std::path::Path;
+
+    // Take the draft so we can move out of it.
+    let Some(draft) = app.settings_draft.take() else {
+        return;
+    };
+
+    // ── 1. Per-list settings ────────────────────────────────────────────────
+    let list_settings = {
+        let fmt_pref: Vec<Format> = draft.format_pref.iter().map(|s| Format::parse(s)).collect();
+        let language = if draft.language.is_empty() || draft.language == "any" {
+            None
+        } else {
+            Some(draft.language.clone())
+        };
+        // snapshot to get current "rest" of settings, then overlay our fields
+        let base = if let Some(orch_arc) = active_orch(handles).await {
+            orch_arc
+                .lock()
+                .await
+                .snapshot()
+                .map(|s| s.settings)
+                .unwrap_or_default()
+        } else {
+            ListSettings::default()
+        };
+        ListSettings {
+            format_pref: fmt_pref,
+            language,
+            auto_threshold: draft.auto_threshold,
+            near_threshold: draft.near_threshold,
+            keep_top: draft.keep_top,
+            naming_template: draft.naming_template.clone(),
+            seq_per_group: draft.seq_per_group,
+            ..base
+        }
+    };
+
+    if let Some(orch_arc) = active_orch(handles).await {
+        let mut guard = orch_arc.lock().await;
+        if let Err(e) = guard.update_settings(list_settings) {
+            tracing::warn!("save_settings: update_settings failed: {e}");
+        }
+    }
+
+    // ── 2. App-wide settings ─────────────────────────────────────────────────
+    let cfg_dir: std::path::PathBuf = {
+        let cfg = handles.config.lock().unwrap();
+        cfg.db_path.parent().unwrap_or(Path::new(".")).to_path_buf()
+    };
+    {
+        let mut cfg = handles.config.lock().unwrap();
+        cfg.app.out_dir = draft.out_dir.clone();
+        cfg.app.max_concurrent_downloads = draft.max_concurrent;
+        cfg.app.max_attempts = draft.max_attempts;
+        cfg.app.hedge_enabled = draft.hedge_enabled;
+        if let Err(e) = cfg.app.save(&cfg_dir.join("app-config.json")) {
+            tracing::warn!("save_settings: app-config save failed: {e}");
+        }
+    }
+
+    // ── 3. Refresh view to reflect the new settings ───────────────────────────
     refresh_active_view(app, handles).await;
 }

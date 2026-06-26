@@ -5,10 +5,198 @@
 //! unit-testable because they take and return plain data.
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
-use libgen_engine::{ViewBook, ViewGroup, ViewModel};
+use libgen_engine::{AppSettings, ViewBook, ViewGroup, ViewModel};
 use ratatui::layout::Rect;
 
 use crate::intent::Intent;
+
+// ---------------------------------------------------------------------------
+// Settings modal constants + types
+// ---------------------------------------------------------------------------
+
+/// Number of navigable (user-editable) fields in the Settings modal.
+pub const SETTINGS_FIELD_COUNT: usize = 11;
+
+/// Language options offered in the Language picker; first entry is "any".
+pub const SETTINGS_LANGUAGES: &[&str] = &[
+    "any",
+    "English",
+    "German",
+    "French",
+    "Spanish",
+    "Chinese",
+    "Russian",
+    "Japanese",
+    "Italian",
+    "Portuguese",
+];
+
+/// All format names shown in the Format Editor, in display order.
+pub const FORMAT_EDITOR_FORMATS: &[&str] =
+    &["epub", "pdf", "mobi", "azw3", "djvu", "cbz", "fb2", "txt"];
+
+/// Which kind of editor a Settings field uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsFieldKind {
+    /// Opens the Format Editor sub-modal.
+    FormatPref,
+    /// Opens the Language picker popup.
+    Language,
+    /// Inline edit: typed decimal; ←/→ nudge by 0.05.
+    F32,
+    /// Inline edit: typed integer; ←/→ nudge by 1.
+    Usize,
+    /// Inline edit: typed integer; ←/→ nudge by 1.
+    U32,
+    /// Inline text edit.
+    Text,
+    /// Space (or ⏎) toggles between on/off.
+    Bool,
+    /// Shown but not editable.
+    ReadOnly,
+}
+
+/// Return the editor kind for field index `idx`.
+pub fn settings_field_kind(idx: usize) -> SettingsFieldKind {
+    match idx {
+        0 => SettingsFieldKind::FormatPref,
+        1 => SettingsFieldKind::Language,
+        2 | 3 => SettingsFieldKind::F32,
+        4 | 8 => SettingsFieldKind::Usize,
+        5 | 6 => SettingsFieldKind::Text,
+        7 | 10 => SettingsFieldKind::Bool,
+        9 => SettingsFieldKind::U32,
+        _ => SettingsFieldKind::ReadOnly,
+    }
+}
+
+/// Build the full row list for the Format Editor from `format_pref` (ordered
+/// included formats).  Included formats come first (in priority order),
+/// excluded formats follow in the canonical display order.
+pub fn build_format_editor_rows(format_pref: &[String]) -> Vec<(bool, String)> {
+    let mut rows: Vec<(bool, String)> = format_pref
+        .iter()
+        .filter(|f| FORMAT_EDITOR_FORMATS.contains(&f.as_str()))
+        .map(|f| (true, f.clone()))
+        .collect();
+    for &f in FORMAT_EDITOR_FORMATS {
+        if !format_pref.iter().any(|p| p == f) {
+            rows.push((false, f.to_string()));
+        }
+    }
+    rows
+}
+
+/// Inline editor mode within the Settings modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsEditor {
+    /// Normal navigation — no field actively being edited.
+    Viewing,
+    /// Inline text/number edit; the `String` is the current buffer.
+    Editing(String),
+    /// Format editor sub-modal.
+    FormatEditor {
+        /// `(included, ext_name)` rows — included rows first, in priority order.
+        rows: Vec<(bool, String)>,
+        /// Cursor position within `rows`.
+        cursor: usize,
+    },
+    /// Language picker popup.
+    LangPicker {
+        options: Vec<String>,
+        /// Currently highlighted option index.
+        selected: usize,
+    },
+}
+
+impl Default for SettingsEditor {
+    fn default() -> Self {
+        SettingsEditor::Viewing
+    }
+}
+
+/// Staged settings edits while the Settings modal is open.
+///
+/// Initialised from the current `ViewModel` + `AppSettings` when the modal
+/// opens.  On save (`Esc`) emitted as `Intent::SaveSettings`; on discard
+/// (`q` / `Ctrl-G`) the modal closes without touching the engine.
+#[derive(Debug, Clone)]
+pub struct SettingsDraft {
+    // ── Per-list settings ────────────────────────────────────────────────────
+    /// Ordered preferred format names, e.g. `["epub", "pdf"]`.
+    pub format_pref: Vec<String>,
+    /// Display language.  `""` (or `"any"`) means "no preference" (engine → `None`).
+    pub language: String,
+    pub auto_threshold: f32,
+    pub near_threshold: f32,
+    pub keep_top: usize,
+    pub naming_template: String,
+    /// `true` = sequence numbers are scoped per-group; `false` = per-list.
+    pub seq_per_group: bool,
+    // ── App-wide settings ────────────────────────────────────────────────────
+    /// Override download directory; `""` = engine default.
+    pub out_dir: String,
+    /// Global concurrent-download cap (`G`).
+    pub max_concurrent: usize,
+    /// Max retry attempts per download mirror.
+    pub max_attempts: u32,
+    /// Whether speculative (hedged) downloading is enabled.
+    pub hedge_enabled: bool,
+    // ── Editor state ─────────────────────────────────────────────────────────
+    pub editor: SettingsEditor,
+}
+
+impl SettingsDraft {
+    /// The display value for field `idx` used by the render pass.
+    pub fn field_value(&self, idx: usize) -> String {
+        match idx {
+            0 => {
+                if self.format_pref.is_empty() {
+                    "—".into()
+                } else {
+                    self.format_pref.join(", ")
+                }
+            }
+            1 => {
+                if self.language.is_empty() || self.language == "any" {
+                    "any".into()
+                } else {
+                    self.language.clone()
+                }
+            }
+            2 => format!("{:.2}", self.auto_threshold),
+            3 => format!("{:.2}", self.near_threshold),
+            4 => self.keep_top.to_string(),
+            5 => {
+                if self.out_dir.is_empty() {
+                    "~/Books/Kwire (default)".into()
+                } else {
+                    self.out_dir.clone()
+                }
+            }
+            6 => self.naming_template.clone(),
+            7 => {
+                if self.seq_per_group {
+                    "on".into()
+                } else {
+                    "off".into()
+                }
+            }
+            8 => self.max_concurrent.to_string(),
+            9 => self.max_attempts.to_string(),
+            10 => {
+                if self.hedge_enabled {
+                    "on".into()
+                } else {
+                    "off".into()
+                }
+            }
+            11 => "libgen.li  libgen.is  libgen.rs".into(),
+            12 => "libgen.li  libgen.pw  ipfs".into(),
+            _ => String::new(),
+        }
+    }
+}
 
 /// Commands supported in `:` command-line mode (used for Tab-completion).
 const COMMANDS: &[&str] = &[
@@ -190,11 +378,11 @@ pub struct AppState {
     /// Rects from the most-recent render pass (for mouse hit-testing).
     pub last_rects: LastRects,
 
-    /// Which settings row is selected in the Settings modal.
+    /// Which settings field is focused in the Settings modal (0-based field index).
     pub settings_selected: usize,
 
-    /// Inline edit buffer for the Settings modal.
-    pub settings_edit: Option<String>,
+    /// Staged edits for the Settings modal; `Some` while the modal is open.
+    pub settings_draft: Option<SettingsDraft>,
 
     /// Live scheduler telemetry keyed by md5. Updated by Progress events from the engine.
     pub transfers: std::collections::HashMap<String, ActiveTransfer>,
@@ -255,7 +443,7 @@ impl AppState {
             activity_selected: 0,
             last_rects: LastRects::default(),
             settings_selected: 0,
-            settings_edit: None,
+            settings_draft: None,
             transfers: std::collections::HashMap::new(),
             completion_candidates: Vec::new(),
             completion_index: 0,
@@ -266,6 +454,51 @@ impl AppState {
             all_lists: Vec::new(),
             active_list_idx: 0,
         }
+    }
+
+    /// Open the Settings modal and initialise a draft from the current view and
+    /// global app settings.  Call this instead of setting `modal` directly so
+    /// the draft is always in sync.
+    pub fn open_settings(&mut self, app_settings: &AppSettings) {
+        let draft = if let Some(v) = &self.view {
+            let s = &v.settings;
+            SettingsDraft {
+                format_pref: s.format_pref.clone(),
+                language: if s.language.is_empty() {
+                    String::new()
+                } else {
+                    s.language.clone()
+                },
+                auto_threshold: s.auto_threshold,
+                near_threshold: s.near_threshold,
+                keep_top: s.keep_top,
+                naming_template: s.naming_template.clone(),
+                seq_per_group: s.seq_per_group,
+                out_dir: app_settings.out_dir.clone(),
+                max_concurrent: app_settings.max_concurrent_downloads,
+                max_attempts: app_settings.max_attempts,
+                hedge_enabled: app_settings.hedge_enabled,
+                editor: SettingsEditor::Viewing,
+            }
+        } else {
+            SettingsDraft {
+                format_pref: vec!["epub".into(), "pdf".into()],
+                language: String::new(),
+                auto_threshold: 0.85,
+                near_threshold: 0.45,
+                keep_top: 5,
+                naming_template: "{seq:02} - {authors} - {title}.{ext}".into(),
+                seq_per_group: true,
+                out_dir: app_settings.out_dir.clone(),
+                max_concurrent: app_settings.max_concurrent_downloads,
+                max_attempts: app_settings.max_attempts,
+                hedge_enabled: app_settings.hedge_enabled,
+                editor: SettingsEditor::Viewing,
+            }
+        };
+        self.settings_draft = Some(draft);
+        self.settings_selected = 0;
+        self.modal = Some(Modal::Settings);
     }
 
     /// Apply a raw engine Progress event into the live transfer map.
@@ -772,30 +1005,28 @@ impl AppState {
                 }
             }
 
-            Modal::Settings => match ev {
-                Event::Key(KeyEvent { code, .. }) => match code {
-                    KeyCode::Esc => {
+            Modal::Settings => {
+                // Determine the current sub-mode without holding a borrow on `self`.
+                let sub_mode: u8 = match &self.settings_draft {
+                    Some(d) => match &d.editor {
+                        SettingsEditor::Viewing => 0,
+                        SettingsEditor::Editing(_) => 1,
+                        SettingsEditor::FormatEditor { .. } => 2,
+                        SettingsEditor::LangPicker { .. } => 3,
+                    },
+                    None => {
+                        // Shouldn't happen — guard against it.
                         self.modal = None;
-                        self.settings_edit = None;
-                        Intent::Redraw
+                        return Intent::Redraw;
                     }
-                    KeyCode::Enter => {
-                        // Commit inline edit — stub for Stage 3.
-                        self.settings_edit = None;
-                        Intent::Redraw
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        self.settings_selected = self.settings_selected.saturating_add(1);
-                        Intent::Redraw
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        self.settings_selected = self.settings_selected.saturating_sub(1);
-                        Intent::Redraw
-                    }
-                    _ => Intent::Redraw,
-                },
-                _ => Intent::Redraw,
-            },
+                };
+                match sub_mode {
+                    2 => self.handle_format_editor_input(ev),
+                    3 => self.handle_lang_picker_input(ev),
+                    1 => self.handle_inline_edit_input(ev),
+                    _ => self.handle_settings_viewing_input(ev),
+                }
+            }
 
             Modal::Help => match ev {
                 Event::Key(KeyEvent { code, .. }) => match code {
@@ -807,6 +1038,446 @@ impl AppState {
                 },
                 _ => Intent::Redraw,
             },
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings modal — sub-mode handlers
+    // -----------------------------------------------------------------------
+
+    /// Handle input while the Settings modal is in Viewing mode.
+    fn handle_settings_viewing_input(&mut self, ev: Event) -> Intent {
+        match ev {
+            Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) => match code {
+                // Esc or 's' → save & close (modal closed here; draft consumed by dispatcher)
+                KeyCode::Esc | KeyCode::Char('s') => {
+                    self.modal = None;
+                    // Keep settings_draft alive for the dispatcher to read.
+                    Intent::SaveSettings
+                }
+                // 'q' or Ctrl-G → discard & close
+                KeyCode::Char('q') => {
+                    self.settings_draft = None;
+                    self.modal = None;
+                    Intent::DiscardSettings
+                }
+                KeyCode::Char('g') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.settings_draft = None;
+                    self.modal = None;
+                    Intent::DiscardSettings
+                }
+                // Navigation
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.settings_selected =
+                        (self.settings_selected + 1).min(SETTINGS_FIELD_COUNT - 1);
+                    Intent::Redraw
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.settings_selected = self.settings_selected.saturating_sub(1);
+                    Intent::Redraw
+                }
+                // ←/→ nudge number fields
+                KeyCode::Left => {
+                    self.nudge_settings_field(-1);
+                    Intent::Redraw
+                }
+                KeyCode::Right => {
+                    self.nudge_settings_field(1);
+                    Intent::Redraw
+                }
+                // Space: toggle Bool fields (also works on non-Bool — no-op)
+                KeyCode::Char(' ') => {
+                    self.toggle_settings_field();
+                    Intent::Redraw
+                }
+                // Enter: open sub-modal / start inline edit / toggle Bool
+                KeyCode::Enter => {
+                    self.enter_settings_field();
+                    Intent::Redraw
+                }
+                _ => Intent::Redraw,
+            },
+            _ => Intent::Redraw,
+        }
+    }
+
+    /// Handle input while the Format Editor sub-modal is open.
+    fn handle_format_editor_input(&mut self, ev: Event) -> Intent {
+        let Event::Key(KeyEvent { code, .. }) = ev else {
+            return Intent::Redraw;
+        };
+        match code {
+            KeyCode::Esc | KeyCode::Enter => {
+                // Commit: extract included formats in priority order.
+                let new_pref: Vec<String> = if let Some(SettingsDraft {
+                    editor: SettingsEditor::FormatEditor { ref rows, .. },
+                    ..
+                }) = self.settings_draft
+                {
+                    rows.iter()
+                        .filter(|(inc, _)| *inc)
+                        .map(|(_, n)| n.clone())
+                        .collect()
+                } else {
+                    vec![]
+                };
+                if let Some(d) = &mut self.settings_draft {
+                    d.format_pref = new_pref;
+                    d.editor = SettingsEditor::Viewing;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(SettingsDraft {
+                    editor:
+                        SettingsEditor::FormatEditor {
+                            ref rows,
+                            ref mut cursor,
+                        },
+                    ..
+                }) = self.settings_draft
+                {
+                    let len = rows.len();
+                    if len > 0 {
+                        *cursor = (*cursor + 1).min(len - 1);
+                    }
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(SettingsDraft {
+                    editor: SettingsEditor::FormatEditor { ref mut cursor, .. },
+                    ..
+                }) = self.settings_draft
+                {
+                    *cursor = cursor.saturating_sub(1);
+                }
+            }
+            KeyCode::Char(' ') => {
+                // Toggle inclusion for the cursor row.
+                if let Some(SettingsDraft {
+                    editor:
+                        SettingsEditor::FormatEditor {
+                            ref mut rows,
+                            ref mut cursor,
+                        },
+                    ..
+                }) = self.settings_draft
+                {
+                    let cur = *cursor;
+                    if cur < rows.len() {
+                        let (was_included, name) = rows.remove(cur);
+                        let now_included = !was_included;
+                        if now_included {
+                            // Insert at the end of the already-included block.
+                            let ins = rows.iter().position(|(inc, _)| !inc).unwrap_or(rows.len());
+                            rows.insert(ins, (true, name));
+                            *cursor = ins;
+                        } else {
+                            // Insert at the start of the excluded block.
+                            let ins = rows.iter().position(|(inc, _)| !inc).unwrap_or(rows.len());
+                            rows.insert(ins, (false, name));
+                            *cursor = ins;
+                        }
+                    }
+                }
+            }
+            // J: move focused included format down in priority.
+            KeyCode::Char('J') => {
+                if let Some(SettingsDraft {
+                    editor:
+                        SettingsEditor::FormatEditor {
+                            ref mut rows,
+                            ref mut cursor,
+                        },
+                    ..
+                }) = self.settings_draft
+                {
+                    let cur = *cursor;
+                    if cur + 1 < rows.len() && rows[cur].0 && rows[cur + 1].0 {
+                        rows.swap(cur, cur + 1);
+                        *cursor = cur + 1;
+                    }
+                }
+            }
+            // K: move focused included format up in priority.
+            KeyCode::Char('K') => {
+                if let Some(SettingsDraft {
+                    editor:
+                        SettingsEditor::FormatEditor {
+                            ref mut rows,
+                            ref mut cursor,
+                        },
+                    ..
+                }) = self.settings_draft
+                {
+                    let cur = *cursor;
+                    if cur > 0 && rows[cur].0 && rows[cur - 1].0 {
+                        rows.swap(cur, cur - 1);
+                        *cursor = cur - 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Intent::Redraw
+    }
+
+    /// Handle input while the Language picker popup is open.
+    fn handle_lang_picker_input(&mut self, ev: Event) -> Intent {
+        let Event::Key(KeyEvent { code, .. }) = ev else {
+            return Intent::Redraw;
+        };
+        match code {
+            KeyCode::Esc => {
+                // Cancel — keep existing language.
+                if let Some(d) = &mut self.settings_draft {
+                    d.editor = SettingsEditor::Viewing;
+                }
+            }
+            KeyCode::Enter => {
+                // Commit selected language.
+                let lang = if let Some(SettingsDraft {
+                    editor:
+                        SettingsEditor::LangPicker {
+                            ref options,
+                            selected,
+                        },
+                    ..
+                }) = self.settings_draft
+                {
+                    options[selected].clone()
+                } else {
+                    String::new()
+                };
+                if let Some(d) = &mut self.settings_draft {
+                    d.language = if lang == "any" { String::new() } else { lang };
+                    d.editor = SettingsEditor::Viewing;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(SettingsDraft {
+                    editor:
+                        SettingsEditor::LangPicker {
+                            ref options,
+                            ref mut selected,
+                        },
+                    ..
+                }) = self.settings_draft
+                {
+                    let len = options.len();
+                    if len > 0 {
+                        *selected = (*selected + 1).min(len - 1);
+                    }
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(SettingsDraft {
+                    editor:
+                        SettingsEditor::LangPicker {
+                            ref mut selected, ..
+                        },
+                    ..
+                }) = self.settings_draft
+                {
+                    *selected = selected.saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
+        Intent::Redraw
+    }
+
+    /// Handle input while an inline text/number edit buffer is active.
+    fn handle_inline_edit_input(&mut self, ev: Event) -> Intent {
+        let idx = self.settings_selected;
+        let Event::Key(KeyEvent { code, .. }) = ev else {
+            return Intent::Redraw;
+        };
+        match code {
+            KeyCode::Esc => {
+                if let Some(d) = &mut self.settings_draft {
+                    d.editor = SettingsEditor::Viewing;
+                }
+            }
+            KeyCode::Enter => {
+                // Snapshot the buffer, then switch to Viewing, then commit.
+                let committed: String = if let Some(SettingsDraft {
+                    editor: SettingsEditor::Editing(ref buf),
+                    ..
+                }) = self.settings_draft
+                {
+                    buf.clone()
+                } else {
+                    String::new()
+                };
+                if let Some(d) = &mut self.settings_draft {
+                    d.editor = SettingsEditor::Viewing;
+                }
+                self.commit_inline_edit(idx, &committed);
+            }
+            KeyCode::Backspace => {
+                if let Some(SettingsDraft {
+                    editor: SettingsEditor::Editing(ref mut buf),
+                    ..
+                }) = self.settings_draft
+                {
+                    buf.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(SettingsDraft {
+                    editor: SettingsEditor::Editing(ref mut buf),
+                    ..
+                }) = self.settings_draft
+                {
+                    // Accept digits, '.', and printable path/template characters.
+                    if c.is_ascii_graphic() || c == ' ' {
+                        buf.push(c);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Intent::Redraw
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings modal — field-mutation helpers
+    // -----------------------------------------------------------------------
+
+    /// Nudge a number field left (`dir = -1`) or right (`dir = +1`).
+    fn nudge_settings_field(&mut self, dir: i32) {
+        let idx = self.settings_selected;
+        let Some(d) = &mut self.settings_draft else {
+            return;
+        };
+        match (settings_field_kind(idx), idx) {
+            (SettingsFieldKind::F32, 2) => {
+                d.auto_threshold = (d.auto_threshold + 0.05 * dir as f32).clamp(0.0, 1.0);
+                // Round to 2 dp to avoid float drift.
+                d.auto_threshold = (d.auto_threshold * 100.0).round() / 100.0;
+            }
+            (SettingsFieldKind::F32, 3) => {
+                d.near_threshold = (d.near_threshold + 0.05 * dir as f32).clamp(0.0, 1.0);
+                d.near_threshold = (d.near_threshold * 100.0).round() / 100.0;
+            }
+            (SettingsFieldKind::Usize, 4) => {
+                if dir > 0 {
+                    d.keep_top = d.keep_top.saturating_add(1);
+                } else {
+                    d.keep_top = d.keep_top.saturating_sub(1).max(1);
+                }
+            }
+            (SettingsFieldKind::Usize, 8) => {
+                if dir > 0 {
+                    d.max_concurrent = d.max_concurrent.saturating_add(1);
+                } else {
+                    d.max_concurrent = d.max_concurrent.saturating_sub(1).max(1);
+                }
+            }
+            (SettingsFieldKind::U32, 9) => {
+                if dir > 0 {
+                    d.max_attempts = d.max_attempts.saturating_add(1);
+                } else {
+                    d.max_attempts = d.max_attempts.saturating_sub(1).max(1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Toggle a Bool field.
+    fn toggle_settings_field(&mut self) {
+        let idx = self.settings_selected;
+        let Some(d) = &mut self.settings_draft else {
+            return;
+        };
+        match idx {
+            7 => d.seq_per_group = !d.seq_per_group,
+            10 => d.hedge_enabled = !d.hedge_enabled,
+            _ => {}
+        }
+    }
+
+    /// On Enter: open the sub-modal for FormatPref / Language; start inline
+    /// edit for number/text fields; toggle Bool fields.
+    fn enter_settings_field(&mut self) {
+        let idx = self.settings_selected;
+        let Some(d) = &mut self.settings_draft else {
+            return;
+        };
+        match settings_field_kind(idx) {
+            SettingsFieldKind::FormatPref => {
+                let rows = build_format_editor_rows(&d.format_pref);
+                d.editor = SettingsEditor::FormatEditor { rows, cursor: 0 };
+            }
+            SettingsFieldKind::Language => {
+                let options: Vec<String> =
+                    SETTINGS_LANGUAGES.iter().map(|s| s.to_string()).collect();
+                let lang_now = if d.language.is_empty() {
+                    "any"
+                } else {
+                    d.language.as_str()
+                };
+                let selected = options.iter().position(|o| o == lang_now).unwrap_or(0);
+                d.editor = SettingsEditor::LangPicker { options, selected };
+            }
+            SettingsFieldKind::F32
+            | SettingsFieldKind::Usize
+            | SettingsFieldKind::U32
+            | SettingsFieldKind::Text => {
+                let buf = d.field_value(idx);
+                d.editor = SettingsEditor::Editing(buf);
+            }
+            SettingsFieldKind::Bool => match idx {
+                7 => d.seq_per_group = !d.seq_per_group,
+                10 => d.hedge_enabled = !d.hedge_enabled,
+                _ => {}
+            },
+            SettingsFieldKind::ReadOnly => {}
+        }
+    }
+
+    /// Parse and apply the committed inline-edit buffer to the draft.
+    fn commit_inline_edit(&mut self, idx: usize, value: &str) {
+        let Some(d) = &mut self.settings_draft else {
+            return;
+        };
+        let v = value.trim();
+        match idx {
+            2 => {
+                if let Ok(f) = v.parse::<f32>() {
+                    d.auto_threshold = f.clamp(0.0, 1.0);
+                }
+            }
+            3 => {
+                if let Ok(f) = v.parse::<f32>() {
+                    d.near_threshold = f.clamp(0.0, 1.0);
+                }
+            }
+            4 => {
+                if let Ok(n) = v.parse::<usize>() {
+                    d.keep_top = n.max(1);
+                }
+            }
+            5 => d.out_dir = v.to_string(),
+            6 => {
+                if !v.is_empty() {
+                    d.naming_template = v.to_string();
+                }
+            }
+            8 => {
+                if let Ok(n) = v.parse::<usize>() {
+                    d.max_concurrent = n.max(1);
+                }
+            }
+            9 => {
+                if let Ok(n) = v.parse::<u32>() {
+                    d.max_attempts = n.max(1);
+                }
+            }
+            _ => {}
         }
     }
 

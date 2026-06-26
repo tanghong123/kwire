@@ -60,4 +60,12 @@ pub enum Intent {
 
     /// Switch the active reading list (emitted by ←/→ in the list strip).
     SwitchList { id: String },
+
+    /// Persist the staged settings draft to the engine and app config.
+    /// The draft is still in `AppState::settings_draft`; the dispatcher reads
+    /// it, calls the engine, then clears it.
+    SaveSettings,
+
+    /// Close the Settings modal without persisting any changes.
+    DiscardSettings,
 }

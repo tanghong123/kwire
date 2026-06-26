@@ -15,7 +15,11 @@ mod tests {
     use libgen_engine::{ViewBook, ViewVariation};
     use ratatui::{backend::TestBackend, Terminal};
 
-    use crate::app::{AppState, FlatBook, Focus, Modal, StatusFilter};
+    use crate::app::{
+        build_format_editor_rows, settings_field_kind, AppState, FlatBook, Focus, Modal,
+        SettingsDraft, SettingsEditor, SettingsFieldKind, StatusFilter, FORMAT_EDITOR_FORMATS,
+        SETTINGS_FIELD_COUNT,
+    };
     use crate::intent::Intent;
     use crate::ui;
 
@@ -530,6 +534,24 @@ mod tests {
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
     }
 
+    /// Default draft used in settings tests (no view loaded — uses engine defaults).
+    fn default_draft() -> SettingsDraft {
+        SettingsDraft {
+            format_pref: vec!["epub".into(), "pdf".into()],
+            language: String::new(),
+            auto_threshold: 0.85,
+            near_threshold: 0.45,
+            keep_top: 5,
+            naming_template: "{seq:02} - {authors} - {title}.{ext}".into(),
+            seq_per_group: true,
+            out_dir: String::new(),
+            max_concurrent: 5,
+            max_attempts: 3,
+            hedge_enabled: false,
+            editor: SettingsEditor::Viewing,
+        }
+    }
+
     #[test]
     fn render_settings_modal_does_not_panic() {
         let backend = TestBackend::new(120, 30);
@@ -537,6 +559,7 @@ mod tests {
         let mut app = AppState::new();
         app.set_view(fixture_vm());
         app.modal = Some(Modal::Settings);
+        app.settings_draft = Some(default_draft());
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
     }
 
@@ -1501,5 +1524,585 @@ mod tests {
                 "flat list should not be empty in this test"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings modal — editor tests
+    // -----------------------------------------------------------------------
+
+    /// Open the settings modal with a default draft on `app`.
+    fn open_settings_with_draft(app: &mut AppState) {
+        app.modal = Some(Modal::Settings);
+        app.settings_draft = Some(default_draft());
+        app.settings_selected = 0;
+    }
+
+    // ── field-kind map ──────────────────────────────────────────────────────
+
+    #[test]
+    fn settings_field_kinds_match_spec() {
+        assert_eq!(settings_field_kind(0), SettingsFieldKind::FormatPref);
+        assert_eq!(settings_field_kind(1), SettingsFieldKind::Language);
+        assert_eq!(settings_field_kind(2), SettingsFieldKind::F32);
+        assert_eq!(settings_field_kind(3), SettingsFieldKind::F32);
+        assert_eq!(settings_field_kind(4), SettingsFieldKind::Usize);
+        assert_eq!(settings_field_kind(5), SettingsFieldKind::Text);
+        assert_eq!(settings_field_kind(6), SettingsFieldKind::Text);
+        assert_eq!(settings_field_kind(7), SettingsFieldKind::Bool);
+        assert_eq!(settings_field_kind(8), SettingsFieldKind::Usize);
+        assert_eq!(settings_field_kind(9), SettingsFieldKind::U32);
+        assert_eq!(settings_field_kind(10), SettingsFieldKind::Bool);
+    }
+
+    #[test]
+    fn settings_field_count_constant_is_11() {
+        // All indices 0-10 are editable; 11+ are display-only.
+        assert_eq!(SETTINGS_FIELD_COUNT, 11);
+    }
+
+    // ── TOGGLE field (space) ────────────────────────────────────────────────
+
+    #[test]
+    fn space_toggles_bool_field_sub_grouping() {
+        // Field 7 = "Sub-grouping" (seq_per_group bool).
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 7;
+
+        let before = app.settings_draft.as_ref().unwrap().seq_per_group;
+        app.on_input(key(KeyCode::Char(' ')));
+        let after = app.settings_draft.as_ref().unwrap().seq_per_group;
+
+        assert_ne!(before, after, "space must toggle seq_per_group");
+    }
+
+    #[test]
+    fn space_toggles_hedged_field() {
+        // Field 10 = "Hedged" (hedge_enabled bool).
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 10;
+
+        let before = app.settings_draft.as_ref().unwrap().hedge_enabled;
+        app.on_input(key(KeyCode::Char(' ')));
+        let after = app.settings_draft.as_ref().unwrap().hedge_enabled;
+
+        assert_ne!(before, after, "space must toggle hedge_enabled");
+    }
+
+    #[test]
+    fn double_space_toggle_restores_original_bool() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 7;
+        let original = app.settings_draft.as_ref().unwrap().seq_per_group;
+        app.on_input(key(KeyCode::Char(' ')));
+        app.on_input(key(KeyCode::Char(' ')));
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().seq_per_group,
+            original,
+            "two toggles should restore original value"
+        );
+    }
+
+    // ── NUMBER field — ←/→ nudge ────────────────────────────────────────────
+
+    #[test]
+    fn right_arrow_nudges_f32_field_up() {
+        // Field 2 = auto_threshold (f32, step 0.05).
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 2;
+        let before = app.settings_draft.as_ref().unwrap().auto_threshold;
+
+        app.on_input(key(KeyCode::Right));
+        let after = app.settings_draft.as_ref().unwrap().auto_threshold;
+
+        assert!(
+            (after - before - 0.05).abs() < 1e-4,
+            "→ must nudge auto_threshold by +0.05, was {before}, now {after}"
+        );
+    }
+
+    #[test]
+    fn left_arrow_nudges_f32_field_down() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 2;
+        let before = app.settings_draft.as_ref().unwrap().auto_threshold;
+
+        app.on_input(key(KeyCode::Left));
+        let after = app.settings_draft.as_ref().unwrap().auto_threshold;
+
+        assert!(
+            (before - after - 0.05).abs() < 1e-4,
+            "← must nudge auto_threshold by -0.05"
+        );
+    }
+
+    #[test]
+    fn right_arrow_nudges_usize_field() {
+        // Field 4 = keep_top (usize).
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 4;
+        let before = app.settings_draft.as_ref().unwrap().keep_top;
+
+        app.on_input(key(KeyCode::Right));
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().keep_top,
+            before + 1,
+            "→ must increment keep_top by 1"
+        );
+    }
+
+    #[test]
+    fn left_arrow_clamps_usize_field_at_1() {
+        // keep_top starts at 5 in default draft; nudge it down to 1 and check it doesn't go below.
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 4;
+        // Set to 1 directly.
+        app.settings_draft.as_mut().unwrap().keep_top = 1;
+        app.on_input(key(KeyCode::Left));
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().keep_top,
+            1,
+            "keep_top must not go below 1"
+        );
+    }
+
+    // ── INLINE EDIT (Enter → type → Enter commit) ───────────────────────────
+
+    #[test]
+    fn enter_on_number_field_enters_edit_mode() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 4; // keep_top
+        app.on_input(key(KeyCode::Enter));
+        assert!(
+            matches!(
+                app.settings_draft.as_ref().unwrap().editor,
+                SettingsEditor::Editing(_)
+            ),
+            "Enter must enter inline edit mode"
+        );
+    }
+
+    #[test]
+    fn inline_edit_then_commit_updates_field() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 4; // keep_top (usize)
+        app.on_input(key(KeyCode::Enter)); // start edit
+                                           // Clear the pre-filled buffer and type "7"
+        for _ in 0..10 {
+            // backspace enough times to clear any pre-filled value
+            app.on_input(key(KeyCode::Backspace));
+        }
+        app.on_input(key(KeyCode::Char('7')));
+        app.on_input(key(KeyCode::Enter)); // commit
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().editor,
+            SettingsEditor::Viewing,
+            "after commit editor should return to Viewing"
+        );
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().keep_top,
+            7,
+            "keep_top should be updated to 7"
+        );
+    }
+
+    #[test]
+    fn inline_edit_esc_cancels_without_changing_value() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 4; // keep_top = 5
+        app.on_input(key(KeyCode::Enter)); // start edit
+        app.on_input(key(KeyCode::Backspace));
+        app.on_input(key(KeyCode::Char('9'))); // would change to 9
+        app.on_input(key(KeyCode::Esc)); // cancel
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().editor,
+            SettingsEditor::Viewing,
+            "Esc must exit edit mode"
+        );
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().keep_top,
+            5,
+            "Esc must NOT change the value"
+        );
+    }
+
+    #[test]
+    fn text_field_enter_enters_edit_mode() {
+        // Field 6 = "Naming template" (Text).
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 6;
+        app.on_input(key(KeyCode::Enter));
+        assert!(
+            matches!(
+                app.settings_draft.as_ref().unwrap().editor,
+                SettingsEditor::Editing(_)
+            ),
+            "Enter on text field must enter Editing mode"
+        );
+    }
+
+    // ── LANGUAGE field — "any" display and picker ───────────────────────────
+
+    #[test]
+    fn language_field_shows_any_when_empty() {
+        // Field index 1; default_draft() has language = "".
+        let draft = default_draft();
+        assert_eq!(draft.language, "", "default language is empty string");
+        assert_eq!(
+            draft.field_value(1),
+            "any",
+            "empty language must display as 'any' (bug #38)"
+        );
+    }
+
+    #[test]
+    fn enter_on_language_field_opens_lang_picker() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 1; // Language
+        app.on_input(key(KeyCode::Enter));
+        assert!(
+            matches!(
+                app.settings_draft.as_ref().unwrap().editor,
+                SettingsEditor::LangPicker { .. }
+            ),
+            "Enter on Language must open LangPicker"
+        );
+    }
+
+    #[test]
+    fn lang_picker_selects_language() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 1;
+        app.on_input(key(KeyCode::Enter)); // open picker (selected = 0 = "any")
+        app.on_input(key(KeyCode::Down)); // move to "English" (index 1)
+        app.on_input(key(KeyCode::Enter)); // commit
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().language,
+            "English",
+            "selecting English from picker must update language"
+        );
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().editor,
+            SettingsEditor::Viewing
+        );
+    }
+
+    #[test]
+    fn lang_picker_any_stores_empty_string() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_draft.as_mut().unwrap().language = "English".into();
+        app.settings_selected = 1;
+        app.on_input(key(KeyCode::Enter)); // open picker; starts at "English" (index 1)
+        app.on_input(key(KeyCode::Up)); // move to "any" (index 0)
+        app.on_input(key(KeyCode::Enter)); // commit "any"
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().language,
+            "",
+            "selecting 'any' must store empty string"
+        );
+    }
+
+    #[test]
+    fn lang_picker_esc_does_not_change_language() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_draft.as_mut().unwrap().language = "German".into();
+        app.settings_selected = 1;
+        app.on_input(key(KeyCode::Enter));
+        app.on_input(key(KeyCode::Down)); // move selection
+        app.on_input(key(KeyCode::Esc)); // cancel
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().language,
+            "German",
+            "Esc in lang picker must not change the language"
+        );
+    }
+
+    // ── FORMAT EDITOR sub-modal ─────────────────────────────────────────────
+
+    #[test]
+    fn build_format_editor_rows_puts_included_first() {
+        let pref = vec!["pdf".to_string(), "epub".to_string()];
+        let rows = build_format_editor_rows(&pref);
+        // First two should be included (pdf, epub in that order).
+        assert_eq!(rows[0], (true, "pdf".to_string()));
+        assert_eq!(rows[1], (true, "epub".to_string()));
+        // Rest should be excluded.
+        for (inc, _) in &rows[2..] {
+            assert!(!inc, "rows after included block must not be included");
+        }
+        // Total row count = FORMAT_EDITOR_FORMATS length.
+        assert_eq!(rows.len(), FORMAT_EDITOR_FORMATS.len());
+    }
+
+    #[test]
+    fn build_format_editor_rows_all_excluded_when_empty_pref() {
+        let rows = build_format_editor_rows(&[]);
+        assert!(
+            rows.iter().all(|(inc, _)| !inc),
+            "all rows must be excluded"
+        );
+        assert_eq!(rows.len(), FORMAT_EDITOR_FORMATS.len());
+    }
+
+    #[test]
+    fn format_editor_opens_on_enter() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 0; // "Preferred formats"
+        app.on_input(key(KeyCode::Enter));
+        assert!(
+            matches!(
+                app.settings_draft.as_ref().unwrap().editor,
+                SettingsEditor::FormatEditor { .. }
+            ),
+            "Enter on format field must open FormatEditor"
+        );
+    }
+
+    #[test]
+    fn format_editor_space_toggles_inclusion() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        // draft starts with ["epub", "pdf"]; field 0 opens format editor.
+        app.settings_selected = 0;
+        app.on_input(key(KeyCode::Enter)); // open editor
+                                           // Cursor is at 0 ("epub" — currently included).
+                                           // Space should exclude it.
+        app.on_input(key(KeyCode::Char(' ')));
+        if let Some(SettingsDraft {
+            editor:
+                SettingsEditor::FormatEditor {
+                    ref rows,
+                    cursor: _,
+                },
+            ..
+        }) = app.settings_draft
+        {
+            // epub was at index 0 and was included; after space it should be excluded.
+            // It may have moved to the excluded block; find it.
+            let epub_row = rows.iter().find(|(_, n)| n == "epub");
+            assert!(
+                epub_row.is_some(),
+                "epub must still appear in the format editor"
+            );
+            assert!(
+                !epub_row.unwrap().0,
+                "epub must now be excluded after space"
+            );
+        } else {
+            panic!("expected FormatEditor mode");
+        }
+    }
+
+    #[test]
+    fn format_editor_j_moves_down_in_priority() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        // draft: format_pref = ["epub", "pdf"]. Open editor, cursor at 0 = epub.
+        app.settings_selected = 0;
+        app.on_input(key(KeyCode::Enter));
+        // Press J — epub should swap with pdf (both are included).
+        app.on_input(key(KeyCode::Char('J')));
+        if let Some(SettingsDraft {
+            editor: SettingsEditor::FormatEditor { ref rows, cursor },
+            ..
+        }) = app.settings_draft
+        {
+            // After J, cursor moved to 1, and pdf is now at index 0.
+            assert_eq!(cursor, 1, "cursor should be at index 1 after J");
+            assert_eq!(rows[0].1, "pdf", "pdf must now be at priority 1");
+            assert_eq!(rows[1].1, "epub", "epub must now be at priority 2");
+        } else {
+            panic!("expected FormatEditor mode");
+        }
+    }
+
+    #[test]
+    fn format_editor_k_moves_up_in_priority() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 0;
+        app.on_input(key(KeyCode::Enter));
+        // Move cursor to pdf (index 1) then press K.
+        app.on_input(key(KeyCode::Down));
+        app.on_input(key(KeyCode::Char('K')));
+        if let Some(SettingsDraft {
+            editor: SettingsEditor::FormatEditor { ref rows, cursor },
+            ..
+        }) = app.settings_draft
+        {
+            assert_eq!(cursor, 0, "cursor should be at index 0 after K");
+            assert_eq!(rows[0].1, "pdf", "pdf must now be at priority 1");
+        } else {
+            panic!("expected FormatEditor mode");
+        }
+    }
+
+    #[test]
+    fn format_editor_enter_commits_and_updates_format_pref() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        // Start: epub, pdf included.
+        app.settings_selected = 0;
+        app.on_input(key(KeyCode::Enter)); // open
+        app.on_input(key(KeyCode::Char('J'))); // swap epub → pdf first
+        app.on_input(key(KeyCode::Enter)); // commit
+        let pref = &app.settings_draft.as_ref().unwrap().format_pref;
+        assert_eq!(pref[0], "pdf", "after J then commit, pdf must be first");
+        assert_eq!(pref[1], "epub", "epub must be second");
+        assert_eq!(
+            app.settings_draft.as_ref().unwrap().editor,
+            SettingsEditor::Viewing,
+            "editor must return to Viewing after commit"
+        );
+    }
+
+    // ── Discard restores original values ────────────────────────────────────
+
+    #[test]
+    fn esc_in_viewing_returns_save_settings_intent() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        let intent = app.on_input(key(KeyCode::Esc));
+        // Esc → save & close (modal is closed, intent is SaveSettings).
+        assert_eq!(intent, Intent::SaveSettings);
+        assert!(app.modal.is_none(), "modal must be closed after Esc");
+        // Draft is kept alive for the dispatcher.
+        assert!(
+            app.settings_draft.is_some(),
+            "draft must remain until dispatcher processes SaveSettings"
+        );
+    }
+
+    #[test]
+    fn q_in_viewing_returns_discard_intent_and_clears_draft() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        // Modify the draft so we can verify discard restores nothing (draft is simply cleared).
+        app.settings_draft.as_mut().unwrap().auto_threshold = 0.99;
+        let intent = app.on_input(key(KeyCode::Char('q')));
+        assert_eq!(intent, Intent::DiscardSettings);
+        assert!(app.modal.is_none(), "modal must be closed after q");
+        assert!(
+            app.settings_draft.is_none(),
+            "draft must be cleared on discard"
+        );
+    }
+
+    // ── Navigation clamps ───────────────────────────────────────────────────
+
+    #[test]
+    fn down_navigation_clamps_at_last_field() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        // Navigate down many times.
+        for _ in 0..30 {
+            app.on_input(key(KeyCode::Down));
+        }
+        assert_eq!(
+            app.settings_selected,
+            SETTINGS_FIELD_COUNT - 1,
+            "settings_selected must clamp at SETTINGS_FIELD_COUNT - 1"
+        );
+    }
+
+    #[test]
+    fn up_navigation_clamps_at_zero() {
+        let mut app = AppState::new();
+        open_settings_with_draft(&mut app);
+        app.settings_selected = 3;
+        for _ in 0..10 {
+            app.on_input(key(KeyCode::Up));
+        }
+        assert_eq!(
+            app.settings_selected, 0,
+            "settings_selected must clamp at 0"
+        );
+    }
+
+    // ── Render with draft ───────────────────────────────────────────────────
+
+    #[test]
+    fn render_settings_modal_with_draft_does_not_panic() {
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Settings);
+        app.settings_draft = Some(default_draft());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn render_settings_modal_format_editor_does_not_panic() {
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        let mut draft = default_draft();
+        draft.editor = SettingsEditor::FormatEditor {
+            rows: build_format_editor_rows(&draft.format_pref),
+            cursor: 0,
+        };
+        app.modal = Some(Modal::Settings);
+        app.settings_draft = Some(draft);
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn render_settings_modal_lang_picker_does_not_panic() {
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        let mut draft = default_draft();
+        draft.editor = SettingsEditor::LangPicker {
+            options: vec!["any".into(), "English".into(), "German".into()],
+            selected: 1,
+        };
+        app.modal = Some(Modal::Settings);
+        app.settings_draft = Some(draft);
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
+
+    #[test]
+    fn render_settings_modal_inline_edit_shows_cursor() {
+        let backend = TestBackend::new(132, 38);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        let mut draft = default_draft();
+        draft.editor = SettingsEditor::Editing("0.90".into());
+        app.settings_selected = 2; // auto_threshold field
+        app.modal = Some(Modal::Settings);
+        app.settings_draft = Some(draft);
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+
+        let buf: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        // The edit buffer should appear in the rendered output.
+        assert!(
+            buf.contains("0.90"),
+            "rendered output must contain the edit buffer '0.90'"
+        );
     }
 }
