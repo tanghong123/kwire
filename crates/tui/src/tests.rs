@@ -2753,27 +2753,23 @@ mod tests {
 
     #[test]
     fn render_empty_screen_contains_ascii_banner() {
-        // The empty/first-run screen must render the multi-row ASCII-art banner.
+        // The empty/first-run screen must render the ASCII-art "KWIRE" banner (#46).
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();
         assert!(app.view.is_none());
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let content = buffer_string(&terminal);
-        // The ANSI Shadow banner contains box-drawing chars unique to the banner.
+        // The wordmark is a multi-row figlet banner built from block glyphs.
         assert!(
-            content.contains("╔╝"),
-            "empty screen should contain ASCII art banner (box drawing chars from K shape)"
-        );
-        assert!(
-            content.contains("███████╗"),
-            "empty screen should contain ASCII art banner (E shape top row)"
+            content.contains("██"),
+            "empty screen should contain the ASCII-art block-letter banner"
         );
     }
 
     #[test]
     fn render_empty_screen_banner_height_fits() {
-        // With content_h = 20, a 24-row terminal should still render without panic.
+        // With content_h = 20 (6-row banner), a 24-row terminal still renders without panic.
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();

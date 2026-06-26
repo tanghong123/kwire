@@ -23,6 +23,7 @@ use ratatui::{
 
 use crate::app::{
     AppState, DetailSubFocus, EditBookField, Focus, Modal, SettingsEditor, StatusFilter,
+    FORMAT_EDITOR_FORMATS,
 };
 use crate::theme::{
     self, history_kind_color, score_color, style_dim, style_header, style_hint, style_normal,
@@ -147,12 +148,13 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     //   3 — logo box (bordered: top border + content + bottom border)
     //   1 — blank
     //   6 — wordmark (ASCII-art banner, 6 rows)
-    //   3 — tagline (3 lines)
+    //   1 — blank
+    //   2 — tagline (2 lines)
     //   1 — blank
     //   1 — NO READING LISTS YET
     //   1 — blank
     //   4 — command hints
-    // Total = 3 + 1 + 6 + 3 + 1 + 1 + 1 + 4 = 20 lines
+    // Total = 3 + 1 + 6 + 1 + 2 + 1 + 1 + 1 + 4 = 20 lines
     let content_h: u16 = 20;
     let top_pad = outer[0].height.saturating_sub(content_h) / 2;
 
@@ -168,7 +170,8 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
         Constraint::Length(3), // logo box (bordered)
         Constraint::Length(1), // blank
         Constraint::Length(6), // wordmark (ASCII-art banner)
-        Constraint::Length(3), // tagline
+        Constraint::Length(1), // blank
+        Constraint::Length(2), // tagline (2 lines)
         Constraint::Length(1), // blank
         Constraint::Length(1), // NO READING LISTS YET
         Constraint::Length(1), // blank
@@ -176,7 +179,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     ])
     .split(content_area);
 
-    // 1. Logo glyph — a bordered box containing "· · ·"
+    // 1. Logo glyph — a bordered box containing "▤ ▤ ▤"
     let logo_block = Block::default()
         .borders(Borders::ALL)
         .border_style(style_dim());
@@ -185,7 +188,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     let logo_box_w: u16 = logo_inner_w + 2; // +2 for borders
     let logo_area = centered_rect(logo_box_w, 3, parts[0]);
     frame.render_widget(
-        Paragraph::new("· · ·")
+        Paragraph::new("\u{25a4} \u{25a4} \u{25a4}")
             .alignment(Alignment::Center)
             .style(style_dim())
             .block(logo_block),
@@ -212,29 +215,27 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
         parts[2],
     );
 
-    // 3. Tagline — 3 lines, "quire" emphasized
-    //    "A quire gathers folded sheets into one section"
-    //    "of a book — kwire gathers a scattered reading"
-    //    "list into one tidy, downloaded collection."
+    // 3. Tagline — 2 lines, "quire" emphasized
+    //    "A quire gathers folded sheets into one section of a book —"
+    //    "kwire gathers a scattered reading list into one tidy collection."
     let line1 = Line::from(vec![
         Span::styled("A ", style_dim()),
         Span::styled(
             "quire",
             Style::default().fg(C_DONE).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" gathers folded sheets into one section", style_dim()),
+        Span::styled(
+            " gathers folded sheets into one section of a book \u{2014}",
+            style_dim(),
+        ),
     ]);
     let line2 = Line::from(Span::styled(
-        "of a book \u{2014} kwire gathers a scattered reading",
-        style_dim(),
-    ));
-    let line3 = Line::from(Span::styled(
-        "list into one tidy, downloaded collection.",
+        "kwire gathers a scattered reading list into one tidy collection.",
         style_dim(),
     ));
     frame.render_widget(
-        Paragraph::new(vec![line1, line2, line3]).alignment(Alignment::Center),
-        parts[3],
+        Paragraph::new(vec![line1, line2]).alignment(Alignment::Center),
+        parts[4],
     );
 
     // 4. NO READING LISTS YET — dim, centered
@@ -242,7 +243,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
         Paragraph::new("NO READING LISTS YET")
             .alignment(Alignment::Center)
             .style(style_dim()),
-        parts[5],
+        parts[6],
     );
 
     // 5. Command hints — left-aligned group, group centered
@@ -278,7 +279,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     // Center the block: find total width of a hint row
     let hint_row_w =
         (cmd_col_w + 2 + hint_rows.iter().map(|(_, d)| d.len()).max().unwrap_or(0)) as u16;
-    let hint_area = centered_rect(hint_row_w.min(area.width), 4, parts[7]);
+    let hint_area = centered_rect(hint_row_w.min(area.width), 4, parts[8]);
     frame.render_widget(Paragraph::new(hint_lines), hint_area);
 
     // 6. Bordered command-input box at the bottom
@@ -663,9 +664,9 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             style_normal()
         };
 
-        // Left accent cell: ▶ in accent green on selected bg; seq number otherwise.
+        // Left accent cell: ▌ in accent green on selected bg; seq number otherwise.
         let seq_cell = if is_selected {
-            Cell::from("\u{25b6}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
+            Cell::from("\u{258c}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
         } else {
             Cell::from(format!("{:>3}", book.seq)).style(style_dim())
         };
@@ -970,7 +971,7 @@ fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
     } else {
         let hint = match app.focus {
             Focus::List => {
-                "\u{2191}\u{2193} move  \u{2190}\u{2192} list  \u{23ce} open  d detail  / filter  : command  tab downloads  ? help  q"
+                "\u{2191}\u{2193} move  \u{2190}\u{2192} list  \u{23ce} open  d detail  / filter  : command  tab downloads  ? help  q quit"
             }
             Focus::Activity => {
                 "\u{2191}\u{2193} select  p pause  c cancel  r resume  tab list  q quit"
@@ -1064,19 +1065,19 @@ fn render_picker_modal(
 
     // Subheader line
     let subhead = format!(
-        "{} candidates \u{00b7} auto-download needs a single copy \u{2265} {:.2} confidence",
+        "{} candidates \u{00b7} auto needs one copy \u{2265} {:.2} \u{2014} none was clear, so pick.",
         n_candidates, threshold
     );
     frame.render_widget(Paragraph::new(Span::styled(subhead, style_dim())), split[0]);
 
-    // Table columns: FMT · TITLE · AUTHOR | SIZE | YEAR | PAGES | MATCH
+    // Table columns: FMT · TITLE · SOURCE | SIZE | YEAR | PG | MATCH
     // The "·" separators in the header labels are decorative (like the mock)
     let header = Row::new([
         Cell::from("FMT").style(style_header()),
-        Cell::from("TITLE \u{00b7} AUTHOR").style(style_header()),
+        Cell::from("TITLE \u{00b7} SOURCE").style(style_header()),
         Cell::from("SIZE").style(style_header()),
         Cell::from("YEAR").style(style_header()),
-        Cell::from("PAGES").style(style_header()),
+        Cell::from("PG").style(style_header()),
         Cell::from("MATCH").style(style_header()),
     ])
     .height(1)
@@ -1089,10 +1090,24 @@ fn render_picker_modal(
         .enumerate()
         .map(|(i, v)| {
             let is_sel = i == picker_selected;
-            let sel_indicator = if is_sel { "\u{25b6} " } else { "  " };
+            let sel_indicator = if is_sel { "\u{25b8} " } else { "  " };
             let fmt_cell = format!("{}{}", sel_indicator, v.fmt);
-            // Title · Author combined
-            let title_author = format!("{} {}", v.title, v.author);
+            // Title · Source combined (publisher·language)
+            let source = {
+                let pub_ = v.publisher.as_str();
+                let lang = v.language.as_str();
+                match (pub_.is_empty(), lang.is_empty()) {
+                    (true, true) => String::new(),
+                    (true, false) => lang.to_string(),
+                    (false, true) => pub_.to_string(),
+                    (false, false) => format!("{}\u{00b7}{}", pub_, lang),
+                }
+            };
+            let title_source = if source.is_empty() {
+                v.title.clone()
+            } else {
+                format!("{} {}", v.title, source)
+            };
             let style_row = if is_sel {
                 style_selected()
             } else {
@@ -1104,7 +1119,7 @@ fn render_picker_modal(
                 } else {
                     style_dim()
                 }),
-                Cell::from(title_author).style(if is_sel {
+                Cell::from(title_source).style(if is_sel {
                     style_selected()
                 } else {
                     style_title()
@@ -1163,12 +1178,9 @@ fn render_picker_modal(
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("\u{2191}\u{2193} pick", style_hint()),
-            Span::styled("  space mark  ", style_hint()),
+            Span::styled("   space mark   ", style_hint()),
             Span::styled("\u{23ce} download", Style::default().fg(C_DONE)),
-            Span::styled(
-                "  a all preferred formats  v metadata  esc cancel",
-                style_hint(),
-            ),
+            Span::styled("   a all formats   v meta   esc cancel", style_hint()),
         ])),
         split[2],
     );
@@ -1297,9 +1309,17 @@ fn render_detail_modal(
         .iter()
         .filter(|v| v.state == "downloading")
         .count();
+    let backfill_note = if book.backfilled.is_empty() {
+        format!(
+            "{} req \u{00b7} {} done \u{00b7} {} active",
+            n_requested, n_done, n_active
+        )
+    } else {
+        format!("{} auto-filled from match", book.backfilled.join(" & "))
+    };
     let subtitle = format!(
-        "{} \u{00b7} {}.  \u{25cf} {} requested \u{00b7} {} done \u{00b7} {} active",
-        fb.group_name, book.seq, n_requested, n_done, n_active
+        "{} \u{00b7} seq {:02}   \u{25cf} {}",
+        fb.group_name, book.seq, backfill_note
     );
     frame.render_widget(
         Paragraph::new(Span::styled(subtitle, style_dim())),
@@ -1483,9 +1503,9 @@ fn render_detail_modal(
                 style_dim()
             };
             Line::from(vec![
-                Span::styled(format!("{:<10}  ", time_str), base_style),
+                Span::styled(format!("   {:<8}  \u{25cf} ", time_str), base_style),
                 Span::styled(
-                    format!("{:<14}  ", e.kind),
+                    format!("{:<12}  ", e.kind),
                     if is_hist_sel {
                         style_selected()
                     } else {
@@ -1499,14 +1519,14 @@ fn render_detail_modal(
 
     frame.render_widget(List::new(history_items), split[7]);
 
-    // Hint — includes new actions.
+    // Hint — spec base + added actions (tab/s/e/x/m kept per user decision).
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("tab sub-focus", style_hint()),
             Span::styled(
-                "  \u{2191}\u{2193} navigate  s re-query  e edit  x remove  m not-found  o open  r retry  esc back",
+                "\u{2191}\u{2193} variation   o open file   R reveal in Finder   r re-download   esc back",
                 style_hint(),
             ),
+            Span::styled("   tab\u{00b7}s\u{00b7}e\u{00b7}x\u{00b7}m", style_dim()),
         ])),
         split[8],
     );
@@ -1526,9 +1546,9 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
         .border_style(style_dim())
         .title(Span::styled(
             if let Some(v) = &app.view {
-                format!(" settings \u{00b7} {} ", v.title)
+                format!(" Settings \u{00b7} {} ", v.title)
             } else {
-                " settings ".to_string()
+                " Settings ".to_string()
             },
             style_dim(),
         ))
@@ -1611,27 +1631,24 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
         // We stop calling make_field here to keep them outside the navigation range.
         SettingsRow::SectionHeader(""),
     ];
-    // Append the display-only mirror rows without a field index.
+    // Append the display-only mirror rows as part of DOWNLOADS & MIRRORS.
     // (We use a plain SettingsRow::Field with index = usize::MAX so they never
     // match `settings_selected`.)
     let display_only: Vec<SettingsRow> = vec![
         SettingsRow::Field {
             label: "Search mirrors",
-            value: "libgen.li  libgen.is  libgen.rs".into(),
+            value: "libgen.li \u{25cf} libgen.is \u{25cf} libgen.rs \u{25cf}".into(),
             index: usize::MAX,
         },
         SettingsRow::Field {
             label: "Download sites",
-            value: "libgen.li  libgen.pw  ipfs".into(),
+            value: "libgen.li \u{25cf} libgen.pw \u{25cf} ipfs \u{25cf}".into(),
             index: usize::MAX,
         },
     ];
     let all_rows: Vec<SettingsRow> = rows
         .into_iter()
         .filter(|r| !matches!(r, SettingsRow::SectionHeader("")))
-        .chain(std::iter::once(SettingsRow::SectionHeader(
-            "MIRRORS (display only)",
-        )))
         .chain(display_only)
         .collect();
 
@@ -1649,6 +1666,44 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
             } => {
                 let is_sel = *index == app.settings_selected;
                 let is_editing = editing_idx.map(|e| e == *index).unwrap_or(false);
+
+                // For format-pref (idx 0): render [epub] [pdf]  + mobi · azw3 (off)
+                // For threshold fields (idx 2/3): append a ▰▱ bar.
+                // Only applies when NOT actively being edited.
+                let display_value: String = if !is_editing && *index == 0 {
+                    let included: Vec<String> = draft
+                        .format_pref
+                        .iter()
+                        .filter(|f| FORMAT_EDITOR_FORMATS.contains(&f.as_str()))
+                        .map(|f| format!("[{}]", f))
+                        .collect();
+                    let excluded: Vec<&str> = FORMAT_EDITOR_FORMATS
+                        .iter()
+                        .filter(|&&f| !draft.format_pref.iter().any(|p| p.as_str() == f))
+                        .copied()
+                        .collect();
+                    if included.is_empty() {
+                        "\u{2014}".into()
+                    } else if excluded.is_empty() {
+                        included.join(" ")
+                    } else {
+                        format!(
+                            "{}  + {} (off)",
+                            included.join(" "),
+                            excluded.join(" \u{00b7} ")
+                        )
+                    }
+                } else if !is_editing && (*index == 2 || *index == 3) {
+                    if let Ok(v) = value.parse::<f32>() {
+                        let pct = (v * 100.0) as u32;
+                        let bar = theme::progress_bar(pct, 10);
+                        format!("{value}   {bar}")
+                    } else {
+                        value.clone()
+                    }
+                } else {
+                    value.clone()
+                };
 
                 let value_style = if is_editing {
                     Style::default()
@@ -1671,7 +1726,7 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
 
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("  {:<28}", label), style_dim()),
-                    Span::styled(value.clone(), value_style),
+                    Span::styled(display_value, value_style),
                     Span::styled(indicator, style_dim()),
                 ]))
             }
@@ -1854,11 +1909,11 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
     // Left column
     let left_lines: Vec<Line> = vec![
         Line::from(Span::styled("NAVIGATE", style_header())),
-        make_key_line("\u{2191} \u{2193}", "move selection"),
+        make_key_line("\u{2191} \u{2193} / j k", "move selection"),
         make_key_line("\u{2190} \u{2192}", "switch reading list"),
         make_key_line("\u{23ce}", "open \u{00b7} choose a copy"),
         make_key_line("d", "book detail & history"),
-        make_key_line("tab", "focus the downloads pane"),
+        make_key_line("tab", "focus downloads pane"),
         make_key_line("esc \u{00b7} q", "back \u{00b7} quit"),
         Line::from(""),
         Line::from(Span::styled("FILTER", style_header())),
