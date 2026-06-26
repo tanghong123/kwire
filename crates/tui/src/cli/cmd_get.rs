@@ -6,16 +6,13 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
-use libgen_core::download::{Resolver, ResolverChain};
 use libgen_core::matching;
 use libgen_core::model::{BookInput, Format, ListSettings, RequestStatus};
-use libgen_core::queue::{DownloadRequest, HostLimits, Progress, SchedulerBuilder};
-use libgen_engine::{build_search, Config};
-use reqwest::Client;
+use libgen_core::queue::{DownloadRequest, Progress};
+use libgen_engine::{build_scheduler, build_search, Config};
 use tokio::sync::mpsc;
 
 use super::emitter::CliEmitter;
@@ -34,9 +31,10 @@ pub struct GetArgs {
     #[arg(long)]
     pub format: Option<String>,
 
-    /// Download site (default: libgen.li).
-    #[arg(long, default_value = "libgen.li")]
-    pub site: String,
+    /// Download site(s) to pin (comma-separated). Default: the full
+    /// libgen-family failover chain, auto-ordered by live health.
+    #[arg(long)]
+    pub site: Option<String>,
 
     /// Output directory for downloaded files.
     #[arg(long, default_value = ".")]
@@ -53,23 +51,20 @@ pub use GetArgs as Args;
 pub async fn run(args: GetArgs) -> Result<()> {
     let query = args.arg.join(" ");
 
-    // Build HTTP client used for both search and download.
-    let client = Client::builder()
-        .timeout(Duration::from_secs(120))
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Kwire/1.0")
-        .build()
-        .context("building http client")?;
+    // App config drives the download scheduler (failover chain + politeness) and
+    // the search client.
+    let cfg = Config::from_env();
+    let site = args.site.as_deref();
 
     // Detect whether arg is a bare MD5 (32 lowercase hex chars).
     if is_md5(&query) {
         let emitter = CliEmitter::new();
-        return download_by_md5(&query, &args.site, &args.out, client, &emitter).await;
+        return download_by_md5(&query, site, &args.out, &cfg, &emitter).await;
     }
 
     // Title search path.
     eprintln!("searching  {query}");
 
-    let cfg = Config::from_env();
     let search_client = build_search(&cfg).map_err(|e| anyhow::anyhow!(e))?;
 
     let mut format_pref = vec![];
@@ -109,7 +104,7 @@ pub async fn run(args: GetArgs) -> Result<()> {
                 let best = &outcome.ranked[0];
                 println!("{}", super::cmd_search::format_candidate(1, best));
                 let emitter = CliEmitter::new();
-                download_by_md5(&best.md5, &args.site, &args.out, client, &emitter).await
+                download_by_md5(&best.md5, site, &args.out, &cfg, &emitter).await
             }
             // No confident match → degrade to search: show ranked candidates.
             RequestStatus::NeedsSelection => {
@@ -152,7 +147,7 @@ pub async fn run(args: GetArgs) -> Result<()> {
             let best = &candidates[0];
             println!("{}", super::cmd_search::format_candidate(1, best));
             let emitter = CliEmitter::new();
-            download_by_md5(&best.md5, &args.site, &args.out, client, &emitter).await
+            download_by_md5(&best.md5, site, &args.out, &cfg, &emitter).await
         } else {
             // Middling → degrade to a pick-one list, download nothing.
             eprintln!("no confident match — pick one and run:  kwire get <md5>");
@@ -164,25 +159,21 @@ pub async fn run(args: GetArgs) -> Result<()> {
     }
 }
 
-/// Download a single md5 using `--site`, saving to `--out`.
+/// Download a single md5, saving to `--out`. `site` pins specific mirror(s)
+/// (comma-separated); `None` uses the full libgen-family failover chain.
 /// Progress is streamed live through `emitter`.
 async fn download_by_md5(
     md5: &str,
-    site: &str,
+    site: Option<&str>,
     out: &str,
-    client: Client,
+    cfg: &Config,
     emitter: &CliEmitter,
 ) -> Result<()> {
-    let resolver = build_site_resolver(site, &client)
-        .with_context(|| format!("building resolver for site {site:?}"))?;
-    let chain = ResolverChain::new(vec![resolver]);
-
-    let limits = HostLimits::default();
-    let scheduler = Arc::new(
-        SchedulerBuilder::new(chain, client)
-            .default_limits(limits)
-            .build(),
-    );
+    // Use the engine's scheduler builder: full failover chain (auto-ordered by
+    // SLUM health) when no `--site` is pinned, and a DOWNLOAD client with only a
+    // connect timeout (no overall timeout — large streaming bodies must not be
+    // killed mid-flight).
+    let scheduler = Arc::new(build_scheduler(site, cfg).context("building download scheduler")?);
 
     let out_dir = PathBuf::from(out);
     let dest = out_dir.join(format!("{md5}.bin"));
@@ -236,10 +227,6 @@ async fn download_by_md5(
     }
 
     Ok(())
-}
-
-fn build_site_resolver(site: &str, client: &Client) -> Result<Arc<dyn Resolver>> {
-    libgen_core::download::resolver_for_site(site, client)
 }
 
 // ---------------------------------------------------------------------------
