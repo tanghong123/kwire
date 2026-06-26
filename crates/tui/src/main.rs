@@ -454,6 +454,15 @@ async fn dispatch_intent(
         } => {
             mark_not_found(app, handles, group_path, book_index).await;
         }
+        Intent::PauseTransfer { md5 } => {
+            pause_transfer(app, handles, md5).await;
+        }
+        Intent::CancelTransfer { md5 } => {
+            cancel_transfer(app, handles, md5).await;
+        }
+        Intent::ResumeTransfer { md5 } => {
+            resume_transfer(app, handles, md5).await;
+        }
         Intent::Redraw => {}
     }
     Ok(false)
@@ -793,6 +802,53 @@ async fn cancel_book(
             sched.cancel(md5).await;
         }
     }
+    refresh_active_view(app, handles).await;
+}
+
+// ---------------------------------------------------------------------------
+// Per-transfer controls (#51) — Activity pane p / c / r
+// ---------------------------------------------------------------------------
+
+/// Pause a single in-flight transfer (identified by md5) via the scheduler.
+async fn pause_transfer(app: &mut AppState, handles: &EngineHandles, md5: String) {
+    if let Ok(sched) = ensure_scheduler_from(&handles.scheduler, &handles.config, None).await {
+        sched.pause(&md5).await;
+    }
+    refresh_active_view(app, handles).await;
+}
+
+/// Cancel a single in-flight transfer (identified by md5) via the scheduler.
+async fn cancel_transfer(app: &mut AppState, handles: &EngineHandles, md5: String) {
+    if let Ok(sched) = ensure_scheduler_from(&handles.scheduler, &handles.config, None).await {
+        sched.cancel(&md5).await;
+    }
+    refresh_active_view(app, handles).await;
+}
+
+/// Resume / retry a paused or cancelled transfer by md5.
+///
+/// Finds the variation's owning book via the current flat list, then calls
+/// `Orchestrator::resume_variation` to set its job state back to `Pending`.
+async fn resume_transfer(app: &mut AppState, handles: &EngineHandles, md5: String) {
+    // Locate the book that contains this variation using the already-rendered
+    // flat list — no extra I/O needed for the lookup.
+    let location: Option<(Vec<usize>, usize)> = app.flat.iter().find_map(|fb| {
+        if fb.book.versions.iter().any(|v| v.md5 == md5) {
+            Some((vec![fb.group_index], fb.book_index_in_group))
+        } else {
+            None
+        }
+    });
+    if let Some((group_path, book_index)) = location {
+        let Some(orch_arc) = active_orch(handles).await else {
+            return;
+        };
+        let mut guard = orch_arc.lock().await;
+        if let Err(e) = guard.resume_variation(&group_path, book_index, &md5) {
+            tracing::warn!("resume_transfer {md5}: {e}");
+        }
+    }
+    handles.engine_wake.notify_one();
     refresh_active_view(app, handles).await;
 }
 

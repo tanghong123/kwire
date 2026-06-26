@@ -99,4 +99,13 @@ pub enum Intent {
         group_path: Vec<usize>,
         book_index: usize,
     },
+
+    /// Pause a specific in-flight transfer by md5 (Activity pane `p`).
+    PauseTransfer { md5: String },
+
+    /// Cancel a specific in-flight transfer by md5 (Activity pane `c`).
+    CancelTransfer { md5: String },
+
+    /// Resume/retry a paused or cancelled transfer by md5 (Activity pane `r`).
+    ResumeTransfer { md5: String },
 }

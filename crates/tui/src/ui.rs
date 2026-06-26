@@ -143,16 +143,16 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
 
     // Vertically center the content block.
     // Content lines:
-    //   1 — logo box (3-line box: border + content + border)
+    //   3 — logo box (bordered: top border + content + bottom border)
     //   1 — blank
-    //   1 — wordmark
+    //   6 — wordmark (ASCII-art banner, 6 rows)
     //   3 — tagline (3 lines)
     //   1 — blank
     //   1 — NO READING LISTS YET
     //   1 — blank
     //   4 — command hints
-    // Total = 3 + 1 + 1 + 3 + 1 + 1 + 1 + 4 = 15 lines
-    let content_h: u16 = 15;
+    // Total = 3 + 1 + 6 + 3 + 1 + 1 + 1 + 4 = 20 lines
+    let content_h: u16 = 20;
     let top_pad = outer[0].height.saturating_sub(content_h) / 2;
 
     let content_area = Layout::vertical([
@@ -166,7 +166,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     let parts = Layout::vertical([
         Constraint::Length(3), // logo box (bordered)
         Constraint::Length(1), // blank
-        Constraint::Length(1), // wordmark
+        Constraint::Length(6), // wordmark (ASCII-art banner)
         Constraint::Length(3), // tagline
         Constraint::Length(1), // blank
         Constraint::Length(1), // NO READING LISTS YET
@@ -191,11 +191,23 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
         logo_area,
     );
 
-    // 2. Wordmark — bold, bright, centered
+    // 2. Wordmark — ASCII-art block-letter banner, centered, in the bright color.
+    //    Generated from the ANSI Shadow figlet font for "KWIRE" (6 rows × 41 cols).
+    let banner: &[&str] = &[
+        "██╗  ██╗ ██╗    ██╗ ██╗ ██████╗  ███████╗",
+        "██║ ██╔╝ ██║    ██║ ██║ ██╔══██╗ ██╔════╝",
+        "█████╔╝  ██║ █╗ ██║ ██║ ██████╔╝ █████╗  ",
+        "██╔═██╗  ██║███╗██║ ██║ ██╔══██╗ ██╔══╝  ",
+        "██║  ██╗ ╚███╔███╔╝ ██║ ██║  ██║ ███████╗",
+        "╚═╝  ╚═╝  ╚══╝╚══╝  ╚═╝ ╚═╝  ╚═╝ ╚══════╝",
+    ];
+    let banner_style = Style::default().fg(C_BRIGHT).add_modifier(Modifier::BOLD);
+    let banner_lines: Vec<Line> = banner
+        .iter()
+        .map(|row| Line::from(Span::styled(*row, banner_style)))
+        .collect();
     frame.render_widget(
-        Paragraph::new("kwire")
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(C_BRIGHT).add_modifier(Modifier::BOLD)),
+        Paragraph::new(banner_lines).alignment(Alignment::Center),
         parts[2],
     );
 
@@ -959,7 +971,9 @@ fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
             Focus::List => {
                 "\u{2191}\u{2193} move  \u{2190}\u{2192} list  \u{23ce} open  d detail  / filter  : command  tab downloads  ? help  q"
             }
-            Focus::Activity => "\u{2191}\u{2193} scroll  tab list  q quit",
+            Focus::Activity => {
+                "\u{2191}\u{2193} select  p pause  c cancel  r resume  tab list  q quit"
+            }
         };
         Line::from(Span::styled(hint, style_hint()))
     };

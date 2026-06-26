@@ -16,9 +16,9 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
 
     use crate::app::{
-        build_format_editor_rows, settings_field_kind, AppState, FlatBook, Focus, Modal,
-        SettingsDraft, SettingsEditor, SettingsFieldKind, StatusFilter, FORMAT_EDITOR_FORMATS,
-        SETTINGS_FIELD_COUNT,
+        build_format_editor_rows, settings_field_kind, ActiveTransfer, AppState, FlatBook, Focus,
+        Modal, SettingsDraft, SettingsEditor, SettingsFieldKind, StatusFilter,
+        FORMAT_EDITOR_FORMATS, SETTINGS_FIELD_COUNT,
     };
     use crate::intent::Intent;
     use crate::ui;
@@ -1776,14 +1776,14 @@ mod tests {
     // ── LANGUAGE field — "any" display and picker ───────────────────────────
 
     #[test]
-    fn language_field_shows_any_when_empty() {
+    fn language_field_shows_match_title_language_when_empty() {
         // Field index 1; default_draft() has language = "".
         let draft = default_draft();
         assert_eq!(draft.language, "", "default language is empty string");
         assert_eq!(
             draft.field_value(1),
-            "any",
-            "empty language must display as 'any' (bug #38)"
+            "match title language",
+            "empty language must display as 'match title language' (#58)"
         );
     }
 
@@ -1807,7 +1807,7 @@ mod tests {
         let mut app = AppState::new();
         open_settings_with_draft(&mut app);
         app.settings_selected = 1;
-        app.on_input(key(KeyCode::Enter)); // open picker (selected = 0 = "any")
+        app.on_input(key(KeyCode::Enter)); // open picker (selected = 0 = "match title language")
         app.on_input(key(KeyCode::Down)); // move to "English" (index 1)
         app.on_input(key(KeyCode::Enter)); // commit
         assert_eq!(
@@ -1822,18 +1822,19 @@ mod tests {
     }
 
     #[test]
-    fn lang_picker_any_stores_empty_string() {
+    fn lang_picker_match_title_language_stores_empty_string() {
+        // Selecting "match title language" (the first option, index 0) must store "".
         let mut app = AppState::new();
         open_settings_with_draft(&mut app);
         app.settings_draft.as_mut().unwrap().language = "English".into();
         app.settings_selected = 1;
         app.on_input(key(KeyCode::Enter)); // open picker; starts at "English" (index 1)
-        app.on_input(key(KeyCode::Up)); // move to "any" (index 0)
-        app.on_input(key(KeyCode::Enter)); // commit "any"
+        app.on_input(key(KeyCode::Up)); // move to "match title language" (index 0)
+        app.on_input(key(KeyCode::Enter)); // commit "match title language"
         assert_eq!(
             app.settings_draft.as_ref().unwrap().language,
             "",
-            "selecting 'any' must store empty string"
+            "selecting 'match title language' must store empty string (#58)"
         );
     }
 
@@ -2744,5 +2745,174 @@ mod tests {
         app.set_view(fixture_vm());
         app.modal = Some(Modal::ConfirmBookRemove { book_flat_index: 0 });
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // #46 — ASCII-art banner on the empty screen
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_empty_screen_contains_ascii_banner() {
+        // The empty/first-run screen must render the multi-row ASCII-art banner.
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        assert!(app.view.is_none());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        // The ANSI Shadow banner contains box-drawing chars unique to the banner.
+        assert!(
+            content.contains("╔╝"),
+            "empty screen should contain ASCII art banner (box drawing chars from K shape)"
+        );
+        assert!(
+            content.contains("███████╗"),
+            "empty screen should contain ASCII art banner (E shape top row)"
+        );
+    }
+
+    #[test]
+    fn render_empty_screen_banner_height_fits() {
+        // With content_h = 20, a 24-row terminal should still render without panic.
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // #51 — per-transfer Activity pane controls (p / c / r)
+    // -----------------------------------------------------------------------
+
+    /// Insert a dummy transfer into app.transfers under a 32-char md5 key.
+    fn insert_transfer(app: &mut AppState, md5: &str) {
+        app.transfers.insert(
+            md5.to_string(),
+            ActiveTransfer {
+                md5: md5.to_string(),
+                host: "libgen.li".into(),
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn activity_focus_p_emits_pause_transfer() {
+        let mut app = AppState::new();
+        let md5 = "a".repeat(32);
+        insert_transfer(&mut app, &md5);
+        app.focus = Focus::Activity;
+        let intent = app.on_input(key(KeyCode::Char('p')));
+        assert_eq!(
+            intent,
+            Intent::PauseTransfer { md5 },
+            "p in Activity focus should emit PauseTransfer"
+        );
+    }
+
+    #[test]
+    fn activity_focus_c_emits_cancel_transfer() {
+        let mut app = AppState::new();
+        let md5 = "b".repeat(32);
+        insert_transfer(&mut app, &md5);
+        app.focus = Focus::Activity;
+        let intent = app.on_input(key(KeyCode::Char('c')));
+        assert_eq!(
+            intent,
+            Intent::CancelTransfer { md5 },
+            "c in Activity focus should emit CancelTransfer"
+        );
+    }
+
+    #[test]
+    fn activity_focus_r_emits_resume_transfer() {
+        let mut app = AppState::new();
+        let md5 = "c".repeat(32);
+        insert_transfer(&mut app, &md5);
+        app.focus = Focus::Activity;
+        let intent = app.on_input(key(KeyCode::Char('r')));
+        assert_eq!(
+            intent,
+            Intent::ResumeTransfer { md5 },
+            "r in Activity focus should emit ResumeTransfer"
+        );
+    }
+
+    #[test]
+    fn activity_focus_p_no_transfers_returns_redraw() {
+        let mut app = AppState::new();
+        // No transfers in the map.
+        app.focus = Focus::Activity;
+        let intent = app.on_input(key(KeyCode::Char('p')));
+        assert_eq!(
+            intent,
+            Intent::Redraw,
+            "p with no transfers should return Redraw"
+        );
+    }
+
+    #[test]
+    fn activity_focus_selection_moves_and_targets_correct_md5() {
+        // With two transfers the sorted second md5 should be targeted after ↓.
+        let mut app = AppState::new();
+        let md5_a = "a".repeat(32); // sorts first
+        let md5_b = "b".repeat(32); // sorts second
+        insert_transfer(&mut app, &md5_a);
+        insert_transfer(&mut app, &md5_b);
+        app.focus = Focus::Activity;
+        assert_eq!(app.activity_selected, 0);
+
+        // Move down once → now at index 1 (md5_b, alphabetically second).
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(app.activity_selected, 1);
+
+        let intent = app.on_input(key(KeyCode::Char('p')));
+        assert_eq!(
+            intent,
+            Intent::PauseTransfer { md5: md5_b },
+            "after ↓ p should target the second alphabetical transfer"
+        );
+    }
+
+    #[test]
+    fn list_focus_p_still_emits_book_pause() {
+        // When focus is List, p must still emit book-level Pause (not PauseTransfer).
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        insert_transfer(&mut app, &"a".repeat(32));
+        assert_eq!(app.focus, Focus::List);
+        let intent = app.on_input(key(KeyCode::Char('p')));
+        assert!(
+            matches!(intent, Intent::Pause { .. }),
+            "List focus p should emit book-level Pause, got {intent:?}"
+        );
+    }
+
+    #[test]
+    fn list_focus_r_still_emits_book_retry() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        insert_transfer(&mut app, &"a".repeat(32));
+        assert_eq!(app.focus, Focus::List);
+        let intent = app.on_input(key(KeyCode::Char('r')));
+        assert!(
+            matches!(intent, Intent::Retry { .. }),
+            "List focus r should emit book-level Retry, got {intent:?}"
+        );
+    }
+
+    #[test]
+    fn focused_transfer_md5_returns_sorted_key() {
+        // focused_transfer_md5 must return keys in sorted order.
+        let mut app = AppState::new();
+        insert_transfer(&mut app, &"z".repeat(32));
+        insert_transfer(&mut app, &"a".repeat(32));
+        insert_transfer(&mut app, &"m".repeat(32));
+        // activity_selected = 0 → "a..." (alphabetically first)
+        assert_eq!(app.focused_transfer_md5(), Some("a".repeat(32)));
+        app.activity_selected = 1;
+        assert_eq!(app.focused_transfer_md5(), Some("m".repeat(32)));
+        app.activity_selected = 2;
+        assert_eq!(app.focused_transfer_md5(), Some("z".repeat(32)));
     }
 }

@@ -17,9 +17,10 @@ use crate::intent::Intent;
 /// Number of navigable (user-editable) fields in the Settings modal.
 pub const SETTINGS_FIELD_COUNT: usize = 11;
 
-/// Language options offered in the Language picker; first entry is "any".
+/// Language options offered in the Language picker; first entry is "match title language"
+/// (the default — means "no preference", stored as empty string in the engine).
 pub const SETTINGS_LANGUAGES: &[&str] = &[
-    "any",
+    "match title language",
     "English",
     "German",
     "French",
@@ -125,7 +126,7 @@ pub struct SettingsDraft {
     // ── Per-list settings ────────────────────────────────────────────────────
     /// Ordered preferred format names, e.g. `["epub", "pdf"]`.
     pub format_pref: Vec<String>,
-    /// Display language.  `""` (or `"any"`) means "no preference" (engine → `None`).
+    /// Display language.  `""` means "no preference" / "match title language" (engine → `None`).
     pub language: String,
     pub auto_threshold: f32,
     pub near_threshold: f32,
@@ -158,8 +159,8 @@ impl SettingsDraft {
                 }
             }
             1 => {
-                if self.language.is_empty() || self.language == "any" {
-                    "any".into()
+                if self.language.is_empty() {
+                    "match title language".into()
                 } else {
                     self.language.clone()
                 }
@@ -767,36 +768,63 @@ impl AppState {
                     KeyCode::Char('d') => Intent::OpenDetail {
                         flat_index: self.selected,
                     },
-                    KeyCode::Char('r') => {
-                        if let Some(fb) = self.flat.get(self.selected) {
-                            Intent::Retry {
-                                group_path: vec![fb.group_index],
-                                book_index: fb.book_index_in_group,
+                    KeyCode::Char('r') => match self.focus {
+                        Focus::Activity => {
+                            if let Some(md5) = self.focused_transfer_md5() {
+                                Intent::ResumeTransfer { md5 }
+                            } else {
+                                Intent::Redraw
                             }
-                        } else {
-                            Intent::Redraw
                         }
-                    }
-                    KeyCode::Char('p') => {
-                        if let Some(fb) = self.flat.get(self.selected) {
-                            Intent::Pause {
-                                group_path: vec![fb.group_index],
-                                book_index: fb.book_index_in_group,
+                        Focus::List => {
+                            if let Some(fb) = self.flat.get(self.selected) {
+                                Intent::Retry {
+                                    group_path: vec![fb.group_index],
+                                    book_index: fb.book_index_in_group,
+                                }
+                            } else {
+                                Intent::Redraw
                             }
-                        } else {
-                            Intent::Redraw
                         }
-                    }
-                    KeyCode::Char('c') => {
-                        if let Some(fb) = self.flat.get(self.selected) {
-                            Intent::Cancel {
-                                group_path: vec![fb.group_index],
-                                book_index: fb.book_index_in_group,
+                    },
+                    KeyCode::Char('p') => match self.focus {
+                        Focus::Activity => {
+                            if let Some(md5) = self.focused_transfer_md5() {
+                                Intent::PauseTransfer { md5 }
+                            } else {
+                                Intent::Redraw
                             }
-                        } else {
-                            Intent::Redraw
                         }
-                    }
+                        Focus::List => {
+                            if let Some(fb) = self.flat.get(self.selected) {
+                                Intent::Pause {
+                                    group_path: vec![fb.group_index],
+                                    book_index: fb.book_index_in_group,
+                                }
+                            } else {
+                                Intent::Redraw
+                            }
+                        }
+                    },
+                    KeyCode::Char('c') => match self.focus {
+                        Focus::Activity => {
+                            if let Some(md5) = self.focused_transfer_md5() {
+                                Intent::CancelTransfer { md5 }
+                            } else {
+                                Intent::Redraw
+                            }
+                        }
+                        Focus::List => {
+                            if let Some(fb) = self.flat.get(self.selected) {
+                                Intent::Cancel {
+                                    group_path: vec![fb.group_index],
+                                    book_index: fb.book_index_in_group,
+                                }
+                            } else {
+                                Intent::Redraw
+                            }
+                        }
+                    },
                     KeyCode::Char('o') => {
                         if let Some(fb) = self.flat.get(self.selected) {
                             if let Some(path) =
@@ -1627,7 +1655,11 @@ impl AppState {
                     String::new()
                 };
                 if let Some(d) = &mut self.settings_draft {
-                    d.language = if lang == "any" { String::new() } else { lang };
+                    d.language = if lang == "match title language" {
+                        String::new()
+                    } else {
+                        lang
+                    };
                     d.editor = SettingsEditor::Viewing;
                 }
             }
@@ -1792,7 +1824,7 @@ impl AppState {
                 let options: Vec<String> =
                     SETTINGS_LANGUAGES.iter().map(|s| s.to_string()).collect();
                 let lang_now = if d.language.is_empty() {
-                    "any"
+                    "match title language"
                 } else {
                     d.language.as_str()
                 };
@@ -1928,6 +1960,17 @@ impl AppState {
         if self.activity_selected > 0 {
             self.activity_selected -= 1;
         }
+    }
+
+    /// Return the md5 of the transfer row currently focused in the Activity pane.
+    ///
+    /// Transfers are sorted by md5 for a stable deterministic ordering so that
+    /// `activity_selected` always maps to the same transfer regardless of HashMap
+    /// iteration order.
+    pub fn focused_transfer_md5(&self) -> Option<String> {
+        let mut keys: Vec<&String> = self.transfers.keys().collect();
+        keys.sort();
+        keys.get(self.activity_selected).map(|k| (*k).clone())
     }
 
     /// Handle key events while in command-line mode (`:`).
