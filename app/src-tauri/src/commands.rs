@@ -220,7 +220,14 @@ pub(crate) async fn add_manual_book_inner(
     };
     {
         let mut guard = orch.lock().await;
-        let (group_path, book_index) = guard.add_book(&title, authors).map_err(err)?;
+        // No author given → treat the whole title field as a FREE-FORM "title author"
+        // query (matches the CLI/TUI default). An explicit author opts into a
+        // structured title-vs-author match.
+        let (group_path, book_index) = if authors.is_empty() {
+            guard.add_book_freeform(title.trim()).map_err(err)?
+        } else {
+            guard.add_book(&title, authors).map_err(err)?
+        };
         // Drive the new book to completion (discover + download).
         guard
             .set_goal_one(&group_path, book_index, Goal::Complete)

@@ -84,6 +84,53 @@ async fn add_manual_book_twice_appends_two_books_to_one_list() {
 }
 
 #[tokio::test]
+async fn add_manual_book_freeform_vs_structured() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = make_state(tmp.path());
+
+    // No author → the whole title field is a FREE-FORM "title author" query.
+    let lib = testsupport::add_manual_book(&state, "Treasure Island Robert Louis Stevenson", None)
+        .await
+        .expect("freeform add ok");
+    let id = manual_view(&lib).unwrap().0.to_string();
+
+    // Empty/whitespace author behaves the same as None (still free-form).
+    testsupport::add_manual_book(&state, "Moby Dick Herman Melville", Some("   "))
+        .await
+        .expect("blank-author add ok");
+
+    // Explicit author → structured title-vs-author match.
+    testsupport::add_manual_book(&state, "The Adventures of Tom Sawyer", Some("Mark Twain"))
+        .await
+        .expect("structured add ok");
+
+    let snap = testsupport::snapshot(&state, &id).await.unwrap();
+    let books = &snap.groups[0].books;
+    assert_eq!(books.len(), 3, "three books added");
+
+    // Book 0: free-form — whole input is the title, freeform flag set, no authors.
+    assert!(books[0].input.freeform, "no-author add is free-form");
+    assert_eq!(
+        books[0].input.title,
+        "Treasure Island Robert Louis Stevenson"
+    );
+    assert!(
+        books[0].input.authors.is_empty(),
+        "free-form add has no structured authors"
+    );
+
+    // Book 1: blank author is also free-form.
+    assert!(books[1].input.freeform, "blank-author add is free-form");
+    assert_eq!(books[1].input.title, "Moby Dick Herman Melville");
+    assert!(books[1].input.authors.is_empty());
+
+    // Book 2: explicit author → structured (NOT free-form), authors populated.
+    assert!(!books[2].input.freeform, "author add is structured");
+    assert_eq!(books[2].input.title, "The Adventures of Tom Sawyer");
+    assert_eq!(books[2].input.authors, vec!["Mark Twain".to_string()]);
+}
+
+#[tokio::test]
 async fn add_manual_book_rejects_empty_title() {
     let tmp = tempfile::tempdir().unwrap();
     let state = make_state(tmp.path());
