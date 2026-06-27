@@ -114,6 +114,85 @@ pub fn marquee_window(s: &str, window_cols: usize, offset: usize) -> String {
     s.chars().skip(r.start).take(r.end - r.start).collect()
 }
 
+/// Visible slice + edge-clip flags for a cursor-following editor window,
+/// returned by [`scroll_to_cursor`].
+///
+/// `visible` is the text shown in the window; `clipped_left` / `clipped_right`
+/// say whether any text is hidden past each edge so the caller can draw the
+/// `‹` / `›` affordances.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CursorView {
+    pub visible: String,
+    pub clipped_left: bool,
+    pub clipped_right: bool,
+}
+
+/// Scroll `s` horizontally inside a `window_cols`-wide field so the cell at
+/// display column `cursor_col` stays visible, sliding the text as the cursor
+/// moves past the right edge.
+///
+/// This is the shared "editing" primitive for the cross-cutting rule (#2
+/// settings, #3 command line / `:import`, and groups d/e reuse it): given the
+/// buffer, the cursor column, and the field width, it returns the visible
+/// display-width slice that keeps the cursor in view plus the left/right-clip
+/// flags for the `‹`/`›` indicators.
+///
+/// `cursor_col` is the cursor's display-column position within `s`
+/// (`0..=display_width(s)`; equal to the full width means the cursor sits one
+/// cell past the last glyph — the usual end-of-line insertion point). Once the
+/// text overflows, the window is pinned so the cursor rests on the right edge.
+///
+/// Guarantees:
+/// - If `s` fits in `window_cols`, the whole string is returned, both flags false.
+/// - The visible slice never exceeds `window_cols` columns and never splits a
+///   wide glyph (a glyph straddling the left boundary is dropped whole, so the
+///   window may begin one column late).
+/// - `clipped_left` ⇔ text is hidden to the left of the window;
+///   `clipped_right` ⇔ text is hidden to the right.
+///
+/// The caller reserves any columns it needs for the `‹`/`›` indicators by
+/// passing a correspondingly smaller `window_cols`.
+pub fn scroll_to_cursor(s: &str, cursor_col: usize, window_cols: usize) -> CursorView {
+    if window_cols == 0 {
+        return CursorView::default();
+    }
+    let total = display_width(s);
+    if total <= window_cols {
+        return CursorView {
+            visible: s.to_string(),
+            clipped_left: false,
+            clipped_right: false,
+        };
+    }
+    // Text overflows the field. Pin the window so the cursor cell rests on the
+    // right edge; when the cursor is still near the start, keep offset at 0.
+    let offset = (cursor_col + 1).saturating_sub(window_cols);
+    // Take glyphs whose columns fall in [offset, offset + window_cols).
+    let mut visible = String::new();
+    let mut col = 0usize;
+    let mut taken = 0usize;
+    for c in s.chars() {
+        let w = char_cols(c);
+        if col < offset {
+            // Still skipping the offset region; a glyph straddling the boundary
+            // is skipped whole (the window may begin one column late).
+            col += w;
+            continue;
+        }
+        if taken + w > window_cols {
+            break;
+        }
+        visible.push(c);
+        taken += w;
+        col += w;
+    }
+    CursorView {
+        visible,
+        clipped_left: offset > 0,
+        clipped_right: offset + window_cols < total,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +326,78 @@ mod tests {
     #[test]
     fn marquee_window_zero_is_empty() {
         assert_eq!(marquee_window("abc", 0, 0), "");
+    }
+
+    // ── scroll_to_cursor ───────────────────────────────────────────────────
+    #[test]
+    fn scroll_fits_returns_whole_no_flags() {
+        let cv = scroll_to_cursor("hello", 5, 10);
+        assert_eq!(cv.visible, "hello");
+        assert!(!cv.clipped_left);
+        assert!(!cv.clipped_right);
+        // Exactly filling the window still counts as fitting.
+        let cv = scroll_to_cursor("hello", 5, 5);
+        assert_eq!(cv.visible, "hello");
+        assert!(!cv.clipped_left && !cv.clipped_right);
+    }
+
+    #[test]
+    fn scroll_cursor_near_start_clips_right_only() {
+        // Cursor at column 0 of an 8-col string in a 4-col window.
+        let cv = scroll_to_cursor("abcdefgh", 0, 4);
+        assert_eq!(cv.visible, "abcd");
+        assert!(!cv.clipped_left, "nothing hidden left");
+        assert!(cv.clipped_right, "efgh hidden right");
+    }
+
+    #[test]
+    fn scroll_cursor_in_middle_clips_both() {
+        // Cursor at column 4 → window slides to keep it on the right edge.
+        let cv = scroll_to_cursor("abcdefgh", 4, 4);
+        assert_eq!(cv.visible, "bcde");
+        assert!(cv.clipped_left);
+        assert!(cv.clipped_right);
+        assert!(display_width(&cv.visible) <= 4);
+    }
+
+    #[test]
+    fn scroll_cursor_at_end_clips_left_only() {
+        // Cursor one past the last glyph (insertion point) — typical editing.
+        let cv = scroll_to_cursor("abcdefgh", 8, 4);
+        // Window [5,9): only "fgh" exists; the 4th column is the cursor cell.
+        assert_eq!(cv.visible, "fgh");
+        assert!(cv.clipped_left, "head hidden left");
+        assert!(!cv.clipped_right, "cursor sits at the right edge");
+        assert!(display_width(&cv.visible) <= 4);
+    }
+
+    #[test]
+    fn scroll_settings_editor_keeps_block_cursor_visible() {
+        // Mirrors the settings inline editor: buffer + trailing block cursor.
+        let buf = "/Users/someone/very/long/download/path";
+        let with_cursor = format!("{buf}\u{258f}");
+        let cur = display_width(&with_cursor).saturating_sub(1); // col of the cursor glyph
+        let cv = scroll_to_cursor(&with_cursor, cur, 12);
+        // The block cursor must be the last visible glyph.
+        assert!(cv.visible.ends_with('\u{258f}'), "cursor visible: {cv:?}");
+        assert!(cv.clipped_left, "long path scrolled → ‹ shown");
+        assert!(!cv.clipped_right, "cursor at end → no ›");
+        assert!(display_width(&cv.visible) <= 12);
+    }
+
+    #[test]
+    fn scroll_cjk_never_splits_wide_glyph() {
+        // "量子化学" = 8 cols; cursor at end in a 4-col window.
+        let cv = scroll_to_cursor("量子化学", 8, 4);
+        assert!(display_width(&cv.visible) <= 4);
+        assert!(cv.clipped_left);
+        // Every visible glyph is whole (width stays even for pure-CJK).
+        assert_eq!(display_width(&cv.visible) % 2, 0);
+    }
+
+    #[test]
+    fn scroll_window_zero_is_empty() {
+        let cv = scroll_to_cursor("abc", 1, 0);
+        assert_eq!(cv, CursorView::default());
     }
 }

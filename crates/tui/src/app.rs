@@ -648,6 +648,18 @@ pub struct AppState {
     /// Active-list identity when the strip marquee was last reset (a change —
     /// switching the active list — resets offset + direction).
     pub list_marquee_sel: usize,
+
+    // ── Marquee scroll state (Settings modal · FOCUSED row value · #2) ─────────
+    /// Column offset for the focused settings row's long value (Download folder,
+    /// Naming template, …) when it overflows its value column and the row is not
+    /// being edited. Independent of the other marquees so the modal animation
+    /// never fights the list/strip/row marquees underneath.
+    pub settings_marquee_offset: usize,
+    pub settings_marquee_forward: bool,
+    pub settings_marquee_pause: u8,
+    /// Settings field index active when the marquee was last reset (moving rows
+    /// resets offset + direction).
+    pub settings_marquee_sel: usize,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -741,6 +753,10 @@ impl AppState {
             list_marquee_forward: true,
             list_marquee_pause: 0,
             list_marquee_sel: 0,
+            settings_marquee_offset: 0,
+            settings_marquee_forward: true,
+            settings_marquee_pause: 0,
+            settings_marquee_sel: 0,
         }
     }
 
@@ -849,6 +865,32 @@ impl AppState {
             self.list_marquee_forward = true;
             self.list_marquee_pause = 0;
             self.list_marquee_sel = new_sel;
+        }
+    }
+
+    /// Advance the focused Settings row's value marquee by one tick (#2).
+    ///
+    /// Same ping-pong mechanics as the others over the dedicated
+    /// `settings_marquee_*` state. `text_disp_w` is the focused value's display
+    /// width and `col_w` its value-column width; call once per render while the
+    /// Settings modal is open (park it — `(0, 1)` — while a field is editing).
+    pub fn advance_settings_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        step_marquee(
+            &mut self.settings_marquee_offset,
+            &mut self.settings_marquee_forward,
+            &mut self.settings_marquee_pause,
+            text_disp_w,
+            col_w,
+        );
+    }
+
+    /// Reset the Settings value marquee when the selected field changes (#2).
+    pub fn reset_settings_marquee_if_changed(&mut self, new_sel: usize) {
+        if new_sel != self.settings_marquee_sel {
+            self.settings_marquee_offset = 0;
+            self.settings_marquee_forward = true;
+            self.settings_marquee_pause = 0;
+            self.settings_marquee_sel = new_sel;
         }
     }
 

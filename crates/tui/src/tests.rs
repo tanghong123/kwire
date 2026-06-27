@@ -2414,6 +2414,60 @@ mod tests {
         assert_eq!(SETTINGS_FIELD_COUNT, 11);
     }
 
+    // ── #2: modal width formula ─────────────────────────────────────────────
+    #[test]
+    fn settings_modal_width_follows_formula() {
+        // min(80, floor(0.9 × W), W − 10).
+        // Wide terminals pin at 80.
+        assert_eq!(ui::settings_modal_width(132), 80);
+        assert_eq!(ui::settings_modal_width(100), 80);
+        // At 90: floor(0.9×90)=81, margin=80 → 80.
+        assert_eq!(ui::settings_modal_width(90), 80);
+        // At 80: floor(0.9×80)=72, margin=70 → 70 (≥10-col margin, ≤70).
+        assert_eq!(ui::settings_modal_width(80), 70);
+        assert!(ui::settings_modal_width(80) <= 70);
+        // Narrow: 0.9× cap dominates, still ≥10-col margin.
+        assert_eq!(ui::settings_modal_width(60), 50); // floor(54)=54, margin 50 → 50
+        assert_eq!(ui::settings_modal_width(50), 40); // floor(45)=45, margin 40 → 40
+                                                      // For every width the modal leaves a ≥10-col margin (never exceeds W−10).
+        for w in 20u16..=200 {
+            assert!(ui::settings_modal_width(w) <= w.saturating_sub(10), "w={w}");
+            assert!(ui::settings_modal_width(w) <= 80);
+        }
+    }
+
+    // ── #2: focused-vs-unfocused value selection ────────────────────────────
+    #[test]
+    fn settings_value_unfocused_ellipsizes() {
+        let long = "/Users/me/a/very/long/download/folder/path";
+        let out = ui::settings_value_display(long, 20, false, 0);
+        assert!(out.ends_with('\u{2026}'), "unfocused → … ellipsis: {out:?}");
+        assert!(crate::textfit::display_width(&out) <= 20);
+    }
+
+    #[test]
+    fn settings_value_focused_marquees() {
+        let long = "/Users/me/a/very/long/download/folder/path";
+        // Focused, offset 0 → window starts at the head (no ellipsis glyph).
+        let head = ui::settings_value_display(long, 20, true, 0);
+        assert!(
+            head.starts_with("/Users/me"),
+            "focused marquee head: {head:?}"
+        );
+        assert!(!head.ends_with('\u{2026}'), "marquee does not ellipsize");
+        // A non-zero offset scrolls the window → different slice.
+        let scrolled = ui::settings_value_display(long, 20, true, 6);
+        assert_ne!(head, scrolled, "marquee advances with the offset");
+        assert!(crate::textfit::display_width(&scrolled) <= 20);
+    }
+
+    #[test]
+    fn settings_value_short_unchanged_either_way() {
+        // A value that fits is returned verbatim whether focused or not.
+        assert_eq!(ui::settings_value_display("on", 20, false, 0), "on");
+        assert_eq!(ui::settings_value_display("on", 20, true, 3), "on");
+    }
+
     // ── TOGGLE field (space) ────────────────────────────────────────────────
 
     #[test]

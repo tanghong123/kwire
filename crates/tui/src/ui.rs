@@ -2421,8 +2421,35 @@ fn render_detail_modal(
 // 4c  Settings modal
 // ---------------------------------------------------------------------------
 
-fn render_settings_modal(frame: &mut Frame, app: &AppState) {
-    let area = centered_rect(80, 30, frame.area());
+/// Settings modal width (#2): `min(80, floor(0.9 × total_width), total_width − 10)`.
+///
+/// Stays pinned at 80 on wide terminals, but shrinks on narrow ones so it never
+/// exceeds 90 % of the screen and always leaves a ≥10-column margin.
+pub(crate) fn settings_modal_width(total_width: u16) -> u16 {
+    let ninety = (total_width as u32 * 9 / 10) as u16; // floor(0.9 × width)
+    let margin = total_width.saturating_sub(10);
+    80.min(ninety).min(margin)
+}
+
+/// Pick the display string for a plain (non-editing) settings value following
+/// the cross-cutting rule (#2): focused row → marquee-scroll, unfocused → `…`
+/// ellipsis. (The editing case is handled separately via
+/// [`crate::textfit::scroll_to_cursor`].)
+pub(crate) fn settings_value_display(
+    value: &str,
+    width: usize,
+    focused: bool,
+    marquee_off: usize,
+) -> String {
+    if focused {
+        crate::textfit::marquee_window(value, width, marquee_off)
+    } else {
+        crate::textfit::ellipsize(value, width)
+    }
+}
+
+fn render_settings_modal(frame: &mut Frame, app: &mut AppState) {
+    let area = centered_rect(settings_modal_width(frame.area().width), 30, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -2455,6 +2482,31 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
         Constraint::Length(1),
     ])
     .split(padded);
+
+    // Value column width: the line is accent(2) + label(28) + value, spanning
+    // the padded width. Long values flex/scroll inside what remains.
+    let value_w = (padded.width as usize).saturating_sub(30);
+
+    // ── Marquee bookkeeping (#2) — needs &mut, so do it before the long
+    // immutable borrow of the draft below. Reset on row change; advance the
+    // focused value's marquee, but park it (`0, 1`) while a field is editing.
+    let focused_idx = app.settings_selected;
+    let focused_editing = matches!(
+        app.settings_draft.as_ref().map(|d| &d.editor),
+        Some(SettingsEditor::Editing(_))
+    );
+    let focused_val = app
+        .settings_draft
+        .as_ref()
+        .map(|d| d.field_value(focused_idx))
+        .unwrap_or_default();
+    app.reset_settings_marquee_if_changed(focused_idx);
+    if focused_editing {
+        app.advance_settings_marquee(0, 1);
+    } else {
+        app.advance_settings_marquee(crate::textfit::display_width(&focused_val), value_w);
+    }
+    let settings_marquee_off = app.settings_marquee_offset;
 
     // Pull values from the staged draft (always present when modal is open).
     let draft = match &app.settings_draft {
@@ -2621,9 +2673,31 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
                             ));
                         }
                     }
+                } else if is_editing {
+                    // EDITING (cross-cutting rule): scroll the buffer to keep the
+                    // block cursor `▏` visible, with `‹`/`›` indicators when text
+                    // is hidden left/right. `value` already carries the trailing
+                    // cursor glyph (appended in `editing_buf`); reserve one column
+                    // on each side of the value region for the indicators.
+                    let content_w = value_w.saturating_sub(2);
+                    let cursor_col = crate::textfit::display_width(value).saturating_sub(1);
+                    let cv = crate::textfit::scroll_to_cursor(value, cursor_col, content_w);
+                    let left = if cv.clipped_left { "\u{2039}" } else { " " };
+                    let right = if cv.clipped_right { "\u{203a}" } else { " " };
+                    // Active inline editor: light text on the faint-green selected
+                    // row bg. No bright-orange — unreadable on the bg.
+                    let edit_style = Style::default()
+                        .fg(C_BRIGHT)
+                        .bg(C_SELECTED)
+                        .add_modifier(Modifier::BOLD);
+                    spans.push(Span::styled(left, style_dim()));
+                    spans.push(Span::styled(cv.visible, edit_style));
+                    spans.push(Span::styled(right, style_dim()));
                 } else {
-                    // Threshold fields (idx 2/3) get a trailing ▰▱ bar.
-                    let display_value: String = if !is_editing && (*index == 2 || *index == 3) {
+                    // Non-editing value. Threshold fields (idx 2/3) keep their
+                    // trailing ▰▱ bar; every other long value follows the
+                    // cross-cutting rule (marquee when focused, `…` otherwise).
+                    let display_value: String = if *index == 2 || *index == 3 {
                         if let Ok(v) = value.parse::<f32>() {
                             let pct = (v * 100.0) as u32;
                             format!("{value}   {}", theme::progress_bar(pct, 10))
@@ -2631,17 +2705,9 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
                             value.clone()
                         }
                     } else {
-                        value.clone()
+                        settings_value_display(value, value_w, is_sel, settings_marquee_off)
                     };
-                    let value_style = if is_editing {
-                        // Active inline editor: light text on the faint-green
-                        // selected-row bg (the block cursor `▏` is appended to the
-                        // buffer in `editing_buf`). No bright-orange — unreadable.
-                        Style::default()
-                            .fg(C_BRIGHT)
-                            .bg(C_SELECTED)
-                            .add_modifier(Modifier::BOLD)
-                    } else if is_sel {
+                    let value_style = if is_sel {
                         style_selected()
                     } else if *index == 6 {
                         // Naming template — a more contrasty beige.
