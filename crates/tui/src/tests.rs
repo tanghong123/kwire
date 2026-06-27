@@ -4793,6 +4793,56 @@ mod tests {
         );
     }
 
+    /// The filter chips are spread evenly across a wide row (not left-packed),
+    /// and a click at a non-first chip's NEW spread x-position still selects the
+    /// correct filter (proves the recomputed rects match the rendered positions).
+    #[test]
+    fn filter_chips_spread_evenly_and_click_hits_new_position() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        assert_eq!(app.filter, StatusFilter::All);
+
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+
+        let chips = app.last_rects.filter_chips.clone();
+        assert_eq!(chips.len(), 6, "all six status chips have rects");
+
+        // Chips must be spread: there is a real gap between consecutive chips,
+        // and the last chip starts well past the midpoint of a 120-col row
+        // (i.e. they are NOT bunched at the left edge).
+        for pair in chips.windows(2) {
+            let (a, _) = pair[0];
+            let (b, _) = pair[1];
+            assert!(
+                b.x > a.x + a.width,
+                "chips must have a gap between them (a ends {}, b starts {})",
+                a.x + a.width,
+                b.x
+            );
+        }
+        let (last_rect, last_filter) = *chips.last().unwrap();
+        assert_eq!(last_filter, StatusFilter::Done);
+        assert!(
+            last_rect.x > 60,
+            "last chip must be spread toward the right (x = {})",
+            last_rect.x
+        );
+
+        // Click the Cannot chip (index 3) at the centre of its spread rect.
+        let (cannot_rect, _) = chips[3];
+        assert_eq!(chips[3].1, StatusFilter::Cannot);
+        let click_x = cannot_rect.x + cannot_rect.width / 2;
+        let intent = app.on_input(mouse_left_click(click_x, cannot_rect.y));
+        assert_eq!(intent, Intent::Redraw, "filter chip click returns Redraw");
+        assert_eq!(
+            app.filter,
+            StatusFilter::Cannot,
+            "clicking the Cannot chip at its spread position must set filter to Cannot"
+        );
+    }
+
     /// Scroll wheel over the book table → scrolls + hover-selects, focuses List.
     #[test]
     fn mouse_wheel_over_book_table_scrolls_and_hover_selects() {

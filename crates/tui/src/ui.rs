@@ -599,11 +599,9 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
         Span::styled(" ", style_dim())
     };
 
-    let mut x_offset = area.x + 1; // +1 for pane accent char
-    let mut spans: Vec<Span> = vec![pane_accent];
-    for (filter, label) in &chip_data {
-        let is_active_chip = *filter == active_filter;
-        let style = if is_active_chip {
+    // Style helper for a single chip's label.
+    let chip_style = |filter: &StatusFilter| -> Style {
+        if *filter == active_filter {
             // Active/selected chip: always bright + underlined (cursor here).
             Style::default()
                 .fg(C_BRIGHT)
@@ -611,15 +609,63 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
         } else {
             // Idle chip: colored by its status family (amber/red/teal/green/dim).
             Style::default().fg(filter_chip_color(filter.label()))
-        };
-        let chip_width = label.len() as u16;
-        // Store chip rect for mouse hit-testing.
-        app.last_rects
-            .filter_chips
-            .push((Rect::new(x_offset, area.y, chip_width, 1), *filter));
-        x_offset += chip_width + 2; // +2 for the separator
-        spans.push(Span::styled(label.clone(), style));
-        spans.push(Span::styled("  ", Style::default().fg(C_FAINT)));
+        }
+    };
+
+    // Distribute the chips evenly across the row instead of left-packing them.
+    // The pane accent occupies the first column, leaving `usable` columns for
+    // the chips and the gaps between/around them. We spread the leftover space
+    // as `n + 1` equal gaps (one before each chip + one trailing margin), so the
+    // chips fan out across the full width. The trailing gap is implicit (the
+    // background to the right of the last chip), so we only render the n leading
+    // gaps. Any remainder columns are handed out one-per-slot from the left.
+    let n = chip_data.len() as u16;
+    let sum_chips: u16 = chip_data.iter().map(|(_, l)| l.len() as u16).sum();
+    let usable = area.width.saturating_sub(1); // minus the pane-accent column
+    let n_slots = n + 1; // leading gaps (n) + one trailing margin
+
+    let mut x_offset = area.x + 1; // +1 for pane accent char
+    let mut spans: Vec<Span> = vec![pane_accent];
+
+    if usable >= sum_chips + n_slots {
+        // Enough room to spread evenly.
+        let total_gap = usable - sum_chips;
+        let base = total_gap / n_slots;
+        let mut rem = total_gap % n_slots;
+        for (filter, label) in &chip_data {
+            // Leading gap before this chip (distribute remainder from the left).
+            let mut gap = base;
+            if rem > 0 {
+                gap += 1;
+                rem -= 1;
+            }
+            spans.push(Span::styled(
+                " ".repeat(gap as usize),
+                Style::default().fg(C_FAINT),
+            ));
+            x_offset += gap;
+
+            let chip_width = label.len() as u16;
+            // Store chip rect (at its spread position) for mouse hit-testing.
+            app.last_rects
+                .filter_chips
+                .push((Rect::new(x_offset, area.y, chip_width, 1), *filter));
+            x_offset += chip_width;
+            spans.push(Span::styled(label.clone(), chip_style(filter)));
+        }
+    } else {
+        // Narrow row: fall back to the original left-packed layout so chips
+        // never overlap (they may run off the edge / be truncated by the
+        // Paragraph, which is preferable to overlapping hit-rects).
+        for (filter, label) in &chip_data {
+            let chip_width = label.len() as u16;
+            app.last_rects
+                .filter_chips
+                .push((Rect::new(x_offset, area.y, chip_width, 1), *filter));
+            x_offset += chip_width + 2; // +2 for the separator
+            spans.push(Span::styled(label.clone(), chip_style(filter)));
+            spans.push(Span::styled("  ", Style::default().fg(C_FAINT)));
+        }
     }
 
     frame.render_widget(
