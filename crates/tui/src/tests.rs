@@ -281,9 +281,16 @@ mod tests {
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
         assert!(
-            buffer_string(&terminal).contains("NO READING LISTS YET"),
+            content.contains("NO READING LISTS YET"),
             "empty state should show the first-run splash"
+        );
+        // The `:open` command no longer exists, so the splash must not
+        // advertise it (it was meaningless with zero lists anyway).
+        assert!(
+            !content.contains("open"),
+            "empty splash must not advertise the removed `: open` hint"
         );
     }
 

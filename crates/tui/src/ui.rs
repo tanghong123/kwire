@@ -204,9 +204,9 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     //   1 — blank
     //   1 — NO READING LISTS YET
     //   1 — blank
-    //   4 — command hints
-    // Total = 3 + 1 + 6 + 1 + 2 + 1 + 1 + 1 + 4 = 20 lines
-    let content_h: u16 = 20;
+    //   3 — command hints
+    // Total = 3 + 1 + 6 + 1 + 2 + 1 + 1 + 1 + 3 = 19 lines
+    let content_h: u16 = 19;
     let top_pad = outer[0].height.saturating_sub(content_h) / 2;
 
     let content_area = Layout::vertical([
@@ -226,7 +226,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
         Constraint::Length(1), // blank
         Constraint::Length(1), // NO READING LISTS YET
         Constraint::Length(1), // blank
-        Constraint::Length(4), // command hints
+        Constraint::Length(3), // command hints
     ])
     .split(content_area);
 
@@ -302,7 +302,6 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     let hint_rows: &[(&str, &str)] = &[
         (": import ~/list.md", "add a Markdown or JSON reading list"),
         (": add", "add a single book by hand"),
-        (": open <name>", "switch between lists"),
         ("?", "all keys & commands"),
     ];
 
@@ -330,7 +329,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     // Center the block: find total width of a hint row
     let hint_row_w =
         (cmd_col_w + 2 + hint_rows.iter().map(|(_, d)| d.len()).max().unwrap_or(0)) as u16;
-    let hint_area = centered_rect(hint_row_w.min(area.width), 4, parts[8]);
+    let hint_area = centered_rect(hint_row_w.min(area.width), 3, parts[8]);
     frame.render_widget(Paragraph::new(hint_lines), hint_area);
 
     // 6. Bordered command-input box at the bottom. The input scrolls to keep the
