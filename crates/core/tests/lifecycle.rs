@@ -517,6 +517,75 @@ async fn resume_on_launch_reattaches_and_finishes() {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. Self-heal: a stalled in-flight copy that is re-queued does NOT get stuck
+//     "queued" — it goes back to Pending AND stays in the download plan, so the
+//     engine's next tick re-dispatches it. (Guards the per-copy "stuck queued"
+//     regression: a SECOND copy of a book must keep flowing after a stall.)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn requeued_stalled_copy_returns_to_plan_not_stuck() {
+    let out = tempdir();
+    let db = out.join("state.db");
+    let store = Store::open(&db).unwrap();
+
+    let md5_a = "a".repeat(32);
+    let md5_b = "b".repeat(32);
+
+    // One book, TWO requested copies: A is mid-download (stalled), B is queued.
+    let mut book = BookRequest::new(BookInput {
+        title: "Two Copies".into(),
+        authors: vec!["Author".into()],
+        ..Default::default()
+    });
+    book.status = RequestStatus::Downloading;
+    let mut cand_a = requested_cand(&md5_a, "Two Copies", "Author", Format::Epub);
+    cand_a.job = Some(DownloadJob {
+        state: JobState::Downloading,
+        bytes_done: 10,
+        resume_offset: 10,
+        ..Default::default()
+    });
+    let cand_b = requested_cand(&md5_b, "Two Copies", "Author", Format::Pdf);
+    book.candidates = vec![cand_a, cand_b];
+    book.selected = Some(md5_a.clone());
+
+    let mut g = Group::new("Batch 1");
+    g.books = vec![book];
+    let list = DownloadList {
+        title: "Self-heal List".into(),
+        settings: ListSettings::default(),
+        groups: vec![g],
+    };
+    let search = SearchClient::replay(config(), fixtures_dir());
+    let mut orch = Orchestrator::new(store, &list, search, out.clone()).unwrap();
+
+    // Simulate a stall sweep re-queuing copy A.
+    let changed = orch.requeue_variation(&[0], 0, &md5_a).unwrap();
+    assert!(changed, "stalled copy A should be re-queued");
+
+    // A is back to Pending (not stuck Downloading), partial KEPT for resume.
+    let snap = orch.snapshot().unwrap();
+    let job_a = snap.groups[0].books[0].candidates[0].job.as_ref().unwrap();
+    assert_eq!(job_a.state, JobState::Pending, "A re-queued to Pending");
+    assert_eq!(job_a.resume_offset, 10, "A keeps its partial for resume");
+
+    // The plan still includes BOTH copies, so the engine's next tick re-dispatches
+    // A and B — neither is silently stuck "queued".
+    let planned = orch.plan_downloads().unwrap();
+    assert!(
+        planned.iter().any(|p| p.md5 == md5_a),
+        "re-queued copy A must stay in the download plan, got {:?}",
+        planned.iter().map(|p| &p.md5).collect::<Vec<_>>()
+    );
+    assert!(
+        planned.iter().any(|p| p.md5 == md5_b),
+        "still-queued copy B must stay in the download plan, got {:?}",
+        planned.iter().map(|p| &p.md5).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 4. Dedupe: two books with the same md5 produce two files from ONE download.
 // ---------------------------------------------------------------------------
 
