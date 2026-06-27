@@ -17,22 +17,18 @@ use libgen_core::queue::Progress;
 use libgen_core::search::{SearchEvent, SearchObserver};
 use libgen_engine::{BookStatePayload, EngineEmitter};
 
-/// Braille-dots spinner frames, advanced one step per progress render. The
-/// classic 10-frame rotating-dot cycle reads as a smooth spin in a single cell
-/// and animates even in the indeterminate "connecting / ?% / ? eta" phase, where
-/// it's the only sign of life. (A bar-shimmer set like `⣷⣯⣟⡿⢿⣻⣽⣾` also reads
-/// well, but the rotating dots are the most universally recognised.)
-const SPINNER: [&str; 10] = [
-    "\u{280B}", // ⠋
-    "\u{2819}", // ⠙
-    "\u{2839}", // ⠹
-    "\u{2838}", // ⠸
-    "\u{283C}", // ⠼
-    "\u{2834}", // ⠴
-    "\u{2826}", // ⠦
-    "\u{2827}", // ⠧
-    "\u{2807}", // ⠇
-    "\u{280F}", // ⠏
+/// Arc-sweep spinner frames, advanced one step per progress render. Six quadrant
+/// arcs trace a clockwise circle (upper-left → top → upper-right → lower-right →
+/// bottom → lower-left), reading as a smooth single-cell rotation. Animates even
+/// in the indeterminate "connecting / ?% / ? eta" phase, where it's the only sign
+/// of life.
+const SPINNER: [&str; 6] = [
+    "\u{25DC}", // ◜ upper-left arc
+    "\u{25E0}", // ◠ upper half
+    "\u{25DD}", // ◝ upper-right arc
+    "\u{25DE}", // ◞ lower-right arc
+    "\u{25E1}", // ◡ lower half
+    "\u{25DF}", // ◟ lower-left arc
 ];
 
 // ---------------------------------------------------------------------------
@@ -127,9 +123,20 @@ impl CliEmitter {
 
     /// Advance and return the next animated-spinner frame. Each call moves one
     /// step through [`SPINNER`] (wrapping), so successive progress renders show a
-    /// spinning braille dot.
+    /// spinning braille dot. This is the *time-driven* path: the download loop's
+    /// timer tick calls it ~10-12×/s so the dot spins smoothly regardless of how
+    /// often byte data arrives.
     fn next_spinner(&self) -> &'static str {
         let i = self.spinner_frame.fetch_add(1, Ordering::Relaxed) % SPINNER.len();
+        SPINNER[i]
+    }
+
+    /// Return the CURRENT animated-spinner frame WITHOUT advancing it. A
+    /// data-driven `Bytes` render uses this so it can refresh pct/speed/eta from
+    /// fresh data without stealing a spinner step from the timer (the single
+    /// source of spinner advancement) — keeping the spin smooth and monotonic.
+    fn current_spinner(&self) -> &'static str {
+        let i = self.spinner_frame.load(Ordering::Relaxed) % SPINNER.len();
         SPINNER[i]
     }
 
@@ -199,25 +206,17 @@ impl CliEmitter {
                         }
                     }
                 }
-                let bd = *bytes_done;
-                let tb = *total_bytes;
-                let spd = *speed_bps;
-                let eta = *eta_secs;
-                let spinner = self.next_spinner();
-                let line = format_progress_line(spinner, bd, tb, spd, eta, self.term_width());
-                if self.is_tty {
-                    print!("\r{line}");
-                    io::stdout().flush().ok();
-                } else {
-                    // Non-TTY: emit at 0 %, every 10 % increment, and at 100 %
-                    // to avoid flooding piped consumers with thousands of lines.
-                    if let Some(total) = tb {
-                        let pct = bd * 100 / total.max(1);
-                        if pct % 10 == 0 {
-                            println!("{line}");
-                        }
-                    }
-                }
+                // Data-driven render: refresh pct/speed/eta from the fresh bytes
+                // WITHOUT advancing the spinner — the download loop's timer tick is
+                // the sole source of spinner steps (see `tick_*`), so the dot spins
+                // at a steady ~10-12 fps independent of this (throttled) byte rate.
+                self.render_line(
+                    *bytes_done,
+                    *total_bytes,
+                    *speed_bps,
+                    *eta_secs,
+                    self.current_spinner(),
+                );
             }
             Progress::Done {
                 host,
@@ -261,6 +260,76 @@ impl CliEmitter {
             }
             _ => {}
         }
+    }
+
+    /// Draw one progress line with the supplied `spinner` frame: an in-place `\r`
+    /// redraw on a TTY, or a periodic newline (every 10 %) when piped. Shared by
+    /// the data-driven `Bytes` render (current frame, no advance) and the
+    /// time-driven timer ticks (next frame). Caller owns spinner advancement so a
+    /// step happens exactly once per visible frame.
+    fn render_line(
+        &self,
+        bytes_done: u64,
+        total_bytes: Option<u64>,
+        speed_bps: Option<u64>,
+        eta_secs: Option<u64>,
+        spinner: &str,
+    ) {
+        let line = format_progress_line(
+            spinner,
+            bytes_done,
+            total_bytes,
+            speed_bps,
+            eta_secs,
+            self.term_width(),
+        );
+        if self.is_tty {
+            print!("\r{line}");
+            io::stdout().flush().ok();
+        } else if let Some(total) = total_bytes {
+            // Non-TTY: emit at 0 %, every 10 % increment, and at 100 % to avoid
+            // flooding piped consumers with thousands of lines.
+            let pct = bytes_done * 100 / total.max(1);
+            if pct.is_multiple_of(10) {
+                println!("{line}");
+            }
+        }
+    }
+
+    /// Time-driven spinner step for an *active, known-progress* download: redraw
+    /// the live line from the loop's STORED latest bytes/total/speed/eta while
+    /// advancing the spinner ONE frame. TTY-only — piped output has no live line
+    /// to animate, and the timer must never inject extra lines into a pipe. Called
+    /// on each timer tick (~90 ms) so the dot spins smoothly even when byte events
+    /// are sparse (slow transfers, or the indeterminate no-Content-Length phase).
+    pub fn tick_spinner(
+        &self,
+        bytes_done: u64,
+        total_bytes: Option<u64>,
+        speed_bps: Option<u64>,
+        eta_secs: Option<u64>,
+    ) {
+        if !self.is_tty {
+            return;
+        }
+        self.render_line(
+            bytes_done,
+            total_bytes,
+            speed_bps,
+            eta_secs,
+            self.next_spinner(),
+        );
+    }
+
+    /// Time-driven spinner step for the *indeterminate connecting phase* — before
+    /// the first byte arrives (or just after a leg reset/failover) there is no
+    /// stored progress yet, so draw the empty-bar / dash-stats layout with the
+    /// spinner as the sole sign of life, advancing it one frame. TTY-only.
+    pub fn tick_spinner_indeterminate(&self) {
+        if !self.is_tty {
+            return;
+        }
+        self.render_line(0, None, None, None, self.next_spinner());
     }
 }
 

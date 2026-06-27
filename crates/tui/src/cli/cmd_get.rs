@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
@@ -47,6 +48,11 @@ pub struct GetArgs {
 
 // Public re-export so mod.rs can name it simply.
 pub use GetArgs as Args;
+
+/// The latest streamed byte snapshot — `(bytes_done, total_bytes, speed_bps,
+/// eta_secs)` — that the download loop's timer tick redraws (advancing the
+/// spinner) between sparse `Progress::Bytes` data events.
+type LiveBytes = (u64, Option<u64>, Option<u64>, Option<u64>);
 
 pub async fn run(args: GetArgs) -> Result<()> {
     let query = args.arg.join(" ");
@@ -255,8 +261,70 @@ async fn download_by_md5(
         tokio::spawn(async move { scheduler.run(vec![req], tx).await })
     };
 
-    while let Some(ev) = rx.recv().await {
-        emitter.print_progress(&ev);
+    // Decouple the spinner animation from the (throttled, often sparse) byte-event
+    // rate: a periodic TIMER drives the spinner at a steady ~11 fps while byte
+    // events only refresh the pct/speed/eta data. We `select!` between the next
+    // progress event and the timer tick.
+    //
+    //  • PROGRESS event → render the line from the fresh data (no spinner step) and
+    //    update the STORED latest so timer ticks can keep redrawing it. Chronicle
+    //    events (started/serving/retry/…) clear the bar and print on their own
+    //    clean line, exactly as before.
+    //  • TIMER tick → redraw from the STORED latest, advancing the spinner ONE
+    //    frame. `active` gates this so a tick never stomps a chronicle event line
+    //    or repaints a bar after the transfer has finished/errored.
+    //
+    // `latest = None` while `active` (connecting, or just after a leg reset) draws
+    // the indeterminate spinner-only line; a terminal event clears `active` so the
+    // loop's final repaint is the chronicle/"saved" lines, then the channel closes.
+    let mut ticker = tokio::time::interval(Duration::from_millis(90));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut active = false;
+    let mut latest: Option<LiveBytes> = None;
+    loop {
+        tokio::select! {
+            maybe_ev = rx.recv() => {
+                let Some(ev) = maybe_ev else { break };
+                emitter.print_progress(&ev);
+                match &ev {
+                    Progress::Bytes {
+                        bytes_done,
+                        total_bytes,
+                        speed_bps,
+                        eta_secs,
+                        ..
+                    } => {
+                        active = true;
+                        latest = Some((*bytes_done, *total_bytes, *speed_bps, *eta_secs));
+                    }
+                    // Terminal: stop ticking so no bar repaints over the chronicle /
+                    // "saved" lines; the channel close ends the loop right after.
+                    Progress::Done { .. } | Progress::Failed { .. } | Progress::Cancelled { .. } => {
+                        active = false;
+                        latest = None;
+                    }
+                    // Connecting or a leg (re)start: keep spinning, but with no
+                    // concrete bytes yet → the indeterminate spinner-only line.
+                    Progress::Resolved { .. }
+                    | Progress::Resuming { .. }
+                    | Progress::Retrying { .. }
+                    | Progress::FailingOver { .. } => {
+                        active = true;
+                        latest = None;
+                    }
+                    // Stalled / Note / LegEnded: neutral — keep spinning the last bar.
+                    _ => {}
+                }
+            }
+            _ = ticker.tick() => {
+                if active {
+                    match latest {
+                        Some((bd, tb, spd, eta)) => emitter.tick_spinner(bd, tb, spd, eta),
+                        None => emitter.tick_spinner_indeterminate(),
+                    }
+                }
+            }
+        }
     }
 
     // Restore the cursor BEFORE the saved/verified chronicle lines print (rather
