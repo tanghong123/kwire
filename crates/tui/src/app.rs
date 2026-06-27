@@ -205,29 +205,48 @@ impl SettingsDraft {
 }
 
 /// Commands supported in `:` command-line mode (used for Tab-completion).
-const COMMANDS: &[&str] = &[
-    "import",
-    "add",
-    "add-md5",
-    "open",
-    "requery",
-    "settings",
-    "pause-all",
-    "pause",
-    "start-all",
-    "resume-all",
-    "start",
-    "resume",
-    "delete",
-    "refresh-mirrors",
-    "cleanup",
-    "reorganize",
-    "download-series",
-    "series",
-    "mouse",
-    "quit",
-    "help",
-];
+// Advertised command-line commands (wildmenu + Help). Other commands
+// (`:requery`, `:delete`, `:reorganize`, `:cleanup`, `:pause`, `:start`,
+// `:download-series`, `:refresh-mirrors`, `:mouse`, …) still dispatch when
+// typed but are intentionally not advertised — they will move to hot keys.
+const COMMANDS: &[&str] = &["settings", "import", "add", "start-all", "pause-all"];
+
+/// Filesystem-path completion for `:import <partial-path>`.
+///
+/// Splits the partial into a directory portion and a file-name prefix, expands
+/// a leading `~`, lists the directory, and returns matching entries with the
+/// user's typed directory prefix preserved (so the buffer stays in `~/…` form).
+/// Directories get a trailing `/` so Tab can descend into them. Bad paths
+/// simply yield no candidates — never panics.
+fn complete_path(arg: &str) -> Vec<String> {
+    // Directory portion (incl. trailing `/`) vs. the file-name prefix.
+    let (dir_typed, prefix) = match arg.rfind('/') {
+        Some(i) => (&arg[..=i], &arg[i + 1..]),
+        None => ("", arg),
+    };
+    let read_dir = if dir_typed.is_empty() {
+        ".".to_string()
+    } else {
+        crate::expand_tilde(dir_typed)
+    };
+    let mut out: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&read_dir) {
+        for entry in entries.flatten() {
+            let name = match entry.file_name().into_string() {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            if !name.starts_with(prefix) {
+                continue;
+            }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let suffix = if is_dir { "/" } else { "" };
+            out.push(format!("{dir_typed}{name}{suffix}"));
+        }
+    }
+    out.sort();
+    out
+}
 
 // ---------------------------------------------------------------------------
 // Focus
@@ -3085,14 +3104,9 @@ impl AppState {
         if let Some(space_pos) = trimmed.find(' ') {
             // Buffer already has a command word; complete the argument.
             let cmd = &trimmed[..space_pos];
-            let arg = trimmed[space_pos + 1..].trim_start();
-            if cmd == "open" {
-                if let Some(vm) = &self.view {
-                    let lp = arg.to_lowercase();
-                    return std::iter::once(vm.title.clone())
-                        .filter(|name| name.to_lowercase().starts_with(&lp))
-                        .collect();
-                }
+            let arg = &trimmed[space_pos + 1..];
+            if cmd == "import" {
+                return complete_path(arg);
             }
             vec![]
         } else {

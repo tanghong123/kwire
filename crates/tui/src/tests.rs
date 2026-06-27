@@ -1415,7 +1415,7 @@ mod tests {
 
     #[test]
     fn tab_on_empty_buf_opens_wildmenu_with_all_commands() {
-        // ":" + Tab → wildmenu shows all 8 commands.
+        // ":" + Tab → wildmenu advertises exactly the five supported commands.
         let mut app = AppState::new();
         app.on_input(key(KeyCode::Char(':'))); // buf = ""
         app.on_input(key(KeyCode::Tab));
@@ -1423,25 +1423,20 @@ mod tests {
             !app.completion_candidates.is_empty(),
             "Tab on empty prefix should open wildmenu"
         );
-        assert!(
-            app.completion_candidates.len() >= 2,
-            "expected multiple candidates"
+        // The advertised set is exactly these five.
+        let mut got = app.completion_candidates.clone();
+        got.sort();
+        let mut want = vec!["add", "import", "pause-all", "settings", "start-all"];
+        want.sort();
+        assert_eq!(
+            got, want,
+            "wildmenu must advertise exactly the five commands"
         );
-        // All known commands should be present.
-        for cmd in &[
-            "import",
-            "add",
-            "open",
-            "requery",
-            "settings",
-            "pause-all",
-            "quit",
-            "help",
-        ] {
+        // Unadvertised / removed commands must NOT appear.
+        for cmd in &["open", "add-md5", "requery", "delete", "cleanup", "mouse"] {
             assert!(
-                app.completion_candidates.iter().any(|c| c == cmd),
-                "candidate '{}' missing",
-                cmd
+                !app.completion_candidates.iter().any(|c| c == cmd),
+                "candidate '{cmd}' must not be advertised"
             );
         }
     }
@@ -1572,13 +1567,68 @@ mod tests {
         app.set_view(fixture_vm());
         // Manually activate the wildmenu.
         app.command_buf = Some(String::new());
-        app.completion_candidates = vec!["import".into(), "add".into(), "open".into()];
+        app.completion_candidates = vec!["settings".into(), "import".into(), "add".into()];
         app.completion_index = 0;
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let content = buffer_string(&terminal);
+        assert!(
+            content.contains("settings"),
+            "wildmenu must show 'settings'"
+        );
         assert!(content.contains("import"), "wildmenu must show 'import'");
         assert!(content.contains("add"), "wildmenu must show 'add'");
-        assert!(content.contains("open"), "wildmenu must show 'open'");
+    }
+
+    /// `:import <partial-path>` + Tab completes filesystem entries: a directory
+    /// with several files yields candidates matching the typed prefix, with
+    /// directories carrying a trailing `/`.
+    #[test]
+    fn import_argument_completes_filesystem_paths() {
+        // Build a unique temp directory with known entries.
+        let base = std::env::temp_dir().join(format!(
+            "kwire-import-complete-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("alpha.md"), "x").unwrap();
+        std::fs::write(base.join("alpaca.json"), "x").unwrap();
+        std::fs::write(base.join("zebra.txt"), "x").unwrap();
+        std::fs::create_dir_all(base.join("alphadir")).unwrap();
+
+        // Buffer: "import <base>/al" → Tab should list the three "al*" entries.
+        let mut app = AppState::new();
+        app.command_buf = Some(format!("import {}/al", base.display()));
+        app.on_input(key(KeyCode::Tab));
+
+        let cands = app.completion_candidates.clone();
+        let names: Vec<String> = cands
+            .iter()
+            .map(|c| c.rsplit('/').next().unwrap_or(c).to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "alpha.md"),
+            "expected 'alpha.md' in candidates, got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "alpaca.json"),
+            "expected 'alpaca.json' in candidates, got {names:?}"
+        );
+        // The directory entry must carry a trailing slash.
+        assert!(
+            cands.iter().any(|c| c.ends_with("alphadir/")),
+            "expected 'alphadir/' (trailing slash) in candidates, got {cands:?}"
+        );
+        // The non-matching "zebra.txt" must be filtered out.
+        assert!(
+            !names.iter().any(|n| n == "zebra.txt"),
+            "non-matching 'zebra.txt' must be excluded, got {names:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     // -----------------------------------------------------------------------
@@ -3062,18 +3112,42 @@ mod tests {
     // #53 — :add-md5 / :refresh-mirrors / :cleanup / :delete command parsing
     // -----------------------------------------------------------------------
 
+    /// `:add` auto-detects its argument: a bare 32-hex-char token is treated as
+    /// an MD5 (routed to the add-by-MD5 path); anything else is a free-form
+    /// title/author add. The dispatch arm uses `cmd_get::is_md5` to decide.
     #[test]
-    fn command_add_md5_emits_command_intent() {
+    fn add_argument_md5_vs_text_routing() {
+        use crate::cli::cmd_get::is_md5;
+        // 32 hex chars → MD5 path.
+        assert!(is_md5("aabbccddeeff00112233445566778899"));
+        assert!(is_md5("1DF204C78842FFE549166FFcb984babc"));
+        // Free-form titles → text path.
+        assert!(!is_md5("Treasure Island"));
+        assert!(!is_md5("Some Title, Some Author"));
+        // 31 chars is not an MD5.
+        assert!(!is_md5("aabbccddeeff0011223344556677889"));
+    }
+
+    /// `:open` was removed entirely — it must not be advertised in the wildmenu.
+    #[test]
+    fn open_command_is_not_advertised() {
         let mut app = AppState::new();
         app.on_input(key(KeyCode::Char(':')));
-        let cmd = "add-md5 aabbccddeeff00112233445566778899";
-        for c in cmd.chars() {
-            app.on_input(key(KeyCode::Char(c)));
+        app.on_input(key(KeyCode::Tab));
+        assert!(
+            !app.completion_candidates.iter().any(|c| c == "open"),
+            "':open' must not appear in completions"
+        );
+        // Typing `:open` as a prefix yields no command-name completion either.
+        let mut app2 = AppState::new();
+        app2.on_input(key(KeyCode::Char(':')));
+        for c in "open".chars() {
+            app2.on_input(key(KeyCode::Char(c)));
         }
-        let intent = app.on_input(key(KeyCode::Enter));
-        assert_eq!(
-            intent,
-            Intent::Command("add-md5 aabbccddeeff00112233445566778899".into())
+        app2.on_input(key(KeyCode::Tab));
+        assert!(
+            app2.completion_candidates.is_empty(),
+            "':open' prefix must produce no completion candidates"
         );
     }
 
@@ -3111,27 +3185,30 @@ mod tests {
     }
 
     #[test]
-    fn new_commands_appear_in_tab_completion() {
-        // All new commands must be discoverable via Tab-completion.
+    fn unadvertised_commands_absent_from_tab_completion() {
+        // These commands still dispatch when typed, but are intentionally NOT
+        // advertised in the wildmenu (they will move to hot keys).
         let mut app = AppState::new();
         app.on_input(key(KeyCode::Char(':'))); // enter command mode, buf = ""
-        app.on_input(key(KeyCode::Tab)); // open wildmenu with all commands
+        app.on_input(key(KeyCode::Tab)); // open wildmenu with the advertised set
 
-        let new_cmds = &[
+        let unadvertised = &[
             "pause",
             "start",
             "resume",
-            "start-all",
             "resume-all",
             "delete",
             "add-md5",
             "refresh-mirrors",
             "cleanup",
+            "reorganize",
+            "requery",
+            "mouse",
         ];
-        for &cmd in new_cmds {
+        for &cmd in unadvertised {
             assert!(
-                app.completion_candidates.iter().any(|c| c == cmd),
-                "command '{cmd}' must appear in Tab-completion candidates"
+                !app.completion_candidates.iter().any(|c| c == cmd),
+                "command '{cmd}' must not be advertised in Tab-completion"
             );
         }
     }
@@ -3810,16 +3887,16 @@ mod tests {
     // #53 — :download-series command
     // -----------------------------------------------------------------------
 
-    /// Both the command and its alias must be Tab-completable (dispatch glue).
+    /// `:download-series` / `:series` still dispatch but are unadvertised.
     #[test]
-    fn download_series_in_tab_completion() {
+    fn download_series_not_advertised() {
         let mut app = AppState::new();
         app.on_input(key(KeyCode::Char(':')));
         app.on_input(key(KeyCode::Tab));
         for cmd in ["download-series", "series"] {
             assert!(
-                app.completion_candidates.iter().any(|c| c == cmd),
-                "command '{cmd}' must appear in Tab-completion candidates"
+                !app.completion_candidates.iter().any(|c| c == cmd),
+                "command '{cmd}' must not be advertised in Tab-completion"
             );
         }
     }

@@ -515,13 +515,11 @@ async fn handle_command_async(
         "add" => {
             if arg.is_empty() {
                 tracing::warn!("add: no title given");
+            } else if crate::cli::cmd_get::is_md5(arg) {
+                // Auto-detect: a bare 32-hex-char argument is an MD5 → add by MD5.
+                add_md5_cmd(app, handles, arg).await;
             } else {
                 add_manual(app, handles, arg).await;
-            }
-        }
-        "open" => {
-            if !arg.is_empty() {
-                open_list(app, handles, arg).await;
             }
         }
         "requery" => {
@@ -554,13 +552,6 @@ async fn handle_command_async(
         }
         "reorganize" => {
             reorganize_cmd(app, handles).await;
-        }
-        "add-md5" => {
-            if arg.is_empty() {
-                app.status_msg = Some("Usage: add-md5 <md5>".into());
-            } else {
-                add_md5_cmd(app, handles, arg).await;
-            }
         }
         // #53 — add the selected book's series siblings to the current list
         "download-series" | "series" => {

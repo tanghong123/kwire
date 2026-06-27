@@ -2537,19 +2537,11 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
         ),
         HelpRow::Blank,
         HelpRow::Head("COMMAND LINE  (press :)"),
-        HelpRow::Key(":import <file>", "add a list"),
-        HelpRow::Key(":add", "add one book"),
-        HelpRow::Key(":open <list>", "switch list"),
-        HelpRow::Key(":requery", "re-search & re-verify"),
         HelpRow::Key(":settings", "open settings"),
-        HelpRow::Key(":pause-all", "pause every download"),
+        HelpRow::Key(":import <file>", "add a list"),
+        HelpRow::Key(":add <title|md5>", "add one book"),
         HelpRow::Key(":start-all", "resume downloads"),
-        HelpRow::Key(":delete", "remove active list"),
-        HelpRow::Key(":add-md5 <md5>", "inject MD5 for selection"),
-        HelpRow::Key(":download-series", "add series siblings"),
-        HelpRow::Key(":refresh-mirrors", "refresh mirror status"),
-        HelpRow::Key(":cleanup", "remove .part files"),
-        HelpRow::Key(":reorganize", "move files to layout"),
+        HelpRow::Key(":pause-all", "pause every download"),
     ];
 
     frame.render_widget(
