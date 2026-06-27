@@ -403,7 +403,7 @@ mod tests {
         // are far wider than the old fixed 10-cell stub, and the filled fraction
         // tracks the percentage.
         let filled = line.chars().filter(|&c| c == '\u{25B0}').count();
-        let empty = line.chars().filter(|&c| c == '\u{2591}').count();
+        let empty = line.chars().filter(|&c| c == '\u{25B1}').count();
         let cells = filled + empty;
         assert!(
             cells > 30,
@@ -425,7 +425,7 @@ mod tests {
         let wide = format_progress_line(500, Some(1000), Some(1024), Some(10), 120);
         let cells = |s: &str| {
             s.chars()
-                .filter(|&c| c == '\u{25B0}' || c == '\u{2591}')
+                .filter(|&c| c == '\u{25B0}' || c == '\u{25B1}')
                 .count()
         };
         assert!(
@@ -448,7 +448,7 @@ mod tests {
         // Must NOT show the old indeterminate placeholders.
         assert!(!line.contains("?%"), "should not show ?%: {line:?}");
         assert!(
-            !line.contains('\u{2591}') && !line.contains('?'),
+            !line.contains('\u{25B1}') && !line.contains('?'),
             "should not show a ?-bar: {line:?}"
         );
     }
@@ -459,7 +459,7 @@ mod tests {
         assert!(line.contains("100%"), "100%: {line:?}");
         // bar must be all filled — no empty cells at 100 %.
         assert_eq!(
-            line.chars().filter(|&c| c == '\u{2591}').count(),
+            line.chars().filter(|&c| c == '\u{25B1}').count(),
             0,
             "no empty cells at 100%: {line:?}"
         );
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn bar_empty() {
         let bar = format_bar(0, 10);
-        assert!(bar.chars().all(|c| c == '\u{2591}'), "all empty: {bar:?}");
+        assert!(bar.chars().all(|c| c == '\u{25B1}'), "all empty: {bar:?}");
         assert_eq!(bar.chars().count(), 10);
     }
 
@@ -513,7 +513,7 @@ mod tests {
         // 50% of 10 = 5 filled
         let bar = format_bar(50, 10);
         assert_eq!(bar.chars().filter(|&c| c == '\u{25B0}').count(), 5);
-        assert_eq!(bar.chars().filter(|&c| c == '\u{2591}').count(), 5);
+        assert_eq!(bar.chars().filter(|&c| c == '\u{25B1}').count(), 5);
     }
 
     // ── emitter receives events ──────────────────────────────────────────────
