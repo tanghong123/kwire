@@ -676,6 +676,89 @@ mod tests {
         assert!(app.modal.is_none(), "detail modal closes after download");
     }
 
+    /// #6: the detail breadcrumb subtitle (`{group} · seq NN ● note`) must
+    /// ellipsize with `…` at a narrow width instead of HARD-CLIPPING the tail.
+    #[test]
+    fn detail_breadcrumb_ellipsizes_long_group_at_width_80() {
+        use crate::app::DetailSubFocus;
+        use libgen_core::model::{
+            BookInput, BookRequest, Candidate, DownloadList, Format, Group, RequestStatus,
+        };
+
+        // A group name long enough that the breadcrumb overflows the modal width.
+        let long_group = "Lift-Off Aerospace Engineering Handbook Master Collection Omnibus";
+        let mut g = Group::new(long_group);
+        let mut req = BookRequest::new(BookInput {
+            title: "Apollo Guidance Computer".into(),
+            authors: vec!["MIT".into()],
+            ..Default::default()
+        });
+        req.status = RequestStatus::Matched;
+        req.candidates = vec![Candidate {
+            md5: "a".repeat(32),
+            title: "Apollo Guidance Computer".into(),
+            authors: vec!["MIT".into()],
+            year: Some(2010),
+            publisher: Some("MIT Press".into()),
+            language: Some("English".into()),
+            pages: Some(300),
+            extension: Some(Format::Epub),
+            size_bytes: Some(1024 * 1024),
+            source_host: Some("libgen.li".into()),
+            cover_url: None,
+            score: 1.0,
+            job: None,
+        }];
+        g.books.push(req);
+        let list = DownloadList {
+            title: "Test List".into(),
+            settings: libgen_core::model::ListSettings::default(),
+            groups: vec![g],
+        };
+        let vm = build_with_id("test".into(), &list);
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(vm);
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+
+        // Extract the breadcrumb ROW (the one starting with the group name) so we
+        // assert on it specifically — "active" also appears in the VARIATIONS
+        // header, which is a different line.
+        let backend = terminal.backend();
+        let buf = backend.buffer();
+        let width = buf.area.width as usize;
+        let cells: Vec<String> = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        let rows: Vec<String> = cells.chunks(width).map(|r| r.concat()).collect();
+        let crumb = rows
+            .iter()
+            .find(|r| r.contains("Lift-Off"))
+            .expect("breadcrumb row with the group name must be rendered");
+
+        // The breadcrumb was clipped → an ellipsis is shown on THIS line…
+        assert!(
+            crumb.contains('\u{2026}'),
+            "breadcrumb must show … when clipped: {crumb:?}"
+        );
+        // …and the clipped tail (the back-fill note `… ● N req · N done · N active`)
+        // is NOT rendered through — i.e. truncated, not hard-clipped past the edge.
+        assert!(
+            !crumb.contains("active"),
+            "breadcrumb tail must be truncated with …, not hard-clipped: {crumb:?}"
+        );
+    }
+
     /// Detail modal: ↓ at bottom of Variations crosses to History.
     #[test]
     fn detail_down_at_variations_bottom_crosses_to_history() {

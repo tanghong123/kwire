@@ -58,8 +58,9 @@ pub async fn run(args: GetArgs) -> Result<()> {
 
     // Detect whether arg is a bare MD5 (32 lowercase hex chars).
     if is_md5(&query) {
-        // Bare md5: no candidate metadata → no known size, no format label.
-        return download_by_md5(&query, site, &args.out, &cfg, None, None).await;
+        // Bare md5: no candidate metadata → no known size, no format label, and
+        // the saved file falls back to `<md5>.bin`.
+        return download_by_md5(&query, site, &args.out, &cfg, None, None, None).await;
     }
 
     // Title search path.
@@ -115,7 +116,16 @@ pub async fn run(args: GetArgs) -> Result<()> {
                 let best = &outcome.ranked[0];
                 println!("{}", super::cmd_search::format_candidate(1, best));
                 let label = best.extension.as_ref().map(|f| f.ext().to_uppercase());
-                download_by_md5(&best.md5, site, &args.out, &cfg, best.size_bytes, label).await
+                download_by_md5(
+                    &best.md5,
+                    site,
+                    &args.out,
+                    &cfg,
+                    best.size_bytes,
+                    label,
+                    Some(best),
+                )
+                .await
             }
             // No confident match → degrade to search: show ranked candidates.
             RequestStatus::NeedsSelection => {
@@ -158,7 +168,16 @@ pub async fn run(args: GetArgs) -> Result<()> {
             let best = &candidates[0];
             println!("{}", super::cmd_search::format_candidate(1, best));
             let label = best.extension.as_ref().map(|f| f.ext().to_uppercase());
-            download_by_md5(&best.md5, site, &args.out, &cfg, best.size_bytes, label).await
+            download_by_md5(
+                &best.md5,
+                site,
+                &args.out,
+                &cfg,
+                best.size_bytes,
+                label,
+                Some(best),
+            )
+            .await
         } else {
             // Middling → degrade to a pick-one list, download nothing.
             eprintln!("no confident match — pick one and run:  kwire get <md5>");
@@ -180,6 +199,7 @@ async fn download_by_md5(
     cfg: &Config,
     expected_size: Option<u64>,
     format_label: Option<String>,
+    candidate: Option<&libgen_core::model::Candidate>,
 ) -> Result<()> {
     // The chronicle lines ("EPUB started on …") carry the format label when the
     // caller knows it (title-search path); the bare-md5 path omits it.
@@ -191,7 +211,13 @@ async fn download_by_md5(
     let scheduler = Arc::new(build_scheduler(site, cfg).context("building download scheduler")?);
 
     let out_dir = PathBuf::from(out);
-    let dest = out_dir.join(format!("{md5}.bin"));
+    // Build a PROPER, human-readable filename via the SHARED core naming builder
+    // (the same one the desktop/TUI use) when we have candidate metadata: e.g.
+    // `Walter Isaacson - Steve Jobs - 3a7029.epub` (Author - Title - <md5:6>.ext,
+    // with the real format extension). The bare-md5 path has no metadata, so it
+    // falls back to `<md5>.bin` (the page check then sniffs the format).
+    let filename = cli_filename(md5, candidate);
+    let dest = out_dir.join(filename);
     // Keep a copy of the destination so we can inspect the saved file (page
     // check) after the download completes — `dest` itself is moved into the req.
     let dest_clone = dest.clone();
@@ -227,14 +253,19 @@ async fn download_by_md5(
     // md5 (a mismatch deletes the .part and permanent-errors). Now apply the SAME
     // post-download page check the desktop/TUI do — warn when a file has
     // suspiciously few pages (a sample, the wrong file, or a corrupt download).
-    // The saved file is `<md5>.bin`, so page_count sniffs the format by magic
-    // bytes. Print to stderr so stdout stays clean.
-    match libgen_core::pagecount::page_count(&dest_clone) {
-        Some(pages) if pages < libgen_core::pagecount::LOW_PAGE_THRESHOLD => {
-            eprintln!("⚠ md5 verified · {pages} pages — suspiciously few (sample/wrong/corrupt?)");
+    // Format-aware: PDF reports "N pages", EPUB "N sections" (reflowable — the
+    // count is spine sections), and the low flag is per-format (EPUB by readable
+    // text length, not section count). Print to stderr so stdout stays clean.
+    match libgen_core::pagecount::page_stats(&dest_clone) {
+        Some(s) if s.low => {
+            eprintln!(
+                "⚠ md5 verified · {} {} — suspiciously short (sample/wrong/corrupt?)",
+                s.count,
+                s.unit.label()
+            );
         }
-        Some(pages) => {
-            eprintln!("✓ md5 verified · {pages} pages");
+        Some(s) => {
+            eprintln!("✓ md5 verified · {} {}", s.count, s.unit.label());
         }
         None => {
             eprintln!("✓ md5 verified");
@@ -247,6 +278,33 @@ async fn download_by_md5(
 // ---------------------------------------------------------------------------
 // Helpers — these are the ones the spec asks us to unit-test
 // ---------------------------------------------------------------------------
+
+/// Build the saved filename for a `kwire get` download.
+///
+/// With candidate metadata → the SHARED core naming builder ([`naming::filename`])
+/// under a CLI template `{authors} - {title}.{ext}`, which also appends the
+/// ` - <md5:6>` uniqueness tag and the REAL format extension → e.g.
+/// `Walter Isaacson - Steve Jobs - 3a7029.epub`. Without metadata (bare-md5
+/// path) → `<md5>.bin` so the post-download page check can sniff the format.
+fn cli_filename(md5: &str, candidate: Option<&libgen_core::model::Candidate>) -> String {
+    use libgen_core::naming::{filename, NameContext};
+    match candidate {
+        Some(c) => {
+            let settings = ListSettings {
+                naming_template: "{authors} - {title}.{ext}".to_string(),
+                ..Default::default()
+            };
+            let ctx = NameContext {
+                seq: 1,
+                candidate: c,
+                title: &c.title,
+                authors: &c.authors,
+            };
+            filename(&settings, &ctx)
+        }
+        None => format!("{md5}.bin"),
+    }
+}
 
 /// True when `s` is exactly 32 lowercase-or-upper hex chars (a bare MD5).
 pub fn is_md5(s: &str) -> bool {
@@ -281,6 +339,38 @@ pub fn parse_title_author(query: &str, explicit_author: Option<&str>) -> (String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- saved filename ---
+
+    #[test]
+    fn cli_filename_builds_proper_name_with_format_ext() {
+        use libgen_core::model::{Candidate, Format};
+        let md5 = "3a70291df204c78842ffe549166ffcb9";
+        let c = Candidate {
+            md5: md5.to_string(),
+            title: "Steve Jobs".to_string(),
+            authors: vec!["Walter Isaacson".to_string()],
+            year: None,
+            publisher: None,
+            language: None,
+            pages: None,
+            extension: Some(Format::Epub),
+            size_bytes: None,
+            source_host: None,
+            cover_url: None,
+            score: 1.0,
+            job: None,
+        };
+        let name = cli_filename(md5, Some(&c));
+        // Author - Title - <md5:6>.ext, with the REAL format extension (not .bin).
+        assert_eq!(name, "Walter Isaacson - Steve Jobs - 3a7029.epub");
+    }
+
+    #[test]
+    fn cli_filename_falls_back_to_bin_without_metadata() {
+        let md5 = "3a70291df204c78842ffe549166ffcb9";
+        assert_eq!(cli_filename(md5, None), format!("{md5}.bin"));
+    }
 
     // --- MD5 detection ---
 
@@ -356,7 +446,7 @@ mod tests {
         // Validate that the progress-line formatter (via the emitter module)
         // produces the expected format for a Bytes event.
         use super::super::emitter::format_progress_line;
-        let line = format_progress_line(500, Some(1000), Some(512 * 1024), Some(10));
+        let line = format_progress_line(500, Some(1000), Some(512 * 1024), Some(10), 80);
         assert!(line.contains("50%"), "pct: {line:?}");
         assert!(line.contains("512 KB/s"), "speed: {line:?}");
         assert!(line.contains("10s"), "eta: {line:?}");

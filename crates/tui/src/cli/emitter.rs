@@ -74,6 +74,26 @@ impl CliEmitter {
         }
     }
 
+    /// Wipe the in-place `\r` progress bar from the current line so a chronicle
+    /// event prints on a CLEAN line instead of jamming onto the bar's leftover
+    /// cells. No-op when stdout isn't a TTY (piped output has no live bar). The
+    /// next `Bytes` render redraws the bar with its own `\r` on a fresh line.
+    fn clear_progress_line(&self) {
+        if self.is_tty {
+            // \r → column 0, then \x1b[K → erase to end of line.
+            print!("\r\u{1b}[K");
+            io::stdout().flush().ok();
+        }
+    }
+
+    /// Current terminal width in columns (for the full-width progress bar),
+    /// falling back to 80 when it can't be queried (e.g. piped output).
+    fn term_width(&self) -> usize {
+        crossterm::terminal::size()
+            .map(|(w, _)| w as usize)
+            .unwrap_or(80)
+    }
+
     /// Print one download `Progress` event.  Called both by `impl
     /// EngineEmitter::emit_event` (when driven through the engine) and
     /// directly from `cmd_get` which drives the scheduler without the full
@@ -87,6 +107,7 @@ impl CliEmitter {
                 if let Ok(mut start) = self.start_host.lock() {
                     if start.is_none() {
                         *start = Some(host.clone());
+                        self.clear_progress_line();
                         eprintln!("{prefix}started on {host}");
                     }
                 }
@@ -105,6 +126,7 @@ impl CliEmitter {
                     if let Some(edge) = current_edge(md5) {
                         let started = self.start_host.lock().ok().and_then(|s| s.clone());
                         if started.as_deref() != Some(edge.as_str()) {
+                            self.clear_progress_line();
                             eprintln!("{prefix}serving from {edge}");
                             self.serving_emitted.store(true, Ordering::Relaxed);
                         }
@@ -114,7 +136,7 @@ impl CliEmitter {
                 let tb = *total_bytes;
                 let spd = *speed_bps;
                 let eta = *eta_secs;
-                let line = format_progress_line(bd, tb, spd, eta);
+                let line = format_progress_line(bd, tb, spd, eta, self.term_width());
                 if self.is_tty {
                     print!("\r{line}");
                     io::stdout().flush().ok();
@@ -135,19 +157,16 @@ impl CliEmitter {
                 bytes_written,
                 ..
             } => {
-                if self.is_tty {
-                    // End the in-place progress line with a real newline.
-                    println!();
-                }
+                // Wipe the in-place progress bar so the completion lines print on
+                // their own clean line (not jammed onto the bar's last frame).
+                self.clear_progress_line();
                 // Chronicle (stderr) + the saved file location (stdout, pipe-friendly).
                 let size = super::cmd_search::human_size(*bytes_written);
                 eprintln!("{prefix}completed on {host} ({size})");
                 println!("saved  {}", path.display());
             }
             Progress::Failed { error, .. } => {
-                if self.is_tty {
-                    println!();
-                }
+                self.clear_progress_line();
                 eprintln!("failed  {error}");
             }
             Progress::Retrying {
@@ -156,16 +175,19 @@ impl CliEmitter {
                 error,
                 ..
             } => {
+                self.clear_progress_line();
                 eprintln!("retry #{attempt}  {host}  {error}");
             }
             Progress::FailingOver {
                 from_host, error, ..
             } => {
+                self.clear_progress_line();
                 eprintln!("failover  from {from_host}  {error}");
             }
             // Lead-up activity: a resume from an existing `.part` — one concise line
             // so the user sees the transfer is continuing, not starting fresh.
             Progress::Resuming { host, offset, .. } => {
+                self.clear_progress_line();
                 let off = super::cmd_search::human_size(*offset);
                 eprintln!("{prefix}resuming on {host} (from {off})");
             }
@@ -241,6 +263,7 @@ impl EngineEmitter for CliEmitter {
         match ev {
             Event::QueryStage { title, stage, .. } => {
                 // E.g. "querying: The Hobbit"  or "matched: The Hobbit"
+                self.clear_progress_line();
                 eprintln!("{stage}: {title}");
             }
             Event::StatusChanged { title, status, .. } => {
@@ -252,11 +275,13 @@ impl EngineEmitter for CliEmitter {
                     RequestStatus::Failed { .. } => "failed",
                     _ => return,
                 };
+                self.clear_progress_line();
                 eprintln!("{label}: {title}");
             }
             Event::Planned {
                 title, destination, ..
             } => {
+                self.clear_progress_line();
                 eprintln!("planned  {}  →  {}", title, destination.display());
             }
             Event::Download(p) => {
@@ -282,11 +307,16 @@ impl EngineEmitter for CliEmitter {
 /// Content-Length — an *indeterminate* readout is rendered instead of a bogus
 /// `?%`/`??????????`/`eta ?`: the bytes downloaded so far plus speed, e.g.
 /// `⬇ 5.2 MB · 310 KB/s`.
+///
+/// `term_width` is the terminal width in columns; the progress bar grows to fill
+/// whatever space is left after the `⬇ pct speed eta ` prefix, so it spans the
+/// full width instead of a fixed short stub.
 pub fn format_progress_line(
     bytes_done: u64,
     total_bytes: Option<u64>,
     speed_bps: Option<u64>,
     eta_secs: Option<u64>,
+    term_width: usize,
 ) -> String {
     let speed_str = speed_bps
         .map(format_speed)
@@ -295,10 +325,16 @@ pub fn format_progress_line(
     match total_bytes.filter(|&t| t > 0) {
         Some(total) => {
             let pct = (bytes_done * 100 / total).min(100);
-            let bar = format_bar(pct, 10);
             let eta_str = eta_secs.map(format_eta).unwrap_or_else(|| "?".to_string());
-            // ⬇ = U+2B07 DOWNWARDS BLACK ARROW
-            format!("\u{2B07} {pct:3}%  {speed_str}  eta {eta_str}  {bar}")
+            // ⬇ = U+2B07 DOWNWARDS BLACK ARROW. Render the prefix first, measure its
+            // display width, then let the bar fill the rest of the terminal width.
+            let prefix = format!("\u{2B07} {pct:3}%  {speed_str}  eta {eta_str}  ");
+            let prefix_w = crate::textfit::display_width(&prefix);
+            // Leave one trailing column so the bar never wraps to the next row;
+            // floor at a small width so a very narrow terminal still shows a bar.
+            let bar_w = term_width.saturating_sub(prefix_w + 1).clamp(4, 200);
+            let bar = format_bar(pct, bar_w);
+            format!("{prefix}{bar}")
         }
         None => {
             // Indeterminate: show progress as bytes-so-far + speed.
@@ -357,29 +393,54 @@ mod tests {
     fn progress_line_known_total() {
         // 470 / 1000 = 47 %; speed 1.5 MB/s → rounds to "1.5 MB/s"; eta 64 s = 1m04s
         // 1_500_000 / 1_048_576 ≈ 1.43 → "{:.1}" = "1.4 MB/s"
-        let line = format_progress_line(470, Some(1000), Some(1_500_000), Some(64));
+        let line = format_progress_line(470, Some(1000), Some(1_500_000), Some(64), 80);
         assert!(line.contains("47%"), "pct: {line:?}");
         assert!(line.contains("1.4 MB/s"), "speed: {line:?}");
         assert!(line.contains("1m04s"), "eta: {line:?}");
         assert!(line.contains('\u{2B07}'), "⬇ missing: {line:?}");
-        // bar: 47 * 10 / 100 = 4 filled, 6 empty
-        assert_eq!(
-            line.chars().filter(|&c| c == '\u{25B0}').count(),
-            4,
-            "filled cells: {line:?}"
+        // The bar fills the remaining terminal width: filled + empty cells together
+        // are far wider than the old fixed 10-cell stub, and the filled fraction
+        // tracks the percentage.
+        let filled = line.chars().filter(|&c| c == '\u{25B0}').count();
+        let empty = line.chars().filter(|&c| c == '\u{2591}').count();
+        let cells = filled + empty;
+        assert!(
+            cells > 30,
+            "bar should span the width (got {cells} cells): {line:?}"
         );
-        assert_eq!(
-            line.chars().filter(|&c| c == '\u{2591}').count(),
-            6,
-            "empty cells: {line:?}"
+        assert_eq!(filled, 47 * cells / 100, "filled tracks pct: {line:?}");
+        // The whole line fits within the terminal width.
+        assert!(
+            crate::textfit::display_width(&line) <= 80,
+            "line width {} > 80: {line:?}",
+            crate::textfit::display_width(&line)
         );
+    }
+
+    #[test]
+    fn progress_line_fills_terminal_width() {
+        // A wider terminal → a wider bar (the bar is responsive, not fixed).
+        let narrow = format_progress_line(500, Some(1000), Some(1024), Some(10), 40);
+        let wide = format_progress_line(500, Some(1000), Some(1024), Some(10), 120);
+        let cells = |s: &str| {
+            s.chars()
+                .filter(|&c| c == '\u{25B0}' || c == '\u{2591}')
+                .count()
+        };
+        assert!(
+            cells(&wide) > cells(&narrow),
+            "wider terminal → wider bar: {} vs {}",
+            cells(&wide),
+            cells(&narrow)
+        );
+        assert!(crate::textfit::display_width(&wide) <= 120);
     }
 
     #[test]
     fn progress_line_unknown_total() {
         // No Content-Length: render bytes-so-far + speed, NOT a bogus %/bar/eta.
         // 5_452_595 bytes ≈ 5.2 MB; 317_440 B/s ≈ 310 KB/s.
-        let line = format_progress_line(5_452_595, None, Some(317_440), None);
+        let line = format_progress_line(5_452_595, None, Some(317_440), None, 80);
         assert!(line.contains("5.2 MB"), "bytes: {line:?}");
         assert!(line.contains("310 KB/s"), "speed: {line:?}");
         assert!(line.contains('\u{2B07}'), "⬇ missing: {line:?}");
@@ -393,13 +454,17 @@ mod tests {
 
     #[test]
     fn progress_line_complete() {
-        let line = format_progress_line(1000, Some(1000), Some(2 * 1024 * 1024), Some(0));
+        let line = format_progress_line(1000, Some(1000), Some(2 * 1024 * 1024), Some(0), 80);
         assert!(line.contains("100%"), "100%: {line:?}");
-        // bar must be all filled
+        // bar must be all filled — no empty cells at 100 %.
         assert_eq!(
-            line.chars().filter(|&c| c == '\u{25B0}').count(),
-            10,
-            "all filled: {line:?}"
+            line.chars().filter(|&c| c == '\u{2591}').count(),
+            0,
+            "no empty cells at 100%: {line:?}"
+        );
+        assert!(
+            line.chars().filter(|&c| c == '\u{25B0}').count() > 10,
+            "full-width filled bar: {line:?}"
         );
     }
 

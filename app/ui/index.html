@@ -2252,8 +2252,12 @@ function varLine(bk, v) {
   var dp = v.state === "downloading" ? ' data-vprog="' + esc(bk.id) + ":" + esc(v.md5) + '"' : '';
   // Too-few-pages guard: a verified file with a suspiciously low page count is likely
   // a sample/wrong/corrupt copy — flag it (the file is kept; this is a warning).
+  // Label the count by format: EPUB is reflowable (spine SECTIONS), PDF has real
+  // pages. So a low epub reads "Only N sections", a low pdf "Only N pages".
+  var lpUnit = /epub/i.test(v.fmt || '') ? 'sections' : 'pages';
+  var lpShort = /epub/i.test(v.fmt || '') ? 's' : 'p';
   var warn = v.low_pages
-    ? '<span class="vwarn" title="' + esc("Only " + v.counted_pages + " pages — " + t("vm.low_pages_title")) + '">⚠ ' + v.counted_pages + 'p</span>'
+    ? '<span class="vwarn" title="' + esc("Only " + v.counted_pages + " " + lpUnit + " — " + t("vm.low_pages_title")) + '">⚠ ' + v.counted_pages + lpShort + '</span>'
     : '';
   return '<div class="vline"' + dp + '>' +
     '<span class="vt" style="color:' + fmtColor(v.fmt) + '">' + esc(v.fmt) + '</span>' +
@@ -2590,8 +2594,11 @@ function renderVariationManager(bk) {
       : '';
     // Too-few-pages guard: a verified file with a suspiciously low page count is
     // likely a sample/wrong/corrupt copy — flag it (the file is kept; a warning).
+    // Format-aware label: EPUB → "sections" (reflowable spine count), else "pages".
+    var lpUnit = /epub/i.test(v.fmt || '') ? 'sections' : 'pages';
+    var lpShort = /epub/i.test(v.fmt || '') ? 's' : 'p';
     var warn = v.low_pages
-      ? ' <span class="vwarn" title="' + esc("Only " + v.counted_pages + " pages — " + t("vm.low_pages_title")) + '">⚠ ' + v.counted_pages + 'p</span>'
+      ? ' <span class="vwarn" title="' + esc("Only " + v.counted_pages + " " + lpUnit + " — " + t("vm.low_pages_title")) + '">⚠ ' + v.counted_pages + lpShort + '</span>'
       : '';
     html += '<div class="cand' + (v.state === "done" ? " best" : "") + (recBadge ? " rec" : "") + '">' +
       '<div class="ct">' + fmtLabel(v.fmt) + ' · ' + v.size + ' MB ' + label + recBadge + warn + '</div>' +

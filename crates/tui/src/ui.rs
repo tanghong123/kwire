@@ -2267,6 +2267,9 @@ fn render_detail_modal(
         "{} \u{00b7} seq {:02}   \u{25cf} {}",
         fb.group_name, book.seq, backfill_note
     );
+    // #6: ellipsize (display-width aware) so a long group name degrades to `…`
+    // instead of hard-clipping mid-word at narrow widths. No marquee (decided).
+    let subtitle = crate::textfit::ellipsize(&subtitle, split[1].width as usize);
     frame.render_widget(
         Paragraph::new(Span::styled(subtitle, style_dim())),
         split[1],

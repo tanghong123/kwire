@@ -527,6 +527,16 @@ pub struct DownloadJob {
     /// with NO schema bump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_count: Option<u32>,
+    /// The format-aware "suspiciously short" FLAG for the finished file, computed
+    /// at download-finish from [`crate::pagecount::page_stats`]: PDF → page count
+    /// below threshold; EPUB → readable TEXT length below threshold (NOT the spine
+    /// section count, so a good single-section epub is never flagged). Stored
+    /// separately from `page_count` because the epub flag can't be re-derived from
+    /// the displayed section count. `None` = unknown/unchecked (older persisted
+    /// jobs, an unsupported/unparseable file); `serde(default)` keeps existing rows
+    /// readable with NO schema bump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_low: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     /// Final on-disk path, once written.

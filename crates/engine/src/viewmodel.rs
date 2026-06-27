@@ -288,9 +288,18 @@ fn view_variation(c: &Candidate) -> ViewVariation {
         language: c.language.clone().unwrap_or_default(),
         pages: c.pages,
         counted_pages: job.and_then(|j| j.page_count),
+        // Prefer the format-aware flag persisted at finish (`page_low`): PDF page
+        // count vs threshold, EPUB readable-text vs threshold. Fall back to the old
+        // page-count heuristic only for legacy rows that predate `page_low` (no
+        // re-count available at snapshot time) so PDFs keep flagging.
         low_pages: job
-            .and_then(|j| j.page_count)
-            .map(|n| n < libgen_core::pagecount::LOW_PAGE_THRESHOLD)
+            .map(|j| {
+                j.page_low.unwrap_or_else(|| {
+                    j.page_count
+                        .map(|n| n < libgen_core::pagecount::LOW_PAGE_THRESHOLD)
+                        .unwrap_or(false)
+                })
+            })
             .unwrap_or(false),
         host: job.and_then(|j| j.host.clone()),
         state: variation_state(job).to_string(),

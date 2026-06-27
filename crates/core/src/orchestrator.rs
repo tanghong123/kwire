@@ -294,10 +294,10 @@ fn should_flag_review(request_title: &str, copy: &Candidate) -> bool {
 /// we couldn't count. OR-ed into the review trigger alongside `should_flag_review`
 /// so a too-short copy drops the book back to review just like a title mismatch.
 fn copy_too_short(copy: &Candidate) -> bool {
-    matches!(
-        copy.job.as_ref().and_then(|j| j.page_count),
-        Some(n) if n > 0 && n < crate::pagecount::LOW_PAGE_THRESHOLD
-    )
+    // Uses the format-aware flag stored at download-finish (`page_low`): PDF page
+    // count below threshold, or EPUB readable-text below threshold — NOT the
+    // displayed section count. A `None` (unchecked/unparseable) is never short.
+    copy.job.as_ref().and_then(|j| j.page_low).unwrap_or(false)
 }
 
 /// Drop any candidate the user has DISMISSED (removed) for this book, so a
@@ -3252,22 +3252,26 @@ impl Orchestrator {
                     // whole `apply_progress` runs under a brief per-list lock).
                     // A `None` count (unsupported/unparseable) simply leaves the
                     // flag unset. Below threshold → log it (observability).
-                    job.page_count = crate::pagecount::page_count(&p.destination);
-                    if let Some(pages) = job.page_count {
-                        if pages < crate::pagecount::LOW_PAGE_THRESHOLD {
+                    let stats = crate::pagecount::page_stats(&p.destination);
+                    job.page_count = stats.as_ref().map(|s| s.count);
+                    job.page_low = stats.as_ref().map(|s| s.low);
+                    if let Some(s) = &stats {
+                        let unit = s.unit.label();
+                        if s.low {
                             tracing::warn!(
                                 md5 = %md5,
                                 path = %p.destination.display(),
-                                pages,
-                                threshold = crate::pagecount::LOW_PAGE_THRESHOLD,
-                                "downloaded file has suspiciously few pages — may be a sample/wrong/corrupt file"
+                                count = s.count,
+                                unit,
+                                "downloaded file looks suspiciously short — may be a sample/wrong/corrupt file"
                             );
                         } else {
                             tracing::info!(
                                 md5 = %md5,
                                 path = %p.destination.display(),
-                                pages,
-                                "counted pages of finished download"
+                                count = s.count,
+                                unit,
+                                "counted pages/sections of finished download"
                             );
                         }
                     }
