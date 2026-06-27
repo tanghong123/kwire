@@ -4179,36 +4179,66 @@ fn marquee_title_author(
     avail: usize,
 ) -> Line<'static> {
     // Flatten to (char, style) so we can window across the title/author boundary.
+    let chars = title_author_chars(title, author, title_style, author_style);
+    // Window by display columns. The combined string's char indices align 1:1
+    // with `chars`, so the range maps straight back onto the styled vec.
+    let combined: String = chars.iter().map(|(c, _)| *c).collect();
+    let range = crate::textfit::marquee_char_range(&combined, avail, offset);
+    Line::from(coalesce_styled(&chars[range]))
+}
+
+/// Flatten a title + author into one styled `(char, Style)` run: the title in
+/// `title_style`, then a two-space gap and the author in `author_style` (the gap
+/// and author are omitted when the author is empty). The single source of truth
+/// for the COMBINED title·author cell — both the focused marquee
+/// ([`marquee_title_author`]) and the unfocused ellipsized cell window this run,
+/// so a row reads identically whether it is selected or not (#4 / task 6).
+fn title_author_chars(
+    title: &str,
+    author: &str,
+    title_style: Style,
+    author_style: Style,
+) -> Vec<(char, Style)> {
     let mut chars: Vec<(char, Style)> = title.chars().map(|c| (c, title_style)).collect();
     if !author.is_empty() {
         chars.push((' ', author_style));
         chars.push((' ', author_style));
         chars.extend(author.chars().map(|c| (c, author_style)));
     }
-    // Window by display columns. The combined string's char indices align 1:1
-    // with `chars`, so the range maps straight back onto the styled vec.
-    let combined: String = chars.iter().map(|(c, _)| *c).collect();
-    let range = crate::textfit::marquee_char_range(&combined, avail, offset);
-    let windowed: &[(char, Style)] = &chars[range];
-    // Coalesce consecutive same-style chars into spans.
-    let mut spans: Vec<Span> = Vec::new();
-    let mut cur = String::new();
-    let mut cur_style: Option<Style> = None;
-    for (c, st) in windowed {
-        if cur_style == Some(*st) {
-            cur.push(*c);
-        } else {
-            if let Some(s) = cur_style {
-                spans.push(Span::styled(std::mem::take(&mut cur), s));
-            }
-            cur.push(*c);
-            cur_style = Some(*st);
+    chars
+}
+
+/// Ellipsize a styled `(char, Style)` run to `width` display columns from the
+/// head, appending a `…` (in `ellipsis_style`) when it overflows — the styled
+/// analogue of [`crate::textfit::ellipsize`], preserving per-char styles so the
+/// two-tone title·author cell never drops its author colour.
+fn ellipsize_styled(
+    chars: &[(char, Style)],
+    width: usize,
+    ellipsis_style: Style,
+) -> Vec<Span<'static>> {
+    let cw = |c: char| crate::textfit::display_width(&c.to_string());
+    let total: usize = chars.iter().map(|(c, _)| cw(*c)).sum();
+    if total <= width {
+        return coalesce_styled(chars);
+    }
+    if width == 0 {
+        return Vec::new();
+    }
+    let budget = width - 1; // reserve one column for the … glyph
+    let mut taken = 0usize;
+    let mut head: Vec<(char, Style)> = Vec::new();
+    for &(c, st) in chars {
+        let w = cw(c);
+        if taken + w > budget {
+            break;
         }
+        head.push((c, st));
+        taken += w;
     }
-    if let Some(s) = cur_style {
-        spans.push(Span::styled(cur, s));
-    }
-    Line::from(spans)
+    let mut spans = coalesce_styled(&head);
+    spans.push(Span::styled("\u{2026}".to_string(), ellipsis_style));
+    spans
 }
 
 // ---------------------------------------------------------------------------
@@ -4522,7 +4552,7 @@ fn render_flex_row(
 /// independently so the author is never dropped. `Packed`: one comma line over
 /// the whole width — focused marquees, unfocused ellipsizes.
 #[allow(clippy::too_many_arguments)]
-fn book_row_line(
+pub(crate) fn book_row_line(
     layout: &BookRowLayout,
     title: &str,
     author: &str,
@@ -4542,33 +4572,36 @@ fn book_row_line(
             col_gap,
             rest_widths,
         } => {
+            // Title and author are ONE combined left cell (#4 / task 6): the
+            // author is attached right after the title (two-space gap), never a
+            // separate fixed column. The focused row marquees the combined cell;
+            // every other row ellipsizes it — so the author sits in the same
+            // place relative to its title on every row instead of floating in a
+            // detached column.
             let ta_w = *title_w + BOOK_SEP + *author_w;
-            if focused {
+            let cell = if focused {
                 // One marquee window across the title→author boundary.
-                let line = marquee_title_author(
+                marquee_title_author(
                     title,
                     author,
                     title_style,
                     author_style,
                     marquee_offset,
                     ta_w,
-                );
-                let used = line_disp_width(&line);
-                spans.extend(line.spans);
-                if used < ta_w {
-                    spans.push(Span::styled(" ".repeat(ta_w - used), base_style));
-                }
+                )
+                .spans
             } else {
-                // Each region ellipsizes on its own — author keeps its slice.
-                spans.push(Span::styled(
-                    pad_cell(&crate::textfit::ellipsize(title, *title_w), *title_w),
-                    title_style,
-                ));
-                spans.push(Span::styled(" ".repeat(BOOK_SEP), base_style));
-                spans.push(Span::styled(
-                    pad_cell(&crate::textfit::ellipsize(author, *author_w), *author_w),
-                    author_style,
-                ));
+                // Ellipsize the combined cell, keeping the author's colour.
+                let chars = title_author_chars(title, author, title_style, author_style);
+                ellipsize_styled(&chars, ta_w, author_style)
+            };
+            let used: usize = cell
+                .iter()
+                .map(|s| crate::textfit::display_width(&s.content))
+                .sum();
+            spans.extend(cell);
+            if used < ta_w {
+                spans.push(Span::styled(" ".repeat(ta_w - used), base_style));
             }
             // Flexible mid gutter, then the right-anchored metadata columns
             // (aligned fixed widths, joined by the width-scaled inter-column gap).

@@ -6236,6 +6236,98 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Task 6 — title+author rendered as ONE combined left cell
+    // -----------------------------------------------------------------------
+
+    fn line_to_string(line: &ratatui::text::Line) -> String {
+        line.spans.iter().map(|s| s.content.to_string()).collect()
+    }
+
+    /// Non-selected rows attach the author directly to the title (two-space gap)
+    /// as one combined cell — NOT a separate far-right author column — and the
+    /// metadata stays right-anchored (the whole line sums to content_w).
+    #[test]
+    fn book_row_combined_cell_attaches_author_unfocused() {
+        use ratatui::style::{Color, Style};
+        let content_w = 100usize;
+        let layout = ui::book_row_layout(content_w, &[3, 4, 6]);
+        let author_style = Style::default().fg(Color::Rgb(1, 2, 3));
+        let rest = vec![
+            ("epub".to_string(), Style::default()),
+            ("2 MB".to_string(), Style::default()),
+            ("\u{2713} done".to_string(), Style::default()),
+        ];
+        let line = ui::book_row_line(
+            &layout,
+            "Short",
+            "Jane Author",
+            Style::default(),
+            author_style,
+            &rest,
+            false, // not focused → ellipsize the combined cell
+            0,
+            Style::default(),
+        );
+        let s = line_to_string(&line);
+        // Author is attached right after the title with a two-space gap.
+        assert!(
+            s.starts_with("Short  Jane Author"),
+            "combined cell must attach author to title: {s:?}"
+        );
+        // The author span keeps its own colour (two-tone, not flattened).
+        assert!(
+            line.spans
+                .iter()
+                .any(|sp| sp.content.contains("Jane") && sp.style.fg == Some(Color::Rgb(1, 2, 3))),
+            "author keeps its colour in the combined cell"
+        );
+        // Metadata is flush-right: the full row sums to content_w.
+        assert_eq!(
+            crate::textfit::display_width(&s),
+            content_w,
+            "row must span content_w (metadata right-anchored)"
+        );
+        assert!(
+            s.trim_end().ends_with("done"),
+            "status anchored at the right"
+        );
+    }
+
+    /// A combined cell wider than its column ellipsizes with `…` (unfocused).
+    #[test]
+    fn book_row_combined_cell_ellipsizes_when_long() {
+        use ratatui::style::Style;
+        let layout = ui::book_row_layout(100, &[3, 4, 6]);
+        let rest = vec![
+            ("epub".to_string(), Style::default()),
+            ("2 MB".to_string(), Style::default()),
+            ("done".to_string(), Style::default()),
+        ];
+        let long_title = "A Very Long Title That Will Certainly Overflow The Combined Cell";
+        let line = ui::book_row_line(
+            &layout,
+            long_title,
+            "And A Long Author Name Too",
+            Style::default(),
+            Style::default(),
+            &rest,
+            false,
+            0,
+            Style::default(),
+        );
+        let s = line_to_string(&line);
+        assert!(
+            s.contains('\u{2026}'),
+            "overflowing combined cell must ellipsize: {s:?}"
+        );
+        assert_eq!(
+            crate::textfit::display_width(&s),
+            100,
+            "row still spans content_w"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // #15 — List strip responsive width formula
     // -----------------------------------------------------------------------
 
