@@ -712,19 +712,24 @@ impl AppState {
 
     /// Advance the marquee by one tick for the Detail modal's Title·Author field.
     ///
-    /// `text_char_len` — Unicode character count of the full "Title · Author" string.
-    /// `col_w`         — Approximate terminal-cell width available for the column.
+    /// `text_disp_w` — terminal **display width** (columns) of the full
+    ///                 "Title · Author" string, via `textfit::display_width`.
+    ///                 Must be display width, NOT `chars().count()`, so CJK /
+    ///                 emoji titles trigger and scroll correctly (#10/#14).
+    /// `col_w`       — terminal-cell width available for the column.
     ///
+    /// `marquee_offset` is therefore measured in display columns; pair it with
+    /// `textfit::marquee_window` / `marquee_char_range` when slicing.
     /// Must be called once per render tick while the Detail modal is open.
-    pub fn advance_marquee(&mut self, text_char_len: usize, col_w: usize) {
-        if text_char_len <= col_w {
+    pub fn advance_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        if text_disp_w <= col_w {
             // Text fits: keep the offset at zero.
             self.marquee_offset = 0;
             self.marquee_forward = true;
             self.marquee_pause = 0;
             return;
         }
-        let max_offset = text_char_len.saturating_sub(col_w);
+        let max_offset = text_disp_w.saturating_sub(col_w);
         if self.marquee_pause > 0 {
             self.marquee_pause -= 1;
             return;

@@ -1738,11 +1738,13 @@ fn render_detail_modal(
     // year · pages readout, then advance the offset once per render tick.
     let head_title = fb.book.title.clone();
     let head_author = fb.book.author.clone();
-    let head_full_len = head_title.chars().count()
+    // #10/#14: measure in terminal DISPLAY WIDTH (CJK=2, combining=0), not
+    // `chars().count()`, so wide-glyph titles trigger + scroll correctly.
+    let head_full_len = crate::textfit::display_width(&head_title)
         + if head_author.is_empty() {
             0
         } else {
-            2 + head_author.chars().count()
+            2 + crate::textfit::display_width(&head_author)
         };
     let head_avail = (padded.width as usize).saturating_sub(14).max(10);
     app.advance_marquee(head_full_len, head_avail);
@@ -3055,8 +3057,11 @@ fn render_wildmenu(frame: &mut Frame, app: &AppState, area: Rect) {
 }
 
 /// Build a "Title  Author" header line, windowed by a ping-pong marquee
-/// `offset` (chars skipped from the left) when it overflows `avail` columns.
-/// The title and author keep their own styles across the scroll.
+/// `offset` (DISPLAY COLUMNS scrolled from the left) when it overflows `avail`
+/// columns.  The title and author keep their own styles across the scroll.
+///
+/// #10/#14: windowing is display-width aware via `textfit::marquee_char_range`
+/// — the single marquee windowing core — so CJK/emoji are never split mid-glyph.
 fn marquee_title_author(
     title: &str,
     author: &str,
@@ -3072,13 +3077,11 @@ fn marquee_title_author(
         chars.push((' ', author_style));
         chars.extend(author.chars().map(|c| (c, author_style)));
     }
-    let windowed: &[(char, Style)] = if chars.len() <= avail {
-        &chars
-    } else {
-        let start = offset.min(chars.len());
-        let end = (start + avail).min(chars.len());
-        &chars[start..end]
-    };
+    // Window by display columns. The combined string's char indices align 1:1
+    // with `chars`, so the range maps straight back onto the styled vec.
+    let combined: String = chars.iter().map(|(c, _)| *c).collect();
+    let range = crate::textfit::marquee_char_range(&combined, avail, offset);
+    let windowed: &[(char, Style)] = &chars[range];
     // Coalesce consecutive same-style chars into spans.
     let mut spans: Vec<Span> = Vec::new();
     let mut cur = String::new();

@@ -5592,4 +5592,48 @@ mod tests {
             "download-series closes the detail modal"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Marquee (#10/#14): display-width-driven, not char-count
+    // -----------------------------------------------------------------------
+
+    /// A CJK title whose `chars().count()` fits the column but whose DISPLAY
+    /// WIDTH overflows it must scroll. Under the old char-count math it would
+    /// have stayed put; with display width it advances.
+    #[test]
+    fn marquee_scrolls_cjk_by_display_width() {
+        let title = "量子力学入門"; // 6 scalar chars, 12 display columns
+        let col_w = 10usize;
+        assert!(
+            title.chars().count() <= col_w,
+            "precondition: char count fits the column (old math would not scroll)"
+        );
+        let disp_w = crate::textfit::display_width(title);
+        assert!(disp_w > col_w, "precondition: display width overflows");
+
+        let mut app = AppState::new();
+        // A few ticks should drive the offset forward off zero.
+        for _ in 0..3 {
+            app.advance_marquee(disp_w, col_w);
+        }
+        assert!(
+            app.marquee_offset > 0,
+            "CJK title overflowing in display width must scroll (offset advanced)"
+        );
+        assert!(
+            app.marquee_offset <= disp_w - col_w,
+            "offset never exceeds max scroll (display-width based)"
+        );
+    }
+
+    /// Text that fits in display width keeps the marquee parked at offset 0.
+    #[test]
+    fn marquee_parks_when_fits() {
+        let mut app = AppState::new();
+        app.marquee_offset = 5; // pretend it was scrolled
+        let title = "短い"; // 2 chars / 4 columns
+        let disp_w = crate::textfit::display_width(title);
+        app.advance_marquee(disp_w, 20);
+        assert_eq!(app.marquee_offset, 0, "fitting text resets/parks at 0");
+    }
 }

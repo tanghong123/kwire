@@ -30,6 +30,11 @@ directories = "5"
 # Single-instance advisory file lock (flock(2)) on the data dir.
 libc = "0.2"
 
+# Terminal display-width-aware text fitting (CJK/emoji/combining). Already
+# present transitively via ratatui; pinned here as a direct dependency for the
+# shared `textfit` clipping helpers.
+unicode-width = "0.2"
+
 # Error handling / logging
 anyhow = { workspace = true }
 tracing = { workspace = true }

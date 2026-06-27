@@ -20,6 +20,7 @@ mod guard;
 mod intent;
 #[cfg(test)]
 mod tests;
+mod textfit;
 mod theme;
 mod ui;
 
