@@ -1368,6 +1368,10 @@ var LISTS = [
   buildList("scifi", LIST3[0], LIST3[1], LIST3[2], 2)
 ];
 var CURRENT = "jeremy";   // selected list id, or "__all__" for the aggregate view
+// Last ViewLibrary applied from the backend. Retained so per-list settings can be
+// re-hydrated on a CLIENT-SIDE list switch (not just on a backend refresh), since
+// LISTS (via vmToList) drops each list's settings/format_pref. null in demo mode.
+var LIB_VM = null;
 // Ranked preferred formats (maps to ListSettings.format_pref). Default = the
 // set both an iPad (Apple Books) and a Kindle (Send-to-Kindle) accept.
 var FORMATS = ["epub", "pdf"];
@@ -2924,7 +2928,9 @@ document.addEventListener("click", function (e) {
   if (t.dataset.reveal != null) { if (t.dataset.reveal) onReveal(t.dataset.reveal); return; }
   if (t.dataset.top) { var bt = bookById(t.dataset.top); if (bt) bt.priority = !bt.priority; render(); return; }
   if (t.dataset.list) {
-    CURRENT = t.dataset.list; FILTER = "all"; FMT_FILTER = ""; SELECTED = null; render();
+    CURRENT = t.dataset.list; FILTER = "all"; FMT_FILTER = ""; SELECTED = null;
+    hydrateSettingsFromActiveList(); // refresh cached per-list settings for the newly-selected list
+    render();
     if (hasTauri()) invoke("select_list", { listId: CURRENT }).catch(function () {});
     return;
   }
@@ -2971,6 +2977,7 @@ document.addEventListener("click", function (e) {
 
 /* ---- settings sheet ---- */
 function openSettings() {
+  hydrateSettingsFromActiveList(); // ensure the sheet reflects the active list even with no switch since last refresh
   renderSettings();
   document.getElementById("settingsScrim").classList.add("open");
   document.getElementById("settingsSheet").classList.add("open");
@@ -3447,12 +3454,42 @@ function vmToList(vm) {
   };
 }
 
+/* Hydrate the cached per-list settings (SETTINGS + the preferred-format order
+   FORMATS) from the CURRENTLY-selected list's ViewModel in the last-applied
+   ViewLibrary (LIB_VM). Call this on every list switch and when the Settings
+   sheet opens so the cache reflects the active list, not a stale one.
+   For the "__all__" aggregate (or a stale id) there is no single active list, so
+   we fall back to the FIRST list — matching the backend apply-path's behavior.
+   No-op in demo mode (LIB_VM null) where the demo LISTS carry no settings. */
+function hydrateSettingsFromActiveList() {
+  if (!LIB_VM || !LIB_VM.lists || !LIB_VM.lists.length) return;
+  var active = LISTS.filter(function (l) { return l.id === CURRENT; })[0] || LISTS[0];
+  var vmActive = LIB_VM.lists.filter(function (v) {
+    return (v.id || "loaded") === (active && active.id);
+  })[0] || LIB_VM.lists[0]; // __all__ / stale id → first list (matches apply-path)
+  if (!vmActive) return;
+  if (vmActive.format_pref && vmActive.format_pref.length) FORMATS = vmActive.format_pref.slice();
+  if (vmActive.settings) {
+    var s = vmActive.settings;
+    SETTINGS = {
+      language: s.language || "",
+      naming_template: s.naming_template,
+      auto_threshold: s.auto_threshold,
+      near_threshold: s.near_threshold,
+      seq_per_group: !!s.seq_per_group,
+      keep_top: s.keep_top
+    };
+    if (s.format_pref && s.format_pref.length) FORMATS = s.format_pref.slice();
+  }
+}
+
 /* Apply a backend ViewLibrary `{ lists, current }`: rebuild the multi-list
    sidebar from the engine's persisted lists, preserving each list's
    group-collapse state and the current selection/filter. The preferred-format
    order is taken FROM the active list (authoritative). */
 function applyLibrary(libVm) {
   if (!libVm || !libVm.lists) return libVm;
+  LIB_VM = libVm; // retain for client-side re-hydration (see hydrateSettingsFromActiveList)
   // Remember collapse state per list+group across rebuilds.
   var collapsed = {}, liveProg = {};
   LISTS.forEach(function (l) {
@@ -3496,21 +3533,7 @@ function applyLibrary(libVm) {
       ? libVm.current : (ids[0] || "__all__");
   }
   // Preferred-format order + per-list settings from the active (or first) list.
-  var active = LISTS.filter(function (l) { return l.id === CURRENT; })[0] || LISTS[0];
-  var vmActive = libVm.lists.filter(function (v) { return (v.id || "loaded") === (active && active.id); })[0];
-  if (vmActive && vmActive.format_pref && vmActive.format_pref.length) FORMATS = vmActive.format_pref.slice();
-  if (vmActive && vmActive.settings) {
-    var s = vmActive.settings;
-    SETTINGS = {
-      language: s.language || "",
-      naming_template: s.naming_template,
-      auto_threshold: s.auto_threshold,
-      near_threshold: s.near_threshold,
-      seq_per_group: !!s.seq_per_group,
-      keep_top: s.keep_top
-    };
-    if (s.format_pref && s.format_pref.length) FORMATS = s.format_pref.slice();
-  }
+  hydrateSettingsFromActiveList();
   // Global app config + read-only search mirrors.
   if (libVm.config) {
     var c = libVm.config;
@@ -3907,7 +3930,7 @@ window.__APP__ = {
   counts: counts, globalCounts: globalCounts,
   lists: function () { return LISTS; },
   getCurrent: function () { return CURRENT; },
-  setCurrent: function (id) { CURRENT = id; FILTER = "all"; FMT_FILTER = ""; SELECTED = null; render(); },
+  setCurrent: function (id) { CURRENT = id; FILTER = "all"; FMT_FILTER = ""; SELECTED = null; hydrateSettingsFromActiveList(); render(); },
   getFilter: function () { return FILTER; }, getSelected: function () { return SELECTED; },
   getSettings: function () { return SETTINGS; }, getAppCfg: function () { return APPCFG; },
   getFormats: function () { return FORMATS; },
