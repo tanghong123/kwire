@@ -5101,6 +5101,176 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // #1 / #11 — Flex variation/picker row: Mode A/B + marquee-vs-ellipsize
+    // -----------------------------------------------------------------------
+
+    /// Build a `ViewVariation` with the given state/fmt/progress, defaults elsewhere.
+    fn mk_var(title: &str, fmt: &str, state: &str, progress: u32, md5: &str) -> ViewVariation {
+        ViewVariation {
+            md5: md5.into(),
+            title: title.into(),
+            author: "Author Name".into(),
+            fmt: fmt.into(),
+            size: 1,
+            size_bytes: None,
+            year: Some(2020),
+            publisher: String::new(),
+            language: String::new(),
+            pages: Some(120),
+            counted_pages: None,
+            low_pages: false,
+            host: Some("libgen.li".into()),
+            state: state.into(),
+            progress,
+            downloaded_bytes: None,
+            total_bytes: None,
+            speed_bps: None,
+            eta_secs: Some(12),
+            output_path: None,
+            score: 0.90,
+            cover_url: None,
+            last_error: None,
+        }
+    }
+
+    /// Mode A: when the rest fields fit within the 40% cap, the row is `Fixed`
+    /// and Title·Author gets ALL the remaining content width.
+    #[test]
+    fn flex_row_layout_mode_a_gives_slack_to_title() {
+        // row_w=100, rest=[4,7,4,8] → rest_w = 23 + 3 gaps = 26; cap = 40.
+        // 26 ≤ 40 → Mode A. content_w = 98; title_w = 98 - SEP(2) - 26 = 70.
+        let layout = ui::flex_row_layout(100, &[4, 7, 4, 8]);
+        assert_eq!(layout, ui::FlexLayout::Fixed { title_w: 70 });
+    }
+
+    /// Mode B: when the rest fields would exceed the 40% cap, everything packs.
+    #[test]
+    fn flex_row_layout_mode_b_when_rest_exceeds_cap() {
+        // row_w=50, rest=[4,7,4,8] → rest_w = 26; cap = 20. 26 > 20 → Mode B.
+        let layout = ui::flex_row_layout(50, &[4, 7, 4, 8]);
+        assert_eq!(layout, ui::FlexLayout::Packed { width: 48 });
+    }
+
+    /// Mode B also triggers when rest fits the cap but no sane title width is left.
+    #[test]
+    fn flex_row_layout_mode_b_when_title_starved() {
+        // row_w=20, rest=[1,1,1,1] → rest_w = 4+3 = 7; cap = 8 (7 ≤ 8).
+        // content_w = 18; needs 7 + SEP(2) + MIN_TITLE(8) = 17 ≤ 18 → still Mode A.
+        assert!(matches!(
+            ui::flex_row_layout(20, &[1, 1, 1, 1]),
+            ui::FlexLayout::Fixed { .. }
+        ));
+        // row_w=18: content_w = 16 < 17 → Mode B even though rest fits the cap.
+        assert_eq!(
+            ui::flex_row_layout(18, &[1, 1, 1, 1]),
+            ui::FlexLayout::Packed { width: 16 }
+        );
+    }
+
+    /// The focused row marquees (offset-scrolled, no ellipsis); unfocused rows
+    /// ellipsize with a trailing `…`.
+    #[test]
+    fn flex_text_focused_marquees_unfocused_ellipsizes() {
+        let s = "abcdefghij"; // 10 cols, window 5
+                              // Focused at offset 0 → window head, no ellipsis.
+        assert_eq!(ui::flex_text(s, 5, 0, true), "abcde");
+        // Focused scrolled by 2 → shifted window, still no ellipsis.
+        assert_eq!(ui::flex_text(s, 5, 2, true), "cdefg");
+        // Unfocused → ellipsized (offset ignored), trailing `…`.
+        let un = ui::flex_text(s, 5, 2, false);
+        assert_eq!(un, "abcd\u{2026}");
+        assert!(un.ends_with('\u{2026}'), "unfocused must ellipsize");
+    }
+
+    /// The picker border title is ellipsized so the " — choose a copy " suffix is
+    /// never clipped, and short titles pass through whole (#11).
+    #[test]
+    fn picker_border_title_ellipsizes_long_title() {
+        let long = "A Very Long Book Title That Cannot Possibly Fit The Narrow Border";
+        let out = ui::picker_border_title(long, 40);
+        assert!(
+            out.contains('\u{2026}'),
+            "long title must be ellipsized: {out:?}"
+        );
+        assert!(
+            out.ends_with(" \u{2014} choose a copy "),
+            "suffix must survive intact: {out:?}"
+        );
+        assert!(
+            crate::textfit::display_width(&out) <= 40,
+            "border title must fit the area width: {out:?}"
+        );
+        // A short title is left whole.
+        let short = ui::picker_border_title("Short", 60);
+        assert_eq!(short, " Short \u{2014} choose a copy ");
+    }
+
+    /// Render smoke test for #1: the detail variations table drops the Src column
+    /// and MD5, labels available copies "avail", and shows a progress bar only on
+    /// the (separate) line below a downloading copy.
+    #[test]
+    fn detail_variations_no_src_no_md5_avail_and_progress_line() {
+        use crate::app::DetailSubFocus;
+        let backend = TestBackend::new(132, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        app.flat[0].book.versions = vec![
+            mk_var("Available Copy", "epub", "available", 0, &"a".repeat(32)),
+            mk_var("Done Copy", "pdf", "done", 100, &"ccccccc".to_string()),
+            mk_var(
+                "Downloading Copy",
+                "mobi",
+                "downloading",
+                50,
+                &"b".repeat(32),
+            ),
+        ];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+
+        assert!(!buf.contains("Src"), "Src column header must be gone");
+        assert!(buf.contains("avail"), "available state must read 'avail'");
+        assert!(
+            !buf.contains("ccc"),
+            "MD5 must not appear in the detail variations table"
+        );
+        assert!(
+            buf.contains('\u{25b0}'),
+            "a progress bar (▰) must render for the downloading copy"
+        );
+    }
+
+    /// Render smoke test for #11: the picker renders candidate rows + the border
+    /// "choose a copy" title without panicking, via the flex-row path.
+    #[test]
+    fn picker_renders_candidates_and_border_title() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Picker {
+            book_flat_index: 0,
+            selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(buf.contains("choose a copy"), "border title must render");
+        assert!(
+            buf.contains("Ambiguous Book"),
+            "candidate title must render"
+        );
+        assert!(buf.contains("MATCH"), "rest-field header must render");
+    }
+
+    // -----------------------------------------------------------------------
     // #71 — Wildmenu layout: WILDMENU row is above the command-line (not over rule)
     // -----------------------------------------------------------------------
 

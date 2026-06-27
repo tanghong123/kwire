@@ -624,6 +624,19 @@ pub struct AppState {
     /// The variation-selection index that was active when the marquee was last
     /// reset.  A change here resets offset + direction.
     pub marquee_detail_sel: usize,
+
+    // ── Marquee scroll state (focused VARIATION / picker ROW · #1/#11) ─────────
+    /// Column offset for the FOCUSED variation/picker row's flexing title·author
+    /// (Mode A) or whole packed line (Mode B). Independent of the book-header
+    /// marquee above so the two animate without fighting. Only ONE row (the
+    /// focused one) ever animates; unfocused rows ellipsize.
+    pub var_marquee_offset: usize,
+    pub var_marquee_forward: bool,
+    pub var_marquee_pause: u8,
+    /// Row index active when the row marquee was last reset (selection change
+    /// resets offset + direction). Shared by the Detail variations table and the
+    /// Picker candidate list — only one of those modals is open at a time.
+    pub var_marquee_sel: usize,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -635,6 +648,44 @@ pub struct FlatBook {
     /// Index within that group's `books` slice.
     pub book_index_in_group: usize,
     pub book: ViewBook,
+}
+
+/// Shared ping-pong stepping for a marquee's `(offset, forward, pause)` triple.
+///
+/// Used by both the book-header marquee (`advance_marquee`) and the focused
+/// variation/picker row marquee (`advance_var_marquee`). Offset is in display
+/// columns; pair with `textfit::marquee_window` / `marquee_char_range`.
+fn step_marquee(
+    offset: &mut usize,
+    forward: &mut bool,
+    pause: &mut u8,
+    text_disp_w: usize,
+    col_w: usize,
+) {
+    if text_disp_w <= col_w {
+        // Text fits: park at zero.
+        *offset = 0;
+        *forward = true;
+        *pause = 0;
+        return;
+    }
+    let max_offset = text_disp_w.saturating_sub(col_w);
+    if *pause > 0 {
+        *pause -= 1;
+        return;
+    }
+    if *forward {
+        *offset = (*offset + 1).min(max_offset);
+        if *offset >= max_offset {
+            *forward = false;
+            *pause = 8; // ~960 ms pause at the end
+        }
+    } else if *offset == 0 {
+        *forward = true;
+        *pause = 8; // ~960 ms pause at the start
+    } else {
+        *offset -= 1;
+    }
 }
 
 impl AppState {
@@ -671,6 +722,10 @@ impl AppState {
             marquee_forward: true,
             marquee_pause: 0,
             marquee_detail_sel: 0,
+            var_marquee_offset: 0,
+            var_marquee_forward: true,
+            var_marquee_pause: 0,
+            var_marquee_sel: 0,
         }
     }
 
@@ -722,29 +777,38 @@ impl AppState {
     /// `textfit::marquee_window` / `marquee_char_range` when slicing.
     /// Must be called once per render tick while the Detail modal is open.
     pub fn advance_marquee(&mut self, text_disp_w: usize, col_w: usize) {
-        if text_disp_w <= col_w {
-            // Text fits: keep the offset at zero.
-            self.marquee_offset = 0;
-            self.marquee_forward = true;
-            self.marquee_pause = 0;
-            return;
-        }
-        let max_offset = text_disp_w.saturating_sub(col_w);
-        if self.marquee_pause > 0 {
-            self.marquee_pause -= 1;
-            return;
-        }
-        if self.marquee_forward {
-            self.marquee_offset = (self.marquee_offset + 1).min(max_offset);
-            if self.marquee_offset >= max_offset {
-                self.marquee_forward = false;
-                self.marquee_pause = 8; // ~960 ms pause at the end
-            }
-        } else if self.marquee_offset == 0 {
-            self.marquee_forward = true;
-            self.marquee_pause = 8; // ~960 ms pause at the start
-        } else {
-            self.marquee_offset -= 1;
+        step_marquee(
+            &mut self.marquee_offset,
+            &mut self.marquee_forward,
+            &mut self.marquee_pause,
+            text_disp_w,
+            col_w,
+        );
+    }
+
+    /// Advance the FOCUSED variation/picker row's marquee by one tick (#1/#11).
+    ///
+    /// Same ping-pong mechanics as [`advance_marquee`] but over the dedicated
+    /// `var_marquee_*` state. Call once per render for the focused row only —
+    /// `text_disp_w` is the display width of that row's flexing text (Mode A
+    /// title·author, or Mode B whole packed line) and `col_w` its window width.
+    pub fn advance_var_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        step_marquee(
+            &mut self.var_marquee_offset,
+            &mut self.var_marquee_forward,
+            &mut self.var_marquee_pause,
+            text_disp_w,
+            col_w,
+        );
+    }
+
+    /// Reset the focused-row marquee when the picker/variation selection changes.
+    pub fn reset_var_marquee_if_changed(&mut self, new_sel: usize) {
+        if new_sel != self.var_marquee_sel {
+            self.var_marquee_offset = 0;
+            self.var_marquee_forward = true;
+            self.var_marquee_pause = 0;
+            self.var_marquee_sel = new_sel;
         }
     }
 

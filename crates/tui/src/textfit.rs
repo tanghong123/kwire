@@ -36,9 +36,8 @@ pub fn display_width(s: &str) -> usize {
 /// - A wide glyph straddling the cut boundary is dropped whole, never split.
 /// - `max_cols == 0` → empty string.
 /// - If `s` already fits in `max_cols`, it is returned unchanged.
-// Foundation API: consumed by the per-view clipping fixes (#1/#2/#6/#11/#12…),
-// which land separately. Tested here.
-#[allow(dead_code)]
+// Consumed by the per-view clipping fixes: #1 detail variations + #11 picker
+// (flex rows, border title), with more to land.
 pub fn ellipsize(s: &str, max_cols: usize) -> String {
     if max_cols == 0 {
         return String::new();
@@ -108,10 +107,8 @@ pub fn marquee_char_range(s: &str, window_cols: usize, offset: usize) -> Range<u
 ///
 /// Thin wrapper over [`marquee_char_range`]; never splits a wide glyph and
 /// never exceeds `window_cols` columns.
-// Foundation API for the plain (unstyled) marquees the per-view fixes add
-// (#9 activity title, #15 list strip). The styled detail-title marquee uses
-// `marquee_char_range` directly. Tested here.
-#[allow(dead_code)]
+// Plain (unstyled) marquee window: #1/#11 Mode B packed line; #9/#15 to land.
+// The styled detail-title marquee uses `marquee_char_range` directly.
 pub fn marquee_window(s: &str, window_cols: usize, offset: usize) -> String {
     let r = marquee_char_range(s, window_cols, offset);
     s.chars().skip(r.start).take(r.end - r.start).collect()

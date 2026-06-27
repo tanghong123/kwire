@@ -1500,15 +1500,18 @@ fn render_backdrop(frame: &mut Frame) {
 
 fn render_picker_modal(
     frame: &mut Frame,
-    app: &AppState,
+    app: &mut AppState,
     book_flat_index: usize,
     picker_selected: usize,
 ) {
-    // #72: widen to ~80% of 132 cols.
+    app.reset_var_marquee_if_changed(picker_selected);
+
+    // #72: widen to ~80% of 132 cols (clamped to the terminal by centered_rect).
     let area = centered_rect(105, 26, frame.area());
     frame.render_widget(Clear, area);
 
-    let Some(fb) = app.flat.get(book_flat_index) else {
+    // Clone so we can mutably borrow `app` (row marquee) while holding book data.
+    let Some(fb) = app.flat.get(book_flat_index).cloned() else {
         frame.render_widget(
             Block::default()
                 .borders(Borders::ALL)
@@ -1521,7 +1524,6 @@ fn render_picker_modal(
         return;
     };
 
-    // Count versions for the subheader.
     let n_candidates = fb.book.versions.len();
     let threshold = if let Some(v) = &app.view {
         v.settings.auto_threshold
@@ -1529,19 +1531,19 @@ fn render_picker_modal(
         0.85
     };
 
+    // #11: the book title baked into the border is ELLIPSIZED (no marquee).
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(style_dim())
         .title(Span::styled(
-            format!(" {} \u{2014} choose a copy ", fb.book.title),
+            picker_border_title(&fb.book.title, area.width),
             style_dim(),
         ))
         .style(style_normal());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    // Internal gutter: 2-cell horizontal padding, 1-cell vertical padding.
     let padded = inner.inner(Margin {
         horizontal: 2,
         vertical: 1,
@@ -1550,130 +1552,190 @@ fn render_picker_modal(
     // Layout: subheader (1) + column header row (1) + table rows + rule (1) + hint (1)
     let split = Layout::vertical([
         Constraint::Length(1), // subheader
-        Constraint::Min(1),    // table (header + rows)
+        Constraint::Min(1),    // header + rows
         Constraint::Length(1), // dim rule
         Constraint::Length(1), // hint
     ])
     .split(padded);
 
-    // Subheader line
     let subhead = format!(
         "{} candidates \u{00b7} auto needs one copy \u{2265} {:.2} \u{2014} none was clear, so pick.",
         n_candidates, threshold
     );
     frame.render_widget(Paragraph::new(Span::styled(subhead, style_dim())), split[0]);
 
-    // Table columns: FMT · TITLE · SOURCE | SIZE | YEAR | PG | MATCH
-    // The "·" separators in the header labels are decorative (like the mock)
-    let header = Row::new([
-        Cell::from("FMT").style(style_header()),
-        Cell::from("TITLE \u{00b7} SOURCE").style(style_header()),
-        Cell::from("SIZE").style(style_header()),
-        Cell::from("YEAR").style(style_header()),
-        Cell::from("PG").style(style_header()),
-        Cell::from("MATCH").style(style_header()),
-    ])
-    .height(1)
-    .style(style_header());
+    let rows_area = split[1];
+    let row_w = rows_area.width as usize;
 
-    let rows: Vec<Row> = fb
+    // #11: candidate rows = #1 flex treatment. Rest fields = Fmt, Size, Year, Pg,
+    // Match; title region carries Title + (author · source).
+    let fields: Vec<(String, String, String, String, String)> = fb
         .book
         .versions
         .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let is_sel = i == picker_selected;
-            // Shared selected-line accent: green ▌ left bar on the FMT cell.
-            let fmt_cell = if is_sel {
-                Cell::from(Line::from(vec![
-                    Span::styled("\u{258c} ", style_sel_accent()),
-                    Span::styled(v.fmt.clone(), style_selected()),
-                ]))
+        .map(|v| {
+            let fmt = v.fmt.clone();
+            let size = if v.size > 0 {
+                format!("{} MB", v.size)
             } else {
-                Cell::from(format!("  {}", v.fmt)).style(style_dim())
+                "\u{2014}".into()
             };
-            // Title · Author · Source combined (publisher·language)
-            let source = {
-                let pub_ = v.publisher.as_str();
-                let lang = v.language.as_str();
-                match (pub_.is_empty(), lang.is_empty()) {
-                    (true, true) => String::new(),
-                    (true, false) => lang.to_string(),
-                    (false, true) => pub_.to_string(),
-                    (false, false) => format!("{}\u{00b7}{}", pub_, lang),
-                }
-            };
-            let author_part = if v.author.is_empty() {
-                String::new()
-            } else {
-                format!(" \u{00b7} {}", v.author)
-            };
-            let title_source = if source.is_empty() {
-                format!("{}{}", v.title, author_part)
-            } else {
-                format!("{}{} {}", v.title, author_part, source)
-            };
-            let style_row = if is_sel {
-                style_selected()
-            } else {
-                style_normal()
-            };
-            Row::new([
-                fmt_cell,
-                Cell::from(title_source).style(if is_sel {
-                    style_selected()
-                } else {
-                    style_title()
-                }),
-                Cell::from(if v.size > 0 {
-                    format!("{} MB", v.size)
-                } else {
-                    "\u{2014}".into()
-                })
-                .style(style_dim()),
-                Cell::from(
-                    v.year
-                        .map(|y| y.to_string())
-                        .unwrap_or_else(|| "\u{2014}".into()),
-                )
-                .style(style_dim()),
-                Cell::from(
-                    v.pages
-                        .map(|p| p.to_string())
-                        .unwrap_or_else(|| "\u{2014}".into()),
-                )
-                .style(style_dim()),
-                Cell::from(format!("{:.2}", v.score)).style(if is_sel {
-                    style_selected()
-                } else {
-                    Style::default().fg(score_color(v.score.into()))
-                }),
-            ])
-            .height(1)
-            .style(style_row)
+            let year = v
+                .year
+                .map(|y| y.to_string())
+                .unwrap_or_else(|| "\u{2014}".into());
+            let pg = v
+                .pages
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "\u{2014}".into());
+            let mat = format!("{:.2}", v.score);
+            (fmt, size, year, pg, mat)
         })
         .collect();
 
-    let mut table_state = TableState::default();
-    if !fb.book.versions.is_empty() {
-        table_state.select(Some(picker_selected));
+    // Title-region text = author + source (publisher·language) under the title.
+    let author_source = |v: &libgen_engine::ViewVariation| -> String {
+        let source = match (v.publisher.is_empty(), v.language.is_empty()) {
+            (true, true) => String::new(),
+            (true, false) => v.language.clone(),
+            (false, true) => v.publisher.clone(),
+            (false, false) => format!("{}\u{00b7}{}", v.publisher, v.language),
+        };
+        match (v.author.is_empty(), source.is_empty()) {
+            (true, true) => String::new(),
+            (true, false) => source,
+            (false, true) => v.author.clone(),
+            (false, false) => format!("{} \u{00b7} {}", v.author, source),
+        }
+    };
+
+    let labels = ["FMT", "SIZE", "YEAR", "PG", "MATCH"];
+    let mut rest_w = [
+        crate::textfit::display_width(labels[0]),
+        crate::textfit::display_width(labels[1]),
+        crate::textfit::display_width(labels[2]),
+        crate::textfit::display_width(labels[3]),
+        crate::textfit::display_width(labels[4]),
+    ];
+    for (f, s, y, p, m) in &fields {
+        rest_w[0] = rest_w[0].max(crate::textfit::display_width(f));
+        rest_w[1] = rest_w[1].max(crate::textfit::display_width(s));
+        rest_w[2] = rest_w[2].max(crate::textfit::display_width(y));
+        rest_w[3] = rest_w[3].max(crate::textfit::display_width(p));
+        rest_w[4] = rest_w[4].max(crate::textfit::display_width(m));
     }
+    let rest_widths = rest_w.to_vec();
+    let layout = flex_row_layout(row_w, &rest_widths);
 
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(7), // FMT (with indicator)
-            Constraint::Min(24),   // TITLE · AUTHOR
-            Constraint::Length(8), // SIZE
-            Constraint::Length(6), // YEAR
-            Constraint::Length(6), // PAGES
-            Constraint::Length(6), // MATCH
-        ],
-    )
-    .header(header)
-    .row_highlight_style(Style::default().bg(C_SELECTED));
+    // Advance the focused (selected) row's marquee.
+    if let Some(v) = fb.book.versions.get(picker_selected) {
+        let auth = author_source(v);
+        match layout {
+            FlexLayout::Fixed { title_w } => {
+                let combined = combine_title_author(&v.title, &auth);
+                app.advance_var_marquee(crate::textfit::display_width(&combined), title_w);
+            }
+            FlexLayout::Packed { width } => {
+                let (f, s, y, p, m) = &fields[picker_selected];
+                let mut packed = combine_title_author(&v.title, &auth);
+                for x in [f, s, y, p, m] {
+                    if !x.is_empty() {
+                        packed.push_str(", ");
+                        packed.push_str(x);
+                    }
+                }
+                app.advance_var_marquee(crate::textfit::display_width(&packed), width);
+            }
+        }
+    }
+    let marquee_off = app.var_marquee_offset;
 
-    frame.render_stateful_widget(table, split[1], &mut table_state);
+    // Header row.
+    let header_rest: Vec<(String, Style)> = labels
+        .iter()
+        .map(|l| (l.to_string(), style_header()))
+        .collect();
+    render_flex_row(
+        frame,
+        Rect::new(rows_area.x, rows_area.y, rows_area.width, 1),
+        layout,
+        " ",
+        style_header(),
+        "TITLE \u{00b7} SOURCE",
+        "",
+        style_header(),
+        style_header(),
+        &header_rest,
+        &rest_widths,
+        false,
+        0,
+        style_header(),
+    );
+
+    // Candidate rows (uniform 1-line height — derive y from the index).
+    let bottom = rows_area.y + rows_area.height;
+    for (i, v) in fb.book.versions.iter().enumerate() {
+        let y = rows_area.y + 1 + i as u16;
+        if y >= bottom {
+            break;
+        }
+        let is_sel = i == picker_selected;
+        let accent = if is_sel { "\u{258c}" } else { " " };
+        let accent_style = if is_sel {
+            style_sel_accent()
+        } else {
+            style_dim()
+        };
+        let base_style = if is_sel {
+            Style::default().bg(C_SELECTED)
+        } else {
+            style_normal()
+        };
+        let title_style = if is_sel {
+            style_selected()
+        } else {
+            style_title()
+        };
+        let author_style = if is_sel {
+            style_selected()
+        } else {
+            style_dim()
+        };
+        let dim_or_sel = if is_sel {
+            style_selected()
+        } else {
+            style_dim()
+        };
+        let match_style = if is_sel {
+            style_selected()
+        } else {
+            Style::default().fg(score_color(v.score.into()))
+        };
+        let (f, s, yr, p, m) = &fields[i];
+        let rest = vec![
+            (f.clone(), dim_or_sel),
+            (s.clone(), dim_or_sel),
+            (yr.clone(), dim_or_sel),
+            (p.clone(), dim_or_sel),
+            (m.clone(), match_style),
+        ];
+        render_flex_row(
+            frame,
+            Rect::new(rows_area.x, y, rows_area.width, 1),
+            layout,
+            accent,
+            accent_style,
+            &v.title,
+            &author_source(v),
+            title_style,
+            author_style,
+            &rest,
+            &rest_widths,
+            is_sel, // focused row marquees
+            marquee_off,
+            base_style,
+        );
+    }
 
     // Dim rule + hint bar (⏎ omitted — see Help screen).
     render_rule(frame, split[2]);
@@ -1700,6 +1762,7 @@ fn render_detail_modal(
 ) {
     // #62: width = 80% of the actual window; reset marquee if variation selection changed.
     app.reset_marquee_if_selection_changed(detail_selected);
+    app.reset_var_marquee_if_changed(detail_selected);
     let fa = frame.area();
     let detail_w = (fa.width as u32 * 80 / 100) as u16;
     let area = centered_rect(detail_w, 30.min(fa.height), fa);
@@ -1761,8 +1824,16 @@ fn render_detail_modal(
     //   hint (1)
 
     let n_versions = fb.book.versions.len();
-    let var_rows_h = (n_versions.max(1) + 1) as u16; // +1 for header row
-                                                     // Subtract all fixed rows: title(1)+subtitle(1)+blank(1)+VARIATIONS(1)+var_rows(n)+blank(1)+HISTORY(1)+rule(1)+hint(1).
+    // #1: actively-downloading variations get an EXTRA line below them for the
+    // progress bar, so the section grows by the number of downloading copies.
+    let n_downloading = fb
+        .book
+        .versions
+        .iter()
+        .filter(|v| v.state == "downloading")
+        .count();
+    let var_rows_h = (n_versions.max(1) + 1 + n_downloading) as u16; // header + rows + progress lines
+                                                                     // Subtract all fixed rows: title(1)+subtitle(1)+blank(1)+VARIATIONS(1)+var_rows(n)+blank(1)+HISTORY(1)+rule(1)+hint(1).
     let history_h = padded
         .height
         .saturating_sub(1 + 1 + 1 + 1 + var_rows_h + 1 + 1 + 1 + 1); // = available for history
@@ -1875,164 +1946,211 @@ fn render_detail_modal(
         split[3],
     );
 
-    // Variation rows as a table (no outer border — inline with block)
-    let var_header = Row::new([
-        Cell::from("").style(style_header()), // checkmark col
-        Cell::from("Title \u{00b7} Author").style(style_header()),
-        Cell::from("Fmt").style(style_header()),
-        Cell::from("Size").style(style_header()),
-        Cell::from("Src").style(style_header()),
-        Cell::from("Match").style(style_header()),
-        Cell::from("State").style(style_header()),
-        Cell::from("Progress").style(style_header()),
-    ])
-    .height(1)
-    .style(style_header());
-
+    // ── Variation rows (#1): manual flex layout, NOT a fixed-column Table ─────
+    // Dropped the Src column + MD5; State "available"→"avail"; progress bar moved
+    // to its own line below each actively-downloading row. Title·Author flexes
+    // (≥60%); the rest fields are capped at 40% (Mode A) else everything packs
+    // into one comma string (Mode B). Focused row marquees, others ellipsize.
     let var_focused = *sub_focus == DetailSubFocus::Variations;
-    let var_rows: Vec<Row> = fb
+    let var_area = split[4];
+    let row_w = var_area.width as usize;
+
+    // Per-version rest-field strings (Fmt, Size, Match, State).
+    let fields: Vec<(String, String, String, String)> = fb
         .book
         .versions
         .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let is_sel = i == detail_selected;
-            // The selection-bar treatment only goes "full" (green accent + tinted
-            // bg) while Variations is focused; when it's NOT focused the row keeps
-            // a DIMMED accent bar (selection stays visible, never blank).
-            let sel_active = is_sel && var_focused;
-            // Shared selected-line accent: green ▌ left bar; ✓ for done; spinner
-            // for downloading.
-            let check = if is_sel {
-                "\u{258c}" // ▌ green accent bar
-            } else if v.state == "done" {
-                "\u{2713}"
-            } else if v.state == "downloading" {
-                theme::spinner(app.tick)
+        .map(|v| {
+            let fmt = v.fmt.clone();
+            let size = if v.size > 0 {
+                format!("{} MB", v.size)
             } else {
-                " "
+                "\u{2014}".into()
             };
-            let bar = theme::progress_bar(v.progress, 8);
-            let state_cell = match v.state.as_str() {
-                "done" => {
-                    let md5_short = v.md5.chars().take(3).collect::<String>();
-                    format!("done \u{00b7} {} \u{00b7} \u{2713}", md5_short)
-                }
-                "downloading" => {
-                    let spd = v
-                        .eta_secs
-                        .map(|s| format!(" \u{00b7} eta {}s", s))
-                        .unwrap_or_default();
-                    format!("downloading {}%{}", v.progress, spd)
-                }
+            let mat = format!("{:.2}", v.score);
+            let state = match v.state.as_str() {
+                "available" => "avail".into(),
+                // MD5 removed from this table (stays in the picker + `v` snapshot).
+                "done" => "done \u{00b7} \u{2713}".into(),
+                "downloading" => format!("downloading {}%", v.progress),
                 other => other.to_string(),
             };
-            let host = v.host.as_deref().unwrap_or("\u{2014}");
-            let title_author = if v.author.is_empty() {
-                v.title.clone()
-            } else {
-                format!("{} \u{00b7} {}", v.title, v.author)
-            };
-            let row_style = if sel_active {
-                style_selected()
-            } else {
-                style_normal()
-            };
-            Row::new([
-                Cell::from(check).style(if is_sel {
-                    if var_focused {
-                        style_sel_accent()
-                    } else {
-                        style_sel_accent_dim()
-                    }
-                } else {
-                    theme::style_for_state(&v.state)
-                }),
-                Cell::from(title_author).style(if sel_active {
-                    style_selected()
-                } else {
-                    style_title()
-                }),
-                Cell::from(v.fmt.clone()).style(if sel_active {
-                    style_selected()
-                } else {
-                    style_dim()
-                }),
-                Cell::from(if v.size > 0 {
-                    format!("{} MB", v.size)
-                } else {
-                    "\u{2014}".into()
-                })
-                .style(if sel_active {
-                    style_selected()
-                } else {
-                    style_dim()
-                }),
-                Cell::from(host.to_string()).style(if sel_active {
-                    style_selected()
-                } else {
-                    style_dim()
-                }),
-                Cell::from(format!("{:.2}", v.score)).style(if sel_active {
-                    style_selected()
-                } else {
-                    Style::default().fg(score_color(v.score.into()))
-                }),
-                Cell::from(state_cell).style(if sel_active {
-                    style_selected()
-                } else {
-                    theme::style_for_state(&v.state)
-                }),
-                Cell::from(bar).style(if sel_active {
-                    style_selected()
-                } else {
-                    theme::style_for_state(&v.state)
-                }),
-            ])
-            .height(1)
-            .style(row_style)
+            (fmt, size, mat, state)
         })
         .collect();
 
-    let mut var_table_state = TableState::default();
-    if !fb.book.versions.is_empty() {
-        var_table_state.select(Some(detail_selected));
+    // Natural column widths (max of header label + data), used for the 40% cap
+    // test and the Mode A fixed positions.
+    let labels = ["Fmt", "Size", "Match", "State"];
+    let mut rest_w = [
+        crate::textfit::display_width(labels[0]),
+        crate::textfit::display_width(labels[1]),
+        crate::textfit::display_width(labels[2]),
+        crate::textfit::display_width(labels[3]),
+    ];
+    for (f, s, m, st) in &fields {
+        rest_w[0] = rest_w[0].max(crate::textfit::display_width(f));
+        rest_w[1] = rest_w[1].max(crate::textfit::display_width(s));
+        rest_w[2] = rest_w[2].max(crate::textfit::display_width(m));
+        rest_w[3] = rest_w[3].max(crate::textfit::display_width(st));
     }
+    let rest_widths = rest_w.to_vec();
+    let layout = flex_row_layout(row_w, &rest_widths);
 
-    let var_table = Table::new(
-        var_rows,
-        [
-            Constraint::Length(2),  // check
-            Constraint::Min(20),    // Title · Author
-            Constraint::Length(6),  // Fmt
-            Constraint::Length(8),  // Size
-            Constraint::Length(10), // Src (host)
-            Constraint::Length(6),  // Match (score)
-            Constraint::Min(14),    // State
-            Constraint::Length(9),  // Progress
-        ],
-    )
-    .header(var_header)
-    // Tint the selected row's background only while Variations is focused; an
-    // unfocused list keeps just its dimmed ▌ accent (no bg tint).
-    .row_highlight_style(if var_focused {
-        Style::default().bg(C_SELECTED)
+    // Advance the marquee for the FOCUSED row only (one row animates at a time).
+    if var_focused {
+        if let Some(v) = fb.book.versions.get(detail_selected) {
+            match layout {
+                FlexLayout::Fixed { title_w } => {
+                    let combined = combine_title_author(&v.title, &v.author);
+                    app.advance_var_marquee(crate::textfit::display_width(&combined), title_w);
+                }
+                FlexLayout::Packed { width } => {
+                    let (f, s, m, st) = &fields[detail_selected];
+                    let mut packed = combine_title_author(&v.title, &v.author);
+                    for x in [f, s, m, st] {
+                        if !x.is_empty() {
+                            packed.push_str(", ");
+                            packed.push_str(x);
+                        }
+                    }
+                    app.advance_var_marquee(crate::textfit::display_width(&packed), width);
+                }
+            }
+        }
     } else {
-        Style::default()
-    });
+        app.advance_var_marquee(0, 1); // park while unfocused
+    }
+    let marquee_off = app.var_marquee_offset;
 
-    frame.render_stateful_widget(var_table, split[4], &mut var_table_state);
+    // Header row (same flex positions as data rows).
+    let header_rest: Vec<(String, Style)> = labels
+        .iter()
+        .map(|l| (l.to_string(), style_header()))
+        .collect();
+    render_flex_row(
+        frame,
+        Rect::new(var_area.x, var_area.y, var_area.width, 1),
+        layout,
+        " ",
+        style_header(),
+        "Title \u{00b7} Author",
+        "",
+        style_header(),
+        style_header(),
+        &header_rest,
+        &rest_widths,
+        false,
+        0,
+        style_header(),
+    );
 
-    // Register each variation row rect for mouse hit-testing. The table reserves
-    // its first line for the header, so data row `i` sits at `y + 1 + i`.
-    app.last_rects.detail_var_area = split[4];
+    // Data rows + per-row progress lines.
+    app.last_rects.detail_var_area = var_area;
     app.last_rects.detail_var_rows.clear();
-    for i in 0..fb.book.versions.len() {
-        let y = split[4].y + 1 + i as u16;
-        if y < split[4].y + split[4].height {
-            app.last_rects
-                .detail_var_rows
-                .push((Rect::new(split[4].x, y, split[4].width, 1), i));
+    let mut y = var_area.y + 1;
+    let bottom = var_area.y + var_area.height;
+    for (i, v) in fb.book.versions.iter().enumerate() {
+        if y >= bottom {
+            break;
+        }
+        let is_sel = i == detail_selected;
+        let sel_active = is_sel && var_focused;
+        let downloading = v.state == "downloading";
+        let accent = if is_sel {
+            "\u{258c}" // ▌ green accent bar
+        } else if v.state == "done" {
+            "\u{2713}"
+        } else if downloading {
+            theme::spinner(app.tick)
+        } else {
+            " "
+        };
+        let accent_style = if is_sel {
+            if var_focused {
+                style_sel_accent()
+            } else {
+                style_sel_accent_dim()
+            }
+        } else {
+            theme::style_for_state(&v.state)
+        };
+        let base_style = if sel_active {
+            Style::default().bg(C_SELECTED)
+        } else {
+            style_normal()
+        };
+        let title_style = if sel_active {
+            style_selected()
+        } else {
+            style_title()
+        };
+        let author_style = if sel_active {
+            style_selected()
+        } else {
+            style_dim()
+        };
+        let (f, s, m, st) = &fields[i];
+        let dim_or_sel = if sel_active {
+            style_selected()
+        } else {
+            style_dim()
+        };
+        let match_style = if sel_active {
+            style_selected()
+        } else {
+            Style::default().fg(score_color(v.score.into()))
+        };
+        let state_style = if sel_active {
+            style_selected()
+        } else {
+            theme::style_for_state(&v.state)
+        };
+        let rest = vec![
+            (f.clone(), dim_or_sel),
+            (s.clone(), dim_or_sel),
+            (m.clone(), match_style),
+            (st.clone(), state_style),
+        ];
+        let row_rect = Rect::new(var_area.x, y, var_area.width, 1);
+        render_flex_row(
+            frame,
+            row_rect,
+            layout,
+            accent,
+            accent_style,
+            &v.title,
+            &v.author,
+            title_style,
+            author_style,
+            &rest,
+            &rest_widths,
+            sel_active, // marquee only the focused (selected + focused) row
+            marquee_off,
+            base_style,
+        );
+        app.last_rects.detail_var_rows.push((row_rect, i));
+        y += 1;
+
+        // #1: progress bar on its OWN line below — only while downloading.
+        if downloading && y < bottom {
+            let bar = theme::progress_bar(v.progress, 16);
+            let eta = v
+                .eta_secs
+                .map(|s| format!(" \u{00b7} eta {}s", s))
+                .unwrap_or_default();
+            let txt = format!(
+                "{}{} {}%{}",
+                " ".repeat(FLEX_ACCENT_W),
+                bar,
+                v.progress,
+                eta
+            );
+            frame.render_widget(
+                Paragraph::new(Span::styled(txt, theme::style_for_state("downloading"))),
+                Rect::new(var_area.x, y, var_area.width, 1),
+            );
+            y += 1;
         }
     }
 
@@ -3101,6 +3219,181 @@ fn marquee_title_author(
         spans.push(Span::styled(cur, s));
     }
     Line::from(spans)
+}
+
+// ---------------------------------------------------------------------------
+// Flexing "title·author + rest fields" row (Detail variations #1 · Picker #11)
+// ---------------------------------------------------------------------------
+
+/// Accent column width (selection glyph + trailing space).
+const FLEX_ACCENT_W: usize = 2;
+/// Breathing space between the title·author region and the rest-field block.
+const FLEX_SEP: usize = 2;
+/// Gap between adjacent rest fields.
+const FLEX_GAP: usize = 1;
+/// Never shrink the title region below this in Mode A.
+const FLEX_MIN_TITLE: usize = 8;
+
+/// Layout decision for one flex row.
+///
+/// `Mode A` (`Fixed`) — the rest fields fit within the 40% cap: render them at
+/// their natural fixed widths/positions and give ALL the remaining width
+/// (≥60%) to title·author.  `Mode B` (`Packed`) — the rest fields would need
+/// >40%: concatenate title, author AND the rest into one comma string spanning
+/// the whole content width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlexLayout {
+    Fixed { title_w: usize },
+    Packed { width: usize },
+}
+
+/// Decide Mode A vs Mode B for a row `row_w` columns wide whose rest fields have
+/// the given natural widths.
+///
+/// **The 40% cap is computed here:** `cap = row_w * 40 / 100`.  The rest block
+/// width is `Σ field widths + gaps`.  Mode A only when that block fits the cap
+/// *and* leaves at least [`FLEX_MIN_TITLE`] for the title; otherwise Mode B.
+pub(crate) fn flex_row_layout(row_w: usize, rest_field_widths: &[usize]) -> FlexLayout {
+    let n = rest_field_widths.len();
+    let gaps = n.saturating_sub(1) * FLEX_GAP;
+    let rest_w: usize = rest_field_widths.iter().sum::<usize>() + gaps;
+    let cap = row_w * 40 / 100; // 40% CAP on the whole row width
+    let content_w = row_w.saturating_sub(FLEX_ACCENT_W);
+    if rest_w <= cap && content_w >= rest_w + FLEX_SEP + FLEX_MIN_TITLE {
+        FlexLayout::Fixed {
+            title_w: content_w - FLEX_SEP - rest_w,
+        }
+    } else {
+        FlexLayout::Packed { width: content_w }
+    }
+}
+
+/// "Title · Author" combined into one string (author omitted when empty).
+fn combine_title_author(title: &str, author: &str) -> String {
+    if author.is_empty() {
+        title.to_string()
+    } else {
+        format!("{} \u{00b7} {}", title, author)
+    }
+}
+
+/// Window a single-style string for a flex region: marquee when `focused`
+/// (offset-scrolled, no ellipsis), `…`-ellipsize when not.  This is the
+/// focused-vs-unfocused selection used by Mode B and unfocused Mode A.
+pub(crate) fn flex_text(s: &str, window: usize, offset: usize, focused: bool) -> String {
+    if focused {
+        crate::textfit::marquee_window(s, window, offset)
+    } else {
+        crate::textfit::ellipsize(s, window)
+    }
+}
+
+/// Right-pad `s` with spaces to exactly `w` display columns (ellipsizing first
+/// if it overflows).
+fn pad_cell(s: &str, w: usize) -> String {
+    let fitted = crate::textfit::ellipsize(s, w);
+    let used = crate::textfit::display_width(&fitted);
+    if used < w {
+        format!("{}{}", fitted, " ".repeat(w - used))
+    } else {
+        fitted
+    }
+}
+
+/// Total display width of an already-built styled line.
+fn line_disp_width(line: &Line) -> usize {
+    line.spans
+        .iter()
+        .map(|s| crate::textfit::display_width(&s.content))
+        .sum()
+}
+
+/// Build the border title for the picker modal, ellipsizing the book title so
+/// the " — choose a copy " suffix is never clipped (#11: border = ellipsize, no
+/// marquee).
+pub(crate) fn picker_border_title(title: &str, area_w: u16) -> String {
+    const SUFFIX: &str = " \u{2014} choose a copy ";
+    // Leading space + suffix + the two rounded corners worth of slack.
+    let reserved = crate::textfit::display_width(SUFFIX) + 3;
+    let max_title = (area_w as usize).saturating_sub(reserved).max(4);
+    format!(" {}{}", crate::textfit::ellipsize(title, max_title), SUFFIX)
+}
+
+/// Render one flexing "title·author + rest" row into a 1-high `rect`.
+///
+/// Mode A: accent · title·author (marquee if `focused`, else `…`) · fixed rest
+/// fields.  Mode B: accent · one comma-joined packed line (marquee/`…`).  The
+/// caller must have advanced the row marquee (`advance_var_marquee`) for the
+/// focused row before calling so `marquee_offset` is current.
+#[allow(clippy::too_many_arguments)]
+fn render_flex_row(
+    frame: &mut Frame,
+    rect: Rect,
+    layout: FlexLayout,
+    accent: &str,
+    accent_style: Style,
+    title: &str,
+    author: &str,
+    title_style: Style,
+    author_style: Style,
+    rest: &[(String, Style)],
+    rest_widths: &[usize],
+    focused: bool,
+    marquee_offset: usize,
+    base_style: Style,
+) {
+    let mut spans: Vec<Span> = Vec::new();
+    // Accent column, padded to a fixed width.
+    spans.push(Span::styled(pad_cell(accent, FLEX_ACCENT_W), accent_style));
+
+    match layout {
+        FlexLayout::Fixed { title_w } => {
+            if focused {
+                // Two-tone marquee window across the title/author boundary.
+                let line = marquee_title_author(
+                    title,
+                    author,
+                    title_style,
+                    author_style,
+                    marquee_offset,
+                    title_w,
+                );
+                let used = line_disp_width(&line);
+                spans.extend(line.spans);
+                if used < title_w {
+                    spans.push(Span::styled(" ".repeat(title_w - used), base_style));
+                }
+            } else {
+                let combined = combine_title_author(title, author);
+                spans.push(Span::styled(
+                    pad_cell(&crate::textfit::ellipsize(&combined, title_w), title_w),
+                    title_style,
+                ));
+            }
+            // Separator, then the fixed rest fields.
+            spans.push(Span::styled(" ".repeat(FLEX_SEP), base_style));
+            for (i, ((s, st), &w)) in rest.iter().zip(rest_widths).enumerate() {
+                if i > 0 {
+                    spans.push(Span::styled(" ".repeat(FLEX_GAP), base_style));
+                }
+                spans.push(Span::styled(pad_cell(s, w), *st));
+            }
+        }
+        FlexLayout::Packed { width } => {
+            let mut packed = combine_title_author(title, author);
+            for (s, _) in rest {
+                if !s.is_empty() {
+                    packed.push_str(", ");
+                    packed.push_str(s);
+                }
+            }
+            spans.push(Span::styled(
+                flex_text(&packed, width, marquee_offset, focused),
+                title_style,
+            ));
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(base_style), rect);
 }
 
 /// True when `tok` should render as a hotkey KEY (green) in a hint row.
