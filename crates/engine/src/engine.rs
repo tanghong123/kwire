@@ -257,6 +257,7 @@ async fn tick<E: EngineEmitter>(
         let mut guard = inflight.lock().await;
         for item in work {
             if item.kind == WorkKind::Download && scheduler.is_none() {
+                tracing::warn!(md5 = ?item.md5, "execute: DROP download — scheduler is None");
                 continue;
             }
             let key = item_key(&item);
@@ -264,6 +265,7 @@ async fn tick<E: EngineEmitter>(
                 if item.kind == WorkKind::Download {
                     // Queue for the download worker pool; a worker transitions the
                     // book to `downloading` only when it actually pulls it.
+                    tracing::debug!(md5 = ?item.md5, "engine: enqueued download");
                     let _ = dl_tx.send(item);
                 } else {
                     to_run.push(item);
@@ -365,12 +367,20 @@ async fn download_worker<E: EngineEmitter>(
             }
         };
         let key = item_key(&item);
+        tracing::debug!(md5 = ?item.md5, "download_worker: pulled item");
         // Reuse the shared scheduler (built lazily once).
-        let scheduler = ensure_scheduler_from(&handles.scheduler, &handles.config, None)
-            .await
-            .ok();
+        let scheduler = match ensure_scheduler_from(&handles.scheduler, &handles.config, None).await
+        {
+            Ok(s) => Some(s),
+            Err(e) => {
+                tracing::warn!(md5 = ?item.md5, "download_worker: scheduler build FAILED: {e}");
+                None
+            }
+        };
         if let Some(s) = scheduler {
+            tracing::debug!(md5 = ?item.md5, "download_worker: run_item START");
             run_item(&emitter, Some(&s), item).await;
+            tracing::debug!("download_worker: run_item END");
         }
         inflight.lock().await.remove(&key);
         handles.engine_wake.notify_one();

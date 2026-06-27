@@ -473,6 +473,7 @@ async fn dispatch_intent(
             book_index,
             md5,
         } => {
+            tracing::debug!(?group_path, book_index, %md5, "dispatch Intent::Select");
             select_candidate(app, handles, group_path, book_index, md5).await;
         }
         Intent::RequestVariations {
@@ -899,6 +900,7 @@ async fn select_candidate(
     md5: String,
 ) {
     let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
+        tracing::warn!(book_index, %md5, "select_candidate: resolve_book_orch returned None");
         return;
     };
     {
@@ -909,6 +911,7 @@ async fn select_candidate(
         }
         // Ensure goal = Complete so the engine downloads it.
         let _ = guard.set_goal_one(&group_path, book_index, Goal::Complete);
+        tracing::info!(?group_path, book_index, %md5, "select_candidate: armed + goal=Complete");
     }
     handles.engine_wake.notify_one();
     refresh_active_view(app, handles).await;

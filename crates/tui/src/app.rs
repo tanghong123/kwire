@@ -2030,6 +2030,14 @@ impl AppState {
                                             book_index: fb.book_index_in_group,
                                             md5,
                                         };
+                                        // Immediate confirmation: the download takes
+                                        // a few seconds to resolve before it visibly
+                                        // connects, so without this the user sees
+                                        // "nothing happen" and assumes `d` is broken.
+                                        self.status_msg = Some(format!(
+                                            "Queued download: {} ({})",
+                                            fb.book.title, v.fmt
+                                        ));
                                         self.modal = None;
                                         return intent;
                                     }

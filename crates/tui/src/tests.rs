@@ -797,6 +797,62 @@ mod tests {
         assert!(app.modal.is_none(), "detail modal closes after download");
     }
 
+    /// Regression for the recurring "`d` on an AVAILABLE variation does nothing"
+    /// report. Pressing `d` on an available (not-yet-downloaded) copy must emit a
+    /// `Select` carrying THAT copy's md5 + its book position, and post an immediate
+    /// "Queued download" status so the user gets feedback before the (slow) resolve
+    /// makes the transfer visible. The orchestrator/engine half — that the Select
+    /// arms a `Pending` job, raises the goal to `Complete`, and that `actionable_kind`
+    /// then dispatches a `Download` — is covered by `libgen-core`'s
+    /// `select_candidate_arms_pending_job_on_chosen_variation` and `libgen-engine`'s
+    /// `selected_ready_book_dispatches_only_once_armed_with_a_pending_job`.
+    #[test]
+    fn detail_d_on_available_variation_selects_that_md5_and_confirms() {
+        use crate::app::DetailSubFocus;
+        let avail_md5 = "e".repeat(32);
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        app.flat[0].book.versions = vec![
+            mk_var("Done Copy", "epub", "done", 100, &"d".repeat(32)),
+            mk_var("Available Copy", "pdf", "available", 0, &avail_md5),
+        ];
+        // Focus the AVAILABLE variation (index 1).
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 1,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        let group_index = app.flat[0].group_index;
+        let book_index = app.flat[0].book_index_in_group;
+
+        let intent = app.on_input(key(KeyCode::Char('d')));
+        match intent {
+            Intent::Select {
+                group_path,
+                book_index: bi,
+                md5,
+            } => {
+                assert_eq!(
+                    md5, avail_md5,
+                    "Select must target the focused available md5"
+                );
+                assert_eq!(group_path, vec![group_index]);
+                assert_eq!(bi, book_index);
+            }
+            other => panic!("d on an available variation must emit Select, got {other:?}"),
+        }
+        assert!(app.modal.is_none(), "detail modal closes after queueing");
+        assert!(
+            app.status_msg
+                .as_deref()
+                .is_some_and(|m| m.contains("Queued download")),
+            "pressing d must post an immediate 'Queued download' confirmation, got {:?}",
+            app.status_msg
+        );
+    }
+
     /// #6: the detail breadcrumb subtitle (`{group} · seq NN ● note`) must
     /// ellipsize with `…` at a narrow width instead of HARD-CLIPPING the tail.
     #[test]

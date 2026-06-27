@@ -1483,6 +1483,23 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
         }
     }
 
+    // Queued (armed but not-yet-connecting) downloads. A variation the user just
+    // armed with `d` carries a `Pending` job → `state == "queued"`, but it has no
+    // live transfer yet, so without this it would be invisible in the body for the
+    // few seconds before resolution starts — the "pressing `d` did nothing" trap.
+    // Surfacing it gives immediate feedback that the download was accepted.
+    let queued_items: Vec<(String, String)> = app
+        .flat
+        .iter()
+        .flat_map(|fb| {
+            fb.book
+                .versions
+                .iter()
+                .filter(|v| v.state == "queued")
+                .map(move |v| (fb.book.title.clone(), v.fmt.clone()))
+        })
+        .collect();
+
     // capacity: area.height - 1 (header) lines available for transfer rows.
     let capacity = area.height.saturating_sub(1) as usize;
 
@@ -1504,13 +1521,7 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
     let mut leg_idx: usize = 0;
 
     if !use_telemetry {
-        if host_groups.is_empty() {
-            all_content.push(Line::from(Span::styled(
-                "  No active transfers.",
-                style_dim(),
-            )));
-            leg_map.push(None);
-        } else {
+        if !host_groups.is_empty() {
             for (host, versions) in &host_groups {
                 // Per-host aggregate speed
                 let host_speed: u64 = app
@@ -1679,6 +1690,41 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 leg_idx += 1;
             }
         }
+    }
+
+    // Queued downloads (armed via `d`/Picker, not yet connecting). Rendered after
+    // any live transfers so the user gets immediate confirmation the download was
+    // accepted — these rows are informational (no live leg yet), so not selectable.
+    if !queued_items.is_empty() {
+        all_content.push(Line::from(Span::styled(
+            format!("\u{25cb} queued   {}\u{2193}", queued_items.len()),
+            style_muted(),
+        )));
+        leg_map.push(None);
+        for (title, fmt) in &queued_items {
+            let status = format!("{}  queued", fmt);
+            all_content.push(activity_leg_line(
+                format!("  {} ", theme::spinner(app.tick)),
+                style_dim(),
+                title,
+                style_muted(),
+                status,
+                style_dim(),
+                row_w,
+                false,
+                0,
+            ));
+            leg_map.push(None);
+        }
+    }
+
+    // Truly nothing active or pending.
+    if all_content.is_empty() {
+        all_content.push(Line::from(Span::styled(
+            "  No active transfers.",
+            style_dim(),
+        )));
+        leg_map.push(None);
     }
 
     // Apply scroll windowing to content lines.
