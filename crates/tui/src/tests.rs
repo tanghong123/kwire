@@ -794,7 +794,10 @@ mod tests {
             "d on a variation must emit Select, got {:?}",
             intent
         );
-        assert!(app.modal.is_none(), "detail modal closes after download");
+        assert!(
+            matches!(app.modal, Some(Modal::Detail { .. })),
+            "detail modal STAYS OPEN after `d` so the user can watch the transfer"
+        );
     }
 
     /// Regression for the recurring "`d` on an AVAILABLE variation does nothing"
@@ -843,7 +846,10 @@ mod tests {
             }
             other => panic!("d on an available variation must emit Select, got {other:?}"),
         }
-        assert!(app.modal.is_none(), "detail modal closes after queueing");
+        assert!(
+            matches!(app.modal, Some(Modal::Detail { .. })),
+            "detail modal STAYS OPEN after queueing so the user can watch the transfer"
+        );
         assert!(
             app.status_msg
                 .as_deref()
@@ -6553,7 +6559,9 @@ mod tests {
         );
     }
 
-    /// Detail modal: `S` reuses the :download-series handler and closes the modal.
+    /// Detail modal: `S` reuses the :download-series handler and STAYS in the
+    /// detail view (the command's "Added N book(s)" status renders in the bottom
+    /// bar, which the centered modal doesn't cover).
     #[test]
     fn detail_s_dispatches_download_series() {
         let mut app = AppState::new();
@@ -6567,8 +6575,8 @@ mod tests {
         let intent = app.on_input(key(KeyCode::Char('S')));
         assert_eq!(intent, Intent::Command("download-series".into()));
         assert!(
-            app.modal.is_none(),
-            "download-series closes the detail modal"
+            matches!(app.modal, Some(Modal::Detail { .. })),
+            "S must NOT close the detail modal — the user stays in context"
         );
     }
 

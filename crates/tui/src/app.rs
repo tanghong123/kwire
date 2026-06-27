@@ -2038,7 +2038,10 @@ impl AppState {
                                             "Queued download: {} ({})",
                                             fb.book.title, v.fmt
                                         ));
-                                        self.modal = None;
+                                        // Stay in the detail view so the user can
+                                        // watch this variation go queued→downloading
+                                        // →done in place; the status line renders in
+                                        // the bottom bar, which the modal doesn't cover.
                                         return intent;
                                     }
                                 }
@@ -2091,12 +2094,10 @@ impl AppState {
                         }
                         // #53 download-series — ONLY available in the detail (book)
                         // context. Reuses the `:download-series` handler, which acts
-                        // on the list-selected book. Close the modal so its status
-                        // message is visible.
-                        KeyCode::Char('S') => {
-                            self.modal = None;
-                            Intent::Command("download-series".into())
-                        }
+                        // on the list-selected book. Keep the detail modal open so the
+                        // user stays in context; the command's "Added N book(s)" status
+                        // renders in the bottom bar, which the centered modal doesn't cover.
+                        KeyCode::Char('S') => Intent::Command("download-series".into()),
                         // #70 universal Enter: open a snapshot popup for the focused row.
                         KeyCode::Enter => {
                             let parent_detail = Modal::Detail {
