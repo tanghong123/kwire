@@ -660,6 +660,17 @@ pub struct AppState {
     /// Settings field index active when the marquee was last reset (moving rows
     /// resets offset + direction).
     pub settings_marquee_sel: usize,
+
+    // ── Marquee scroll state (Activity pane · FOCUSED transfer-leg title · #9) ──
+    /// Column offset for the focused download leg's title when it overflows the
+    /// flex region left of the pinned status (fmt · % · bar · eta). Independent
+    /// of the other marquees so the activity animation never fights them.
+    pub activity_marquee_offset: usize,
+    pub activity_marquee_forward: bool,
+    pub activity_marquee_pause: u8,
+    /// Leg index active when the activity marquee was last reset (moving the
+    /// selection resets offset + direction).
+    pub activity_marquee_sel: usize,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -757,6 +768,10 @@ impl AppState {
             settings_marquee_forward: true,
             settings_marquee_pause: 0,
             settings_marquee_sel: 0,
+            activity_marquee_offset: 0,
+            activity_marquee_forward: true,
+            activity_marquee_pause: 0,
+            activity_marquee_sel: 0,
         }
     }
 
@@ -891,6 +906,32 @@ impl AppState {
             self.settings_marquee_forward = true;
             self.settings_marquee_pause = 0;
             self.settings_marquee_sel = new_sel;
+        }
+    }
+
+    /// Advance the focused download leg's title marquee by one tick (#9).
+    ///
+    /// Same ping-pong mechanics as the others over the dedicated
+    /// `activity_marquee_*` state. `text_disp_w` is the leg title's display width
+    /// and `col_w` the flex region left of the pinned status; call once per
+    /// render for the focused leg only.
+    pub fn advance_activity_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        step_marquee(
+            &mut self.activity_marquee_offset,
+            &mut self.activity_marquee_forward,
+            &mut self.activity_marquee_pause,
+            text_disp_w,
+            col_w,
+        );
+    }
+
+    /// Reset the activity-leg marquee when the focused leg changes (#9).
+    pub fn reset_activity_marquee_if_changed(&mut self, new_sel: usize) {
+        if new_sel != self.activity_marquee_sel {
+            self.activity_marquee_offset = 0;
+            self.activity_marquee_forward = true;
+            self.activity_marquee_pause = 0;
+            self.activity_marquee_sel = new_sel;
         }
     }
 

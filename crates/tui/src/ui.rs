@@ -82,7 +82,10 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
         constraints.push(Constraint::Length(1)); // 7/8  :command-line row
         constraints.push(Constraint::Length(1)); // 8/9  rule — cmd-line → hint
     }
-    constraints.push(Constraint::Length(1)); // hint bar (always last)
+    // #7: the hint bar GROWS to fit its wrapped lines at the current width so no
+    // hint is ever dropped; the book table (Min(8)) gives back the rows.
+    let hint_h = hint_bar_lines(app, frame.area().width).len().max(1) as u16;
+    constraints.push(Constraint::Length(hint_h)); // hint bar (always last)
 
     let chunks = Layout::vertical(constraints).split(frame.area());
     let hint_idx = chunks.len() - 1;
@@ -1121,6 +1124,47 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
 // 3  Docked Activity pane  (BORDERLESS — plain line rendering)
 // ---------------------------------------------------------------------------
 
+/// Build one Activity transfer-leg line with the transfer STATUS pinned to the
+/// right and the leg TITLE flexing in the middle (#9).
+///
+/// Layout across `row_w` columns:
+/// ```text
+///  marker | title (flex) | …gap… | status (fmt · % · bar · eta) →pinned right
+/// ```
+/// The `status` field (its display width) is reserved on the right so it is
+/// ALWAYS visible; the title gets the remaining width (minus a 2-col gap) and is
+/// marquee-scrolled when `focused`, else `…`-ellipsized.
+#[allow(clippy::too_many_arguments)]
+fn activity_leg_line(
+    marker: String,
+    marker_style: Style,
+    title: &str,
+    title_style: Style,
+    status: String,
+    status_style: Style,
+    row_w: usize,
+    focused: bool,
+    marquee_off: usize,
+) -> Line<'static> {
+    let marker_w = crate::textfit::display_width(&marker);
+    let status_w = crate::textfit::display_width(&status);
+    // Region left of the pinned status for the title (+ a 2-col gap before it).
+    let avail = row_w.saturating_sub(marker_w + status_w);
+    let title_budget = avail.saturating_sub(2);
+    let title_fitted = if focused {
+        crate::textfit::marquee_window(title, title_budget, marquee_off)
+    } else {
+        crate::textfit::ellipsize(title, title_budget)
+    };
+    let pad = avail.saturating_sub(crate::textfit::display_width(&title_fitted));
+    Line::from(vec![
+        Span::styled(marker, marker_style),
+        Span::styled(title_fitted, title_style),
+        Span::styled(" ".repeat(pad), title_style),
+        Span::styled(status, status_style),
+    ])
+}
+
 fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
     // Count download states.
     let downloading_count = app
@@ -1249,6 +1293,12 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
     // Whether Activity pane currently holds focus — used for selection styling.
     let activity_active = app.focus == Focus::Activity;
 
+    // #9: full-width row budget + reset the focused-leg title marquee when the
+    // selection moves (the focused leg's title marquees; status is pinned right).
+    let row_w = area.width as usize;
+    let sel_leg = app.activity_selected;
+    app.reset_activity_marquee_if_changed(sel_leg);
+
     // Build content lines (to be windowed by scroll offset).
     // leg_idx counts download-book rows so activity_selected maps to them.
     // (#66: legs are ALWAYS selectable — no overflow condition.)
@@ -1296,45 +1346,58 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 leg_map.push(None); // host label — not a selectable leg
 
                 for (title, pct, fmt, eta_secs) in versions {
-                    let is_leg_sel = activity_active && leg_idx == app.activity_selected;
-                    let is_leg_dim = !activity_active && leg_idx == app.activity_selected;
+                    let is_leg_sel = activity_active && leg_idx == sel_leg;
+                    let is_leg_dim = !activity_active && leg_idx == sel_leg;
                     let bar = theme::progress_bar((*pct).into(), 6);
                     let eta = eta_secs.map(|s| format!("  {}s", s)).unwrap_or_default();
-                    if is_leg_sel {
-                        // Active selection: bright highlight
-                        all_content.push(Line::from(vec![
-                            Span::styled(
-                                format!("  \u{25b8} {} ", theme::spinner(app.tick)),
-                                Style::default().fg(C_DONE).bg(C_SELECTED),
-                            ),
-                            Span::styled(
-                                format!("{}  {}  {}%  {}{}", title, fmt, pct, bar, eta),
-                                style_selected(),
-                            ),
-                        ]));
+                    // Pinned-right STATUS: fmt · % · bar · eta (always visible).
+                    let status = format!("{}  {}%  {}{}", fmt, pct, bar, eta);
+                    let (marker, marker_style, title_style, status_style) = if is_leg_sel {
+                        (
+                            format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                            Style::default().fg(C_DONE).bg(C_SELECTED),
+                            style_selected(),
+                            style_selected(),
+                        )
                     } else if is_leg_dim {
-                        // Inactive selection: dim marker
-                        all_content.push(Line::from(vec![
-                            Span::styled(
-                                format!("  \u{25b8} {} ", theme::spinner(app.tick)),
-                                style_dim(),
-                            ),
-                            Span::styled(title.clone(), style_muted()),
-                            Span::styled(
-                                format!("  {}  {}%  {}{}", fmt, pct, bar, eta),
-                                style_dim(),
-                            ),
-                        ]));
+                        (
+                            format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                            style_dim(),
+                            style_muted(),
+                            style_dim(),
+                        )
                     } else {
-                        all_content.push(Line::from(vec![
-                            Span::styled(format!("  {} ", theme::spinner(app.tick)), style_muted()),
-                            Span::styled(title.clone(), style_normal()),
-                            Span::styled(
-                                format!("  {}  {}%  {}{}", fmt, pct, bar, eta),
-                                style_muted(),
-                            ),
-                        ]));
-                    }
+                        (
+                            format!("  {} ", theme::spinner(app.tick)),
+                            style_muted(),
+                            style_normal(),
+                            style_muted(),
+                        )
+                    };
+                    // Focused leg: advance + use its title marquee; else `…`.
+                    let marquee_off = if is_leg_sel {
+                        let budget = row_w
+                            .saturating_sub(
+                                crate::textfit::display_width(&marker)
+                                    + crate::textfit::display_width(&status),
+                            )
+                            .saturating_sub(2);
+                        app.advance_activity_marquee(crate::textfit::display_width(title), budget);
+                        app.activity_marquee_offset
+                    } else {
+                        0
+                    };
+                    all_content.push(activity_leg_line(
+                        marker,
+                        marker_style,
+                        title,
+                        title_style,
+                        status,
+                        status_style,
+                        row_w,
+                        is_leg_sel,
+                        marquee_off,
+                    ));
                     leg_map.push(Some(leg_idx)); // transfer-leg row — selectable
                     leg_idx += 1;
                 }
@@ -1366,33 +1429,56 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
             )));
             leg_map.push(None); // host label — not a selectable leg
             for (title, pct, _) in transfers {
-                let is_leg_sel = activity_active && leg_idx == app.activity_selected;
-                let is_leg_dim = !activity_active && leg_idx == app.activity_selected;
+                let is_leg_sel = activity_active && leg_idx == sel_leg;
+                let is_leg_dim = !activity_active && leg_idx == sel_leg;
                 let bar = theme::progress_bar((*pct).into(), 6);
-                if is_leg_sel {
-                    all_content.push(Line::from(vec![
-                        Span::styled(
-                            format!("  \u{25b8} {} ", theme::spinner(app.tick)),
-                            Style::default().fg(C_DONE).bg(C_SELECTED),
-                        ),
-                        Span::styled(format!("{}  {}%  {}", title, pct, bar), style_selected()),
-                    ]));
+                // Pinned-right STATUS: % · bar (always visible).
+                let status = format!("{}%  {}", pct, bar);
+                let (marker, marker_style, title_style, status_style) = if is_leg_sel {
+                    (
+                        format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                        Style::default().fg(C_DONE).bg(C_SELECTED),
+                        style_selected(),
+                        style_selected(),
+                    )
                 } else if is_leg_dim {
-                    all_content.push(Line::from(vec![
-                        Span::styled(
-                            format!("  \u{25b8} {} ", theme::spinner(app.tick)),
-                            style_dim(),
-                        ),
-                        Span::styled(title.clone(), style_muted()),
-                        Span::styled(format!("  {}%  {}", pct, bar), style_dim()),
-                    ]));
+                    (
+                        format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                        style_dim(),
+                        style_muted(),
+                        style_dim(),
+                    )
                 } else {
-                    all_content.push(Line::from(vec![
-                        Span::styled(format!("  {} ", theme::spinner(app.tick)), style_muted()),
-                        Span::styled(title.clone(), style_normal()),
-                        Span::styled(format!("  {}%  {}", pct, bar), style_muted()),
-                    ]));
-                }
+                    (
+                        format!("  {} ", theme::spinner(app.tick)),
+                        style_muted(),
+                        style_normal(),
+                        style_muted(),
+                    )
+                };
+                let marquee_off = if is_leg_sel {
+                    let budget = row_w
+                        .saturating_sub(
+                            crate::textfit::display_width(&marker)
+                                + crate::textfit::display_width(&status),
+                        )
+                        .saturating_sub(2);
+                    app.advance_activity_marquee(crate::textfit::display_width(title), budget);
+                    app.activity_marquee_offset
+                } else {
+                    0
+                };
+                all_content.push(activity_leg_line(
+                    marker,
+                    marker_style,
+                    title,
+                    title_style,
+                    status,
+                    status_style,
+                    row_w,
+                    is_leg_sel,
+                    marquee_off,
+                ));
                 leg_map.push(Some(leg_idx)); // transfer-leg row — selectable
                 leg_idx += 1;
             }
@@ -1565,11 +1651,49 @@ fn selected_book_hint_state(app: &AppState) -> &'static str {
     "unknown"
 }
 
-fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
-    // The command-line input is rendered in its own row by render_command_line;
-    // this bar shows a transient status message, a `:`-mode prompt, or the
-    // focus-appropriate hint keys.
+/// Build the focus/state-appropriate hint string for the global bottom bar
+/// (everything except `:` command mode and transient status messages, which
+/// are single, non-wrapping lines). The returned string uses ` · ` / double
+/// space hint boundaries that [`wrap_hint`] breaks on.
+fn global_hint_text(app: &AppState) -> String {
+    // ⏎ is universal (shown only in the Help screen per #70) — never in the hint bar.
+    const GLOBALS: &str = "  : command \u{00b7} ? help \u{00b7} q quit";
+    match app.focus {
+        Focus::Header => {
+            // Header focus owns the LIST ops (re-search / pause / start / delete).
+            format!(
+                "\u{2190}\u{2192} filter  r re-search \u{00b7} p pause \u{00b7} s start \u{00b7} D delete  [ ] list{GLOBALS}"
+            )
+        }
+        Focus::List => {
+            let state = selected_book_hint_state(app);
+            match state {
+                "needs_selection" => format!("choose  d detail{GLOBALS}"),
+                "failed" => format!("r retry  d detail{GLOBALS}"),
+                "done" => format!("d detail \u{00b7} o open{GLOBALS}"),
+                "downloading" => format!("p pause \u{00b7} c cancel  d detail{GLOBALS}"),
+                _ => format!("d detail{GLOBALS}"),
+            }
+        }
+        Focus::Activity => {
+            // p/c/r act on the focused download leg — only show them when a leg
+            // exists; otherwise just the pane/collapse keys.
+            if app.activity_has_legs() {
+                format!(
+                    "p pause \u{00b7} c cancel \u{00b7} r retry \u{00b7} space collapse{GLOBALS}"
+                )
+            } else {
+                format!("tab pane \u{00b7} space collapse{GLOBALS}")
+            }
+        }
+    }
+}
 
+/// Build the global bottom-bar lines, WRAPPING the focus hints to as many lines
+/// as the width needs so no hint is dropped (#7). The `:` command prompt and
+/// transient status message stay single-line. The caller sizes the bar area to
+/// `.len()` rows.
+fn hint_bar_lines(app: &AppState, width: u16) -> Vec<Line<'static>> {
     // ── `:` command-line mode → a PROMPT plus only the keys live here. ──
     // The `:add` argument sub-mode shows the book-entry prompt; the bare
     // command line shows a generic "type a command" prompt.
@@ -1593,47 +1717,97 @@ fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
         }
         spans.push(Span::styled("esc", key));
         spans.push(Span::styled(" cancel", style_hint()));
-        frame.render_widget(Paragraph::new(Line::from(spans)).style(style_hint()), area);
-        return;
+        return vec![Line::from(spans)];
     }
 
-    let content = if let Some(ref msg) = app.status_msg {
+    if let Some(ref msg) = app.status_msg {
         // Transient status message — shown until the next keypress.
-        Line::from(Span::styled(msg.as_str(), Style::default().fg(C_BRIGHT)))
-    } else {
-        // ⏎ is universal (shown only in the Help screen per #70) — never in the hint bar.
-        const GLOBALS: &str = "  : command \u{00b7} ? help \u{00b7} q quit";
-        let hint: String = match app.focus {
-            Focus::Header => {
-                // Header focus owns the LIST ops (re-search / pause / start / delete).
-                format!(
-                    "\u{2190}\u{2192} filter  r re-search \u{00b7} p pause \u{00b7} s start \u{00b7} D delete  [ ] list{GLOBALS}"
-                )
-            }
-            Focus::List => {
-                let state = selected_book_hint_state(app);
-                match state {
-                    "needs_selection" => format!("choose  d detail{GLOBALS}"),
-                    "failed" => format!("r retry  d detail{GLOBALS}"),
-                    "done" => format!("d detail \u{00b7} o open{GLOBALS}"),
-                    "downloading" => format!("p pause \u{00b7} c cancel  d detail{GLOBALS}"),
-                    _ => format!("d detail{GLOBALS}"),
-                }
-            }
-            Focus::Activity => {
-                // p/c/r act on the focused download leg — only show them when a leg
-                // exists; otherwise just the pane/collapse keys.
-                if app.activity_has_legs() {
-                    format!("p pause \u{00b7} c cancel \u{00b7} r retry \u{00b7} space collapse{GLOBALS}")
-                } else {
-                    format!("tab pane \u{00b7} space collapse{GLOBALS}")
-                }
-            }
-        };
-        hint_line(&hint)
-    };
+        return vec![Line::from(Span::styled(
+            msg.clone(),
+            Style::default().fg(C_BRIGHT),
+        ))];
+    }
 
-    frame.render_widget(Paragraph::new(content).style(style_hint()), area);
+    wrap_hint_lines(&global_hint_text(app), width)
+}
+
+/// Context-aware Detail-modal footer hint, varying by sub-focus and the
+/// selected variation's state. `m` reads "mark unavailable"; `S`
+/// (download-series) is live across the whole detail context. Uses ` · ` hint
+/// boundaries so [`wrap_hint`] can wrap it (#8).
+fn detail_hint_text(
+    sub_focus: &DetailSubFocus,
+    fb: &crate::app::FlatBook,
+    detail_selected: usize,
+) -> &'static str {
+    match sub_focus {
+        DetailSubFocus::History => "S series \u{00b7} esc back",
+        DetailSubFocus::Variations => {
+            let var_state = fb
+                .book
+                .versions
+                .get(detail_selected)
+                .map(|v| v.state.as_str())
+                .unwrap_or("available");
+            match var_state {
+                "done" => {
+                    "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                }
+                "downloading" => {
+                    "e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                }
+                "failed" | "cancelled" => {
+                    "r retry  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                }
+                _ => {
+                    // available / queued
+                    "d download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                }
+            }
+        }
+    }
+}
+
+/// Context-sensitive Settings-modal footer hint (⏎ omitted per #70). Pulled out
+/// of `render_settings_modal` so its WRAPPED height can be measured before the
+/// modal layout reserves the footer rows (#8). `None`/`Viewing` share a branch.
+fn settings_hint_text(app: &AppState) -> String {
+    let editor = app.settings_draft.as_ref().map(|d| &d.editor);
+    match editor {
+        Some(SettingsEditor::Editing(_)) => "type \u{00b7} esc cancel".into(),
+        Some(SettingsEditor::FormatEditor { .. }) => {
+            "space toggle \u{00b7} J/K reorder \u{00b7} esc done".into()
+        }
+        Some(SettingsEditor::LangPicker { .. }) => "\u{2191}\u{2193} \u{00b7} esc".into(),
+        _ => {
+            // Viewing (or no draft yet).
+            let field_hint = match settings_field_kind(app.settings_selected) {
+                SettingsFieldKind::FormatPref => "format editor",
+                SettingsFieldKind::Language => "pick",
+                SettingsFieldKind::F32 | SettingsFieldKind::Usize | SettingsFieldKind::U32 => {
+                    "\u{2190}\u{2192} nudge"
+                }
+                SettingsFieldKind::Bool => "space toggle",
+                SettingsFieldKind::Text => "type",
+                SettingsFieldKind::ReadOnly => "",
+            };
+            // Maintenance hot keys live in the Viewing sub-mode.
+            const MAINT: &str = "r mirrors \u{00b7} o reorganize \u{00b7} c cleanup";
+            if field_hint.is_empty() {
+                format!("{MAINT}  s save \u{00b7} esc cancel")
+            } else {
+                format!("{field_hint}  {MAINT}  s save \u{00b7} esc cancel")
+            }
+        }
+    }
+}
+
+fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
+    // The command-line input is rendered in its own row by render_command_line;
+    // this bar shows a transient status message, a `:`-mode prompt, or the
+    // focus-appropriate hint keys (wrapped over multiple lines if needed).
+    let lines = hint_bar_lines(app, area.width);
+    frame.render_widget(Paragraph::new(lines).style(style_hint()), area);
 }
 
 // ---------------------------------------------------------------------------
@@ -1711,12 +1885,15 @@ fn render_picker_modal(
         vertical: 1,
     });
 
-    // Layout: subheader (1) + column header row (1) + table rows + rule (1) + hint (1)
+    // Layout: subheader (1) + column header row (1) + table rows + rule (1) + hint (wraps)
+    const PICKER_HINT: &str =
+        "\u{2191}\u{2193} pick  \u{23ce} this copy  a all formats  v meta  esc cancel";
+    let picker_hint_h = hint_wrap_height(PICKER_HINT, padded.width);
     let split = Layout::vertical([
-        Constraint::Length(1), // subheader
-        Constraint::Min(1),    // header + rows
-        Constraint::Length(1), // dim rule
-        Constraint::Length(1), // hint
+        Constraint::Length(1),             // subheader
+        Constraint::Min(1),                // header + rows
+        Constraint::Length(1),             // dim rule
+        Constraint::Length(picker_hint_h), // hint (wraps at narrow widths)
     ])
     .split(padded);
 
@@ -1902,10 +2079,7 @@ fn render_picker_modal(
     // Dim rule + hint bar (⏎ omitted — see Help screen).
     render_rule(frame, split[2]);
     frame.render_widget(
-        Paragraph::new(hint_line(
-            "\u{2191}\u{2193} pick  \u{23ce} this copy  a all formats  v meta  esc cancel",
-        ))
-        .style(style_hint()),
+        Paragraph::new(wrap_hint_lines(PICKER_HINT, split[3].width)).style(style_hint()),
         split[3],
     );
 }
@@ -1995,10 +2169,16 @@ fn render_detail_modal(
         .filter(|v| v.state == "downloading")
         .count();
     let var_rows_h = (n_versions.max(1) + 1 + n_downloading) as u16; // header + rows + progress lines
-                                                                     // Subtract all fixed rows: title(1)+subtitle(1)+blank(1)+VARIATIONS(1)+var_rows(n)+blank(1)+HISTORY(1)+rule(1)+hint(1).
+
+    // Context-aware hint footer (#8): compute it up front so the footer area can
+    // GROW to the number of WRAPPED lines at this width — no hint is dropped.
+    let detail_hint = detail_hint_text(sub_focus, &fb, detail_selected);
+    let hint_h = hint_wrap_height(detail_hint, padded.width);
+
+    // Subtract all fixed rows: title(1)+subtitle(1)+blank(1)+VARIATIONS(1)+var_rows(n)+blank(1)+HISTORY(1)+rule(1)+hint(hint_h).
     let history_h = padded
         .height
-        .saturating_sub(1 + 1 + 1 + 1 + var_rows_h + 1 + 1 + 1 + 1); // = available for history
+        .saturating_sub(1 + 1 + 1 + 1 + var_rows_h + 1 + 1 + 1 + hint_h); // = available for history
 
     let split = Layout::vertical([
         Constraint::Length(1),          // title line
@@ -2010,7 +2190,7 @@ fn render_detail_modal(
         Constraint::Length(1),          // HISTORY label
         Constraint::Min(history_h),     // history rows
         Constraint::Length(1),          // dim rule
-        Constraint::Length(1),          // hint
+        Constraint::Length(hint_h),     // hint (wraps at narrow widths)
     ])
     .split(padded);
 
@@ -2411,38 +2591,9 @@ fn render_detail_modal(
     // Dim rule above hint (⏎/↑↓/tab omitted per #64).
     render_rule(frame, split[8]);
 
-    // Context-aware hint: varies by sub-focus and selected variation state.
-    // `m` now reads "mark unavailable" (a verb). `S` (download-series) is live in
-    // the whole detail context, so every row advertises it. The stale `p`/`c`
-    // chips are gone — neither key fires inside the detail modal.
-    let detail_hint: &str = match sub_focus {
-        DetailSubFocus::History => "S series \u{00b7} esc back",
-        DetailSubFocus::Variations => {
-            let var_state = fb
-                .book
-                .versions
-                .get(detail_selected)
-                .map(|v| v.state.as_str())
-                .unwrap_or("available");
-            match var_state {
-                "done" => {
-                    "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
-                }
-                "downloading" => {
-                    "e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
-                }
-                "failed" | "cancelled" => {
-                    "r retry  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
-                }
-                _ => {
-                    // available / queued
-                    "d download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
-                }
-            }
-        }
-    };
+    // Context-aware hint footer — wraps to as many lines as `hint_h` reserved.
     frame.render_widget(
-        Paragraph::new(hint_line(detail_hint)).style(style_hint()),
+        Paragraph::new(wrap_hint_lines(detail_hint, split[9].width)).style(style_hint()),
         split[9],
     );
 }
@@ -2505,11 +2656,14 @@ fn render_settings_modal(frame: &mut Frame, app: &mut AppState) {
         vertical: 1,
     });
 
-    // Min(field list) + rule(1) + hint(1)
+    // Min(field list) + rule(1) + hint(wraps). Compute the wrapped footer height
+    // up front (read-only) so the field list gives back exactly the rows it needs.
+    let settings_hint = settings_hint_text(app);
+    let settings_hint_h = hint_wrap_height(&settings_hint, padded.width);
     let split = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(settings_hint_h),
     ])
     .split(padded);
 
@@ -2762,36 +2916,10 @@ fn render_settings_modal(frame: &mut Frame, app: &mut AppState) {
     let list = List::new(items).block(Block::default().borders(Borders::NONE));
     frame.render_widget(list, split[0]);
 
-    // Dim rule + context-sensitive hint (⏎ omitted per #70).
+    // Dim rule + context-sensitive hint (⏎ omitted per #70). Wraps at narrow widths.
     render_rule(frame, split[1]);
-    let hint_text: String = match &draft.editor {
-        SettingsEditor::Editing(_) => "type \u{00b7} esc cancel".into(),
-        SettingsEditor::FormatEditor { .. } => {
-            "space toggle \u{00b7} J/K reorder \u{00b7} esc done".into()
-        }
-        SettingsEditor::LangPicker { .. } => "\u{2191}\u{2193} \u{00b7} esc".into(),
-        SettingsEditor::Viewing => {
-            let field_hint = match settings_field_kind(app.settings_selected) {
-                SettingsFieldKind::FormatPref => "format editor",
-                SettingsFieldKind::Language => "pick",
-                SettingsFieldKind::F32 | SettingsFieldKind::Usize | SettingsFieldKind::U32 => {
-                    "\u{2190}\u{2192} nudge"
-                }
-                SettingsFieldKind::Bool => "space toggle",
-                SettingsFieldKind::Text => "type",
-                SettingsFieldKind::ReadOnly => "",
-            };
-            // Maintenance hot keys live in the Viewing sub-mode.
-            const MAINT: &str = "r mirrors \u{00b7} o reorganize \u{00b7} c cleanup";
-            if field_hint.is_empty() {
-                format!("{MAINT}  s save \u{00b7} esc cancel")
-            } else {
-                format!("{field_hint}  {MAINT}  s save \u{00b7} esc cancel")
-            }
-        }
-    };
     frame.render_widget(
-        Paragraph::new(hint_line(&hint_text)).style(style_hint()),
+        Paragraph::new(wrap_hint_lines(&settings_hint, split[2].width)).style(style_hint()),
         split[2],
     );
 
@@ -3904,6 +4032,92 @@ fn is_key_token(tok: &str) -> bool {
     tok.contains('/') && cc <= 4 // J/K, p/c
 }
 
+/// Split a hint string into `(unit, separator_after)` pairs, breaking only at
+/// **hint boundaries** — a ` · ` middot separator or a double-space group gap.
+/// Single spaces inside a unit (the `key desc` gap) are preserved. The last
+/// unit carries an empty separator.
+fn split_hint_units(s: &str) -> Vec<(String, String)> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut units: Vec<(String, String)> = Vec::new();
+    let mut cur = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        // " · " — space, middot, space.
+        if chars[i] == ' '
+            && i + 2 < chars.len()
+            && chars[i + 1] == '\u{00b7}'
+            && chars[i + 2] == ' '
+        {
+            units.push((std::mem::take(&mut cur), " \u{00b7} ".to_string()));
+            i += 3;
+            continue;
+        }
+        // "  " — double-space group gap.
+        if chars[i] == ' ' && i + 1 < chars.len() && chars[i + 1] == ' ' {
+            units.push((std::mem::take(&mut cur), "  ".to_string()));
+            i += 2;
+            continue;
+        }
+        cur.push(chars[i]);
+        i += 1;
+    }
+    units.push((cur, String::new()));
+    units
+}
+
+/// Wrap a hint string into as many lines as needed so it fits `width` display
+/// columns, breaking **only** at hint boundaries (` · ` / group gaps) so no hint
+/// token is ever dropped or ellipsized. A single hint wider than `width` keeps
+/// its own line (it overflows rather than being split). Always ≥1 line.
+fn wrap_hint(s: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![s.to_string()];
+    }
+    let units = split_hint_units(s);
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+    for (idx, (unit, _)) in units.iter().enumerate() {
+        let uw = crate::textfit::display_width(unit);
+        let sep = if idx == 0 {
+            ""
+        } else {
+            units[idx - 1].1.as_str()
+        };
+        let sep_w = crate::textfit::display_width(sep);
+        if cur.is_empty() {
+            cur.push_str(unit);
+            cur_w = uw;
+        } else if cur_w + sep_w + uw <= width {
+            cur.push_str(sep);
+            cur.push_str(unit);
+            cur_w += sep_w + uw;
+        } else {
+            lines.push(std::mem::take(&mut cur));
+            cur.push_str(unit);
+            cur_w = uw;
+        }
+    }
+    if !cur.is_empty() || lines.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
+/// Number of lines [`wrap_hint`] yields for `s` at `width` columns (≥1).
+fn hint_wrap_height(s: &str, width: u16) -> u16 {
+    wrap_hint(s, width as usize).len().max(1) as u16
+}
+
+/// Wrap a hint string and style each line with [`hint_line`], ready to drop into
+/// a (grown) hint/footer area as a `Paragraph`.
+fn wrap_hint_lines(s: &str, width: u16) -> Vec<Line<'static>> {
+    wrap_hint(s, width as usize)
+        .into_iter()
+        .map(|l| hint_line(&l))
+        .collect()
+}
+
 /// Build a hint/footer line with hotkey KEY tokens in green and descriptions
 /// dim — the shared treatment for the bottom bar and every modal footer.
 fn hint_line(s: &str) -> Line<'static> {
@@ -3990,4 +4204,144 @@ fn render_snapshot_modal(frame: &mut Frame, title: &str, lines: &[(String, Strin
         Paragraph::new(Span::styled("esc  close", style_hint())),
         split[2],
     );
+}
+
+#[cfg(test)]
+mod hint_wrap_tests {
+    use super::*;
+    use crate::textfit::display_width;
+
+    /// Collect the non-separator hint tokens (e.g. "q quit", "esc back") from a
+    /// hint string, so a wrap can be checked for losing none of them.
+    fn hint_tokens(s: &str) -> Vec<String> {
+        split_hint_units(s)
+            .into_iter()
+            .map(|(u, _)| u)
+            .filter(|u| !u.trim().is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn wrap_wide_keeps_everything_on_one_line() {
+        // A hint that fits stays a single line.
+        let s = "d detail  : command \u{00b7} ? help \u{00b7} q quit";
+        let lines = wrap_hint(s, 200);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], s);
+    }
+
+    #[test]
+    fn wrap_narrow_grows_to_multiple_lines() {
+        let s = "\u{2190}\u{2192} filter  r re-search \u{00b7} p pause \u{00b7} s start \u{00b7} D delete  [ ] list  : command \u{00b7} ? help \u{00b7} q quit";
+        // Width 80 must not fit this whole header hint on one line.
+        let lines = wrap_hint(s, 80);
+        assert!(lines.len() >= 2, "expected wrap at 80, got {lines:?}");
+        // hint_wrap_height agrees with wrap_hint length.
+        assert_eq!(hint_wrap_height(s, 80) as usize, lines.len());
+        // Every wrapped line fits within the width.
+        for l in &lines {
+            assert!(display_width(l) <= 80, "line over width: {l:?}");
+        }
+    }
+
+    #[test]
+    fn wrap_loses_no_hint_token() {
+        // The longest footer (detail "done" row) at a narrow modal width.
+        let s = "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back";
+        let before = hint_tokens(s);
+        let lines = wrap_hint(s, 40);
+        assert!(lines.len() >= 2, "expected wrap at 40");
+        // Re-tokenize every wrapped line and confirm the multiset is unchanged.
+        let mut after: Vec<String> = lines.iter().flat_map(|l| hint_tokens(l)).collect();
+        let mut before_sorted = before.clone();
+        before_sorted.sort();
+        after.sort();
+        assert_eq!(before_sorted, after, "a hint token was dropped or altered");
+        // Critical tail tokens are present.
+        assert!(after.iter().any(|t| t == "esc back"));
+        assert!(after.iter().any(|t| t == "o open"));
+    }
+
+    #[test]
+    fn wrap_single_oversized_hint_stays_intact() {
+        // A single hint wider than the width keeps its own line (never split).
+        let s = "enter a very long single hint token here";
+        let lines = wrap_hint(s, 10);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], s);
+    }
+
+    #[test]
+    fn activity_leg_pins_status_and_flexes_title() {
+        let row_w = 50;
+        let title = "A Very Long Book Title That Will Not Fit In The Row At All";
+        let status = "EPUB  42%  \u{2593}\u{2593}\u{2593}\u{2591}\u{2591}\u{2591}  12s";
+        let line = activity_leg_line(
+            "  \u{25b8} . ".to_string(),
+            Style::default(),
+            title,
+            Style::default(),
+            status.to_string(),
+            Style::default(),
+            row_w,
+            false, // not focused → ellipsize
+            0,
+        );
+        // The whole row never exceeds row_w columns.
+        let total: usize = line
+            .spans
+            .iter()
+            .map(|sp| display_width(sp.content.as_ref()))
+            .sum();
+        assert!(total <= row_w, "row over width: {total} > {row_w}");
+        // The STATUS is the last span, pinned and intact (fully visible).
+        let last = line.spans.last().unwrap();
+        assert_eq!(last.content.as_ref(), status);
+        // The TITLE (2nd span) was ellipsized (does not contain the full title).
+        let title_span = line.spans[1].content.as_ref();
+        assert!(
+            title_span.ends_with('\u{2026}'),
+            "title not ellipsized: {title_span:?}"
+        );
+        assert!(display_width(title_span) < display_width(title));
+    }
+
+    #[test]
+    fn activity_leg_focused_marquees_title() {
+        let row_w = 40;
+        let title = "0123456789abcdefghijklmnopqrstuvwxyz";
+        let status = "50%  \u{2593}\u{2593}\u{2593}";
+        // offset 0 vs a later offset must show different title windows (scrolling).
+        let l0 = activity_leg_line(
+            "  ".to_string(),
+            Style::default(),
+            title,
+            Style::default(),
+            status.to_string(),
+            Style::default(),
+            row_w,
+            true,
+            0,
+        );
+        let l3 = activity_leg_line(
+            "  ".to_string(),
+            Style::default(),
+            title,
+            Style::default(),
+            status.to_string(),
+            Style::default(),
+            row_w,
+            true,
+            3,
+        );
+        // Status still pinned + intact in both.
+        assert_eq!(l0.spans.last().unwrap().content.as_ref(), status);
+        assert_eq!(l3.spans.last().unwrap().content.as_ref(), status);
+        // The marquee window slid → the visible title differs.
+        assert_ne!(
+            l0.spans[1].content.as_ref(),
+            l3.spans[1].content.as_ref(),
+            "marquee offset had no effect"
+        );
+    }
 }
