@@ -6023,6 +6023,60 @@ mod tests {
     // #62 — Marquee scroll (Detail modal · Title·Author ping-pong)
     // -----------------------------------------------------------------------
 
+    /// Task 11: the marquee step budget is a function of ELAPSED time, not the
+    /// number of renders. Two renders in the same step window owe 0 extra steps,
+    /// so a burst of (wheel-driven) re-renders can't accelerate the marquees.
+    #[test]
+    fn marquee_phase_is_time_driven_not_render_driven() {
+        use crate::app::MARQUEE_STEP_MS;
+        use std::time::{Duration, Instant};
+
+        let mut app = AppState::new();
+        // Pretend ~3 step-intervals of wall-clock time have elapsed.
+        app.marquee_epoch =
+            Instant::now() - Duration::from_millis((MARQUEE_STEP_MS as u64) * 3 + 10);
+        app.marquee_phase = 0;
+
+        app.begin_marquee_frame();
+        assert_eq!(
+            app.marquee_steps_due, 3,
+            "≈3 step intervals elapsed → 3 steps"
+        );
+
+        // A second render almost immediately afterwards owes NO further steps —
+        // the budget tracks elapsed time, not render count.
+        app.begin_marquee_frame();
+        assert_eq!(
+            app.marquee_steps_due, 0,
+            "extra renders within a step window must not advance the marquee"
+        );
+
+        // Many rapid renders (simulating a wheel burst) still owe 0 steps.
+        for _ in 0..50 {
+            app.begin_marquee_frame();
+            assert_eq!(
+                app.marquee_steps_due, 0,
+                "wheel-burst renders never accelerate"
+            );
+        }
+    }
+
+    /// A long idle gap is capped so returning to the app doesn't fast-forward.
+    #[test]
+    fn marquee_step_budget_is_capped_after_idle() {
+        use crate::app::MARQUEE_STEP_MS;
+        use std::time::{Duration, Instant};
+        let mut app = AppState::new();
+        app.marquee_epoch = Instant::now() - Duration::from_millis((MARQUEE_STEP_MS as u64) * 1000);
+        app.marquee_phase = 0;
+        app.begin_marquee_frame();
+        assert!(
+            app.marquee_steps_due <= 4,
+            "huge idle gap is capped, got {}",
+            app.marquee_steps_due
+        );
+    }
+
     /// advance_marquee scrolls forward by 1 each tick when text overflows.
     #[test]
     fn marquee_advances_forward_when_overflowing() {

@@ -4,6 +4,8 @@
 //! dispatches. `apply` folds engine events into the state.  Both are trivially
 //! unit-testable because they take and return plain data.
 
+use std::time::Instant;
+
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use libgen_engine::{AppSettings, ViewBook, ViewEvent, ViewGroup, ViewModel, ViewVariation};
 use ratatui::layout::Rect;
@@ -799,7 +801,27 @@ pub struct AppState {
     /// Leg index active when the activity marquee was last reset (moving the
     /// selection resets offset + direction).
     pub activity_marquee_sel: usize,
+
+    // ── Time-driven marquee stepping (task 11) ────────────────────────────────
+    /// Wall-clock epoch all marquee phases are measured from. Marquees advance
+    /// one ping-pong step per [`MARQUEE_STEP_MS`] of ELAPSED time rather than
+    /// once per render, so a burst of redraws (e.g. mouse-wheel scrolling the
+    /// book list) no longer speeds the marquees up.
+    pub marquee_epoch: Instant,
+    /// The elapsed-time phase (`elapsed / MARQUEE_STEP_MS`) last applied to the
+    /// marquees — `begin_marquee_frame` diffs against it to find how many steps
+    /// are owed this frame.
+    pub marquee_phase: u64,
+    /// Steps owed to every marquee this frame (`begin_marquee_frame` recomputes
+    /// it from elapsed time; the `advance_*_marquee` helpers consume it). Starts
+    /// at 1 so direct (non-render) callers — unit tests — still step once.
+    pub marquee_steps_due: u32,
 }
+
+/// How long (wall-clock) one marquee ping-pong step takes. Pairs with the 120 ms
+/// redraw tick and keeps the end-of-travel pause at ~960 ms (8 steps). Marquee
+/// speed is now a function of ELAPSED time, independent of render frequency.
+pub const MARQUEE_STEP_MS: u128 = 120;
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
 #[derive(Debug, Clone)]
@@ -823,30 +845,36 @@ fn step_marquee(
     pause: &mut u8,
     text_disp_w: usize,
     col_w: usize,
+    steps: u32,
 ) {
     if text_disp_w <= col_w {
-        // Text fits: park at zero.
+        // Text fits: park at zero (regardless of `steps`).
         *offset = 0;
         *forward = true;
         *pause = 0;
         return;
     }
     let max_offset = text_disp_w.saturating_sub(col_w);
-    if *pause > 0 {
-        *pause -= 1;
-        return;
-    }
-    if *forward {
-        *offset = (*offset + 1).min(max_offset);
-        if *offset >= max_offset {
-            *forward = false;
-            *pause = 8; // ~960 ms pause at the end
+    // Apply `steps` ping-pong increments — `steps` is how many MARQUEE_STEP_MS
+    // intervals elapsed since the last frame (usually 0 or 1), so the scroll
+    // speed tracks wall-clock time rather than redraw frequency (task 11).
+    for _ in 0..steps {
+        if *pause > 0 {
+            *pause -= 1;
+            continue;
         }
-    } else if *offset == 0 {
-        *forward = true;
-        *pause = 8; // ~960 ms pause at the start
-    } else {
-        *offset -= 1;
+        if *forward {
+            *offset = (*offset + 1).min(max_offset);
+            if *offset >= max_offset {
+                *forward = false;
+                *pause = 8; // ~960 ms pause at the end
+            }
+        } else if *offset == 0 {
+            *forward = true;
+            *pause = 8; // ~960 ms pause at the start
+        } else {
+            *offset -= 1;
+        }
     }
 }
 
@@ -901,7 +929,26 @@ impl AppState {
             activity_marquee_forward: true,
             activity_marquee_pause: 0,
             activity_marquee_sel: 0,
+            marquee_epoch: Instant::now(),
+            marquee_phase: 0,
+            // Default to one step so direct unit-test callers of the
+            // `advance_*_marquee` helpers still advance by one; the render loop
+            // overrides this each frame via `begin_marquee_frame`.
+            marquee_steps_due: 1,
         }
+    }
+
+    /// Recompute how many marquee steps are owed this frame from ELAPSED time
+    /// (task 11). Call once at the start of each render: marquees then advance at
+    /// a constant wall-clock rate ([`MARQUEE_STEP_MS`] per step) regardless of how
+    /// often the screen is redrawn, so wheel-triggered re-renders don't speed
+    /// them up. The delta is capped so returning from a long idle/pause doesn't
+    /// fast-forward the scroll.
+    pub fn begin_marquee_frame(&mut self) {
+        let phase = (self.marquee_epoch.elapsed().as_millis() / MARQUEE_STEP_MS) as u64;
+        let due = phase.saturating_sub(self.marquee_phase);
+        self.marquee_steps_due = due.min(4) as u32;
+        self.marquee_phase = phase;
     }
 
     /// Return the same `Intent` that `Enter` would produce for the currently
@@ -952,12 +999,14 @@ impl AppState {
     /// `textfit::marquee_window` / `marquee_char_range` when slicing.
     /// Must be called once per render tick while the Detail modal is open.
     pub fn advance_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        let steps = self.marquee_steps_due;
         step_marquee(
             &mut self.marquee_offset,
             &mut self.marquee_forward,
             &mut self.marquee_pause,
             text_disp_w,
             col_w,
+            steps,
         );
     }
 
@@ -968,12 +1017,14 @@ impl AppState {
     /// `text_disp_w` is the display width of that row's flexing text (Mode A
     /// title·author, or Mode B whole packed line) and `col_w` its window width.
     pub fn advance_var_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        let steps = self.marquee_steps_due;
         step_marquee(
             &mut self.var_marquee_offset,
             &mut self.var_marquee_forward,
             &mut self.var_marquee_pause,
             text_disp_w,
             col_w,
+            steps,
         );
     }
 
@@ -993,12 +1044,14 @@ impl AppState {
     /// state. `text_disp_w` is the active list label's display width and `col_w`
     /// its strip-column width.
     pub fn advance_list_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        let steps = self.marquee_steps_due;
         step_marquee(
             &mut self.list_marquee_offset,
             &mut self.list_marquee_forward,
             &mut self.list_marquee_pause,
             text_disp_w,
             col_w,
+            steps,
         );
     }
 
@@ -1019,12 +1072,14 @@ impl AppState {
     /// width and `col_w` its value-column width; call once per render while the
     /// Settings modal is open (park it — `(0, 1)` — while a field is editing).
     pub fn advance_settings_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        let steps = self.marquee_steps_due;
         step_marquee(
             &mut self.settings_marquee_offset,
             &mut self.settings_marquee_forward,
             &mut self.settings_marquee_pause,
             text_disp_w,
             col_w,
+            steps,
         );
     }
 
@@ -1045,12 +1100,14 @@ impl AppState {
     /// and `col_w` the flex region left of the pinned status; call once per
     /// render for the focused leg only.
     pub fn advance_activity_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        let steps = self.marquee_steps_due;
         step_marquee(
             &mut self.activity_marquee_offset,
             &mut self.activity_marquee_forward,
             &mut self.activity_marquee_pause,
             text_disp_w,
             col_w,
+            steps,
         );
     }
 

@@ -46,6 +46,12 @@ const ACTIVITY_COLLAPSED_H: u16 = 1;
 /// Takes `&mut AppState` so it can write back `last_rects` for mouse
 /// hit-testing.
 pub fn render(frame: &mut Frame, app: &mut AppState) {
+    // Task 11: compute how many marquee steps this frame owes from ELAPSED time
+    // (once, before any `advance_*_marquee` call) so marquee speed is tied to
+    // wall-clock time, not redraw frequency. Wheel-driven re-renders no longer
+    // accelerate the marquees.
+    app.begin_marquee_frame();
+
     // Empty / first-run screen when no view is loaded and no modal open.
     if app.view.is_none() && app.modal.is_none() {
         render_empty(frame, app);
