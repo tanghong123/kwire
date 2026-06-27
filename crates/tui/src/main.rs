@@ -54,7 +54,7 @@ use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::app::{AppState, ListSummary, Modal, ALL_LIST_ID};
+use crate::app::{AppState, HelpPage, ListSummary, Modal, ALL_LIST_ID};
 use crate::guard::TerminalGuard;
 use crate::intent::Intent;
 
@@ -516,9 +516,6 @@ async fn dispatch_intent(
                 selected: 0,
             });
         }
-        Intent::OpenHelp => {
-            app.modal = Some(Modal::Help);
-        }
         Intent::SwitchList { id } => {
             open_list(app, handles, &id).await;
             refresh_all_list_summaries(app, handles).await;
@@ -614,7 +611,12 @@ async fn handle_command_async(
             };
             app.open_settings(&app_settings);
         }
-        "help" => app.modal = Some(Modal::Help),
+        "help" => {
+            app.modal = Some(Modal::Help {
+                page: HelpPage::List,
+                parent: None,
+            })
+        }
         "import" => {
             if arg.is_empty() {
                 tracing::warn!("import: no file path given");

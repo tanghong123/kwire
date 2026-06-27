@@ -28,8 +28,9 @@ use ratatui::{
 };
 
 use crate::app::{
-    armed_variations, settings_field_kind, AppState, DetailSubFocus, EditBookField, Focus, Modal,
-    RowRef, SettingsEditor, SettingsFieldKind, StatusFilter, FORMAT_EDITOR_FORMATS,
+    armed_variations, settings_field_kind, AppState, DetailSubFocus, EditBookField, Focus,
+    HelpPage, Modal, RowRef, SettingsEditor, SettingsFieldKind, StatusFilter,
+    FORMAT_EDITOR_FORMATS,
 };
 use crate::theme::{
     self, filter_chip_color, history_kind_color, score_color, style_dim, style_header, style_hint,
@@ -140,7 +141,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
                 history_selected,
             ),
             Modal::Settings => render_settings_modal(frame, app),
-            Modal::Help => render_help_modal(frame, frame.area()),
+            Modal::Help { page, .. } => render_help_modal(frame, frame.area(), page),
             Modal::Confirm {
                 title,
                 n_books,
@@ -363,7 +364,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     if let Some(modal) = app.modal.clone() {
         render_backdrop(frame);
         match modal {
-            Modal::Help => render_help_modal(frame, area),
+            Modal::Help { page, .. } => render_help_modal(frame, area, page),
             Modal::Settings => render_settings_modal(frame, app),
             _ => {}
         }
@@ -3039,9 +3040,10 @@ fn render_lang_picker(frame: &mut Frame, parent: Rect, options: &[String], selec
 // 4d  Help screen
 // ---------------------------------------------------------------------------
 
-fn render_help_modal(frame: &mut Frame, parent: Rect) {
-    // Widen so the longest command line fits two real columns with a gutter.
-    let help_w = (parent.width.saturating_sub(4)).clamp(60, 104);
+fn render_help_modal(frame: &mut Frame, parent: Rect, page: HelpPage) {
+    // Wide enough for two `key | description` sub-columns at width 80; capped so
+    // it never sprawls on very wide terminals.
+    let help_w = (parent.width.saturating_sub(4)).clamp(60, 100);
     let area = centered_rect(help_w, 30.min(parent.height), parent);
     frame.render_widget(Clear, area);
 
@@ -3049,105 +3051,298 @@ fn render_help_modal(frame: &mut Frame, parent: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(style_dim())
-        .title(Span::styled(" Keys & Commands ", style_dim()))
+        .title(Span::styled(" Help ", style_title()))
         .style(style_normal());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    // Internal gutter: 2-cell horizontal padding, 1-cell vertical padding.
     let padded = inner.inner(Margin {
         horizontal: 2,
         vertical: 1,
     });
 
-    // Two-column layout matching the mock, with a 2-cell gutter between groups.
-    // Left: NAVIGATE + FILTER · Right: ACT ON SELECTION + ACTIVITY + COMMAND LINE.
+    // tab row (1) · rule (1) · global strip (1) · blank (1) · content (min) ·
+    // rule (1) · footer (1)
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(padded);
+
+    // ── Tab row: every page, current highlighted in green. ──
+    frame.render_widget(
+        Paragraph::new(help_tab_row(page, rows[0].width as usize)),
+        rows[0],
+    );
+    render_rule(frame, rows[1]);
+
+    // ── Compact global strip (always reachable, on every page). ──
+    frame.render_widget(
+        Paragraph::new(help_global_strip(rows[2].width as usize)).style(style_dim()),
+        rows[2],
+    );
+
+    // ── Page content: two `key | description` sub-columns. ──
+    let (left, right) = help_page_rows(page);
     let cols = Layout::horizontal([
         Constraint::Percentage(50),
         Constraint::Length(2),
         Constraint::Min(0),
     ])
-    .split(padded);
-
-    let split_left = Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(cols[0]);
-
-    // Each column owns its key-column width (longest key + 2-cell gutter) so the
-    // description can never collide with the key token (audit P1).
-    let left_rows: &[HelpRow] = &[
-        HelpRow::Head("NAVIGATE"),
-        HelpRow::Key("\u{2191} \u{2193} / j k", "move \u{00b7} cross at edge"),
-        HelpRow::Key("[ ]", "prev / next reading list"),
-        HelpRow::Key("tab / S-tab", "cycle panes"),
-        HelpRow::Key("\u{23ce}", "open \u{00b7} choose a copy"),
-        HelpRow::Key("d", "book detail & history"),
-        HelpRow::Key("esc \u{00b7} q", "back \u{00b7} quit"),
-        HelpRow::Blank,
-        HelpRow::Head("FILTER  (Header pane \u{2014} Tab to focus)"),
-        HelpRow::Key("\u{2190} \u{2192}", "move filter chip"),
-        HelpRow::Key("/", "cycle filter"),
-        HelpRow::Key("1\u{2013}6", "all/needs/check/cannot/progress/done"),
-    ];
-
-    let right_rows: &[HelpRow] = &[
-        HelpRow::Head("ACT ON SELECTION  (List pane)"),
-        HelpRow::Key("\u{23ce}", "choose a copy (picker)"),
-        HelpRow::Key("a", "fetch all preferred formats"),
-        HelpRow::Key("r", "retry \u{00b7} re-download"),
-        HelpRow::Key("p \u{00b7} c", "pause \u{00b7} cancel"),
-        HelpRow::Key("o \u{00b7} R", "open file \u{00b7} reveal in Finder"),
-        HelpRow::Blank,
-        HelpRow::Head("ACTIVITY PANE  (Tab to focus)"),
-        HelpRow::Key("\u{2191}\u{2193}", "select transfer leg"),
-        HelpRow::Key(
-            "p \u{00b7} c \u{00b7} r",
-            "pause \u{00b7} cancel \u{00b7} resume",
-        ),
-        HelpRow::Blank,
-        HelpRow::Head("COMMAND LINE  (press :)"),
-        HelpRow::Key(":settings", "open settings"),
-        HelpRow::Key(":import <file>", "add a list"),
-        HelpRow::Key(":add <title|md5>", "add one book"),
-        HelpRow::Key(":start-all", "resume downloads"),
-        HelpRow::Key(":pause-all", "pause every download"),
-    ];
-
+    .split(rows[4]);
     frame.render_widget(
-        List::new(help_column(left_rows, split_left[0].width as usize)),
-        split_left[0],
+        List::new(help_column(&left, cols[0].width as usize)),
+        cols[0],
     );
-    frame.render_widget(
-        List::new(help_column(right_rows, cols[2].width as usize)),
-        cols[2],
-    );
+    if !right.is_empty() {
+        frame.render_widget(
+            List::new(help_column(&right, cols[2].width as usize)),
+            cols[2],
+        );
+    }
 
-    // Dim rule + hint.
-    render_rule(frame, split_left[1]);
+    // ── Footer. ──
+    render_rule(frame, rows[5]);
     frame.render_widget(
-        Paragraph::new(hint_line("? or esc  to close")).style(style_hint()),
-        split_left[2],
+        Paragraph::new(hint_line(
+            "\u{2190} \u{2192} other panels \u{00b7} : command \u{00b7} esc close",
+        ))
+        .style(style_hint()),
+        rows[6],
     );
 }
 
+/// The tab row listing all Help pages, current one in green/bold, the rest dim,
+/// separated by ` \u{00b7} `. Ellipsized (display-width aware) if it overruns.
+fn help_tab_row(current: HelpPage, max_w: usize) -> Line<'static> {
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, p) in HelpPage::ALL.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" \u{00b7} ", style_dim()));
+        }
+        let style = if *p == current {
+            Style::default().fg(C_DONE).add_modifier(Modifier::BOLD)
+        } else {
+            style_dim()
+        };
+        spans.push(Span::styled(p.tab_label(), style));
+    }
+    // The labels + separators fit ~68 cols, comfortably inside an 80-wide modal;
+    // collapse to a plain ellipsized string only on the rare narrow terminal.
+    let flat: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    if crate::textfit::display_width(&flat) > max_w {
+        return Line::from(Span::styled(
+            crate::textfit::ellipsize(&flat, max_w),
+            style_dim(),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// One-line compact reminder of the always-available global keys (also a full
+/// "Global" page). Keeps the globals reachable from every context page.
+fn help_global_strip(max_w: usize) -> Line<'static> {
+    let s = "GLOBAL  ? help \u{00b7} : cmd \u{00b7} q/esc quit \u{00b7} [ ] list \u{00b7} \
+             tab panes \u{00b7} / filter \u{00b7} 1\u{2013}6 jump";
+    Line::from(Span::styled(
+        crate::textfit::ellipsize(s, max_w),
+        style_dim(),
+    ))
+}
+
 /// One row in a Help column.
-enum HelpRow {
+pub(crate) enum HelpRow {
     Head(&'static str),
     Key(&'static str, &'static str),
     Blank,
 }
 
+/// The (left, right) sub-column content for one Help page. Sourced verbatim from
+/// `docs/tui-help-keymap.md` (descriptions written from the real handlers).
+pub(crate) fn help_page_rows(page: HelpPage) -> (Vec<HelpRow>, Vec<HelpRow>) {
+    use HelpRow::{Blank, Head, Key};
+    match page {
+        HelpPage::Global => (
+            vec![
+                Head("GLOBAL KEYS"),
+                Key("?", "open / close this help"),
+                Key(":", "command line"),
+                Key("q \u{00b7} esc", "quit"),
+                Key("Ctrl-C", "quit"),
+                Key(
+                    "[ ]",
+                    "prev / next reading list (incl. \u{201c}All\u{201d})",
+                ),
+            ],
+            vec![
+                Head("FOCUS & FILTER"),
+                Key(
+                    "tab \u{00b7} S-tab",
+                    "cycle panes (Header / List / Activity)",
+                ),
+                Key("/", "cycle status filter"),
+                Key(
+                    "1\u{2013}6",
+                    "All / Needs you / Check / Cannot / In progress / Done",
+                ),
+            ],
+        ),
+        HelpPage::List => (
+            vec![
+                Head("NAVIGATE"),
+                Key(
+                    "\u{2191}\u{2193} / j k",
+                    "move (top\u{2192}Header, bottom\u{2192}Activity)",
+                ),
+                Key("S-\u{2193} / J", "page down"),
+                Key("S-\u{2191} / K", "page up"),
+                Key(
+                    "\u{23ce}",
+                    "open book (picker if needs-selection, else detail)",
+                ),
+            ],
+            vec![
+                Head("ACT ON BOOK  (any pane)"),
+                Key("d", "open detail"),
+                Key("a", "fetch all preferred formats"),
+                Key("e", "edit title / author"),
+                Key("x \u{00b7} Del", "remove (confirm)"),
+                Key("m", "mark not-found"),
+                Key("o \u{00b7} R", "open file \u{00b7} reveal in Finder"),
+                Blank,
+                Head("ACT  (List focus only)"),
+                Key("r", "retry / re-download"),
+                Key("p \u{00b7} c", "pause \u{00b7} cancel"),
+            ],
+        ),
+        HelpPage::Header => (
+            vec![
+                Head("NAVIGATE  (filter chips)"),
+                Key("\u{2190} \u{2192}", "prev / next filter chip"),
+                Key("\u{2191}\u{2193} / j k", "leave to book list"),
+            ],
+            vec![
+                Head("ACT ON LIST"),
+                Key("r", "re-query whole list"),
+                Key("p", "pause list"),
+                Key("s", "start / resume list"),
+                Key("D", "delete list (confirm)"),
+            ],
+        ),
+        HelpPage::Activity => (
+            vec![
+                Head("NAVIGATE  (transfer legs)"),
+                Key("\u{2191}\u{2193} / j k", "select leg (top\u{2192}List)"),
+                Key("\u{23ce}", "leg snapshot"),
+                Key("space", "collapse / expand pane"),
+            ],
+            vec![
+                Head("ACT ON LEG"),
+                Key("r", "resume leg"),
+                Key("p", "pause leg"),
+                Key("c", "cancel leg"),
+            ],
+        ),
+        HelpPage::Detail => (
+            vec![
+                Head("NAVIGATE"),
+                Key("tab", "switch Variations \u{2194} History"),
+                Key("\u{2191}\u{2193} / j k", "move (cross at edges)"),
+                Key("\u{23ce}", "snapshot of focused row"),
+                Key("esc", "close"),
+            ],
+            vec![
+                Head("ACT"),
+                Key("d", "download focused variation"),
+                Key("r", "retry"),
+                Key("s", "re-query (inline search)"),
+                Key("e", "edit"),
+                Key("x \u{00b7} Del", "remove"),
+                Key("m", "mark not-found"),
+                Key("S", "download series"),
+                Key("o \u{00b7} R", "open \u{00b7} reveal"),
+            ],
+        ),
+        HelpPage::Picker => (
+            vec![
+                Head("CHOOSE A COPY"),
+                Key("\u{2191}\u{2193} / j k", "move"),
+                Key("\u{23ce} \u{00b7} d", "pick this copy (arm download)"),
+            ],
+            vec![
+                Head("MORE"),
+                Key("a", "all preferred formats"),
+                Key("v", "candidate metadata"),
+                Key("esc", "close"),
+            ],
+        ),
+        HelpPage::Settings => (
+            vec![
+                Head("VIEWING"),
+                Key("\u{2191}\u{2193} / j k", "move field"),
+                Key("\u{2190} \u{2192}", "nudge focused number field"),
+                Key("space", "toggle bool"),
+                Key("\u{23ce}", "edit / sub-editor"),
+                Key("s", "save"),
+                Key("esc \u{00b7} q \u{00b7} Ctrl-G", "discard"),
+            ],
+            vec![
+                Head("MAINTENANCE"),
+                Key("r", "refresh mirrors"),
+                Key("o", "reorganize"),
+                Key("c", "cleanup"),
+                Blank,
+                Head("FORMAT EDITOR"),
+                Key("space", "include / exclude"),
+                Key("S-J / S-K", "move format down / up in priority"),
+                Key("esc \u{00b7} \u{23ce}", "commit"),
+            ],
+        ),
+        HelpPage::Cmds => (
+            vec![
+                Head("COMMANDS  (press :)"),
+                Key(":settings", "open settings"),
+                Key(":import <path>", "add a list from a file"),
+                Key(":add <title|md5>", "add one book"),
+                Key(":start-all", "resume all downloads"),
+                Key(":pause-all", "pause all downloads"),
+                Blank,
+                Head("EDITING THE : LINE"),
+                Key("tab / S-tab", "completion / wildmenu"),
+                Key("\u{2191} \u{2193}", "command history"),
+                Key("\u{23ce} \u{00b7} esc", "submit \u{00b7} close"),
+            ],
+            vec![
+                Head("MORE  (unadvertised)"),
+                Key(":requery", "re-query the list"),
+                Key(":pause [list]", "pause a list"),
+                Key(":start / :resume [list]", "start / resume a list"),
+                Key(":delete [list]", "delete a list"),
+                Key(":refresh-mirrors", "refresh mirror list"),
+                Key(":cleanup", "remove leftover .part files"),
+                Key(":reorganize", "move files into the naming layout"),
+                Key(":series / :download-series", "download a series"),
+                Key(":mouse", "toggle mouse capture"),
+                Key(":help", "open this help"),
+                Key(":quit / :q", "quit"),
+            ],
+        ),
+    }
+}
+
 /// Lay out a Help column: section headers flush-left, key tokens green and
-/// padded to the column's longest key + 2-cell gutter, descriptions clipped
-/// (with `…`) to the remaining width so a column can never collide.
+/// padded to the column's longest key + 2-cell gutter, descriptions ellipsized
+/// (display-width aware, via `textfit`) to the remaining width.
 fn help_column(rows: &[HelpRow], col_w: usize) -> Vec<ListItem<'static>> {
     let key_w = rows
         .iter()
         .filter_map(|r| match r {
-            HelpRow::Key(k, _) => Some(k.chars().count()),
+            HelpRow::Key(k, _) => Some(crate::textfit::display_width(k)),
             _ => None,
         })
         .max()
@@ -3159,27 +3354,18 @@ fn help_column(rows: &[HelpRow], col_w: usize) -> Vec<ListItem<'static>> {
             HelpRow::Head(t) => ListItem::new(Line::from(Span::styled(*t, style_header()))),
             HelpRow::Blank => ListItem::new(Line::from("")),
             HelpRow::Key(k, d) => {
-                let desc = truncate_ellipsis(d, desc_w);
+                let pad = key_w.saturating_sub(crate::textfit::display_width(k));
+                let desc = crate::textfit::ellipsize(d, desc_w);
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("{:<key_w$}", k), Style::default().fg(C_DONE)),
+                    Span::styled(
+                        format!("{k}{}", " ".repeat(pad)),
+                        Style::default().fg(C_DONE),
+                    ),
                     Span::styled(desc, style_normal()),
                 ]))
             }
         })
         .collect()
-}
-
-/// Clip `s` to `w` columns, appending `…` when truncated.
-fn truncate_ellipsis(s: &str, w: usize) -> String {
-    if s.chars().count() <= w {
-        s.to_string()
-    } else if w == 0 {
-        String::new()
-    } else {
-        let mut out: String = s.chars().take(w.saturating_sub(1)).collect();
-        out.push('\u{2026}');
-        out
-    }
 }
 
 // ---------------------------------------------------------------------------

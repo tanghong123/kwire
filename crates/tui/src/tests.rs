@@ -17,7 +17,7 @@ mod tests {
 
     use crate::app::{
         build_format_editor_rows, settings_field_kind, ActiveTransfer, AppState, FlatBook, Focus,
-        Modal, RowRef, SettingsDraft, SettingsEditor, SettingsFieldKind, StatusFilter,
+        HelpPage, Modal, RowRef, SettingsDraft, SettingsEditor, SettingsFieldKind, StatusFilter,
         FORMAT_EDITOR_FORMATS, SETTINGS_FIELD_COUNT,
     };
     use crate::intent::Intent;
@@ -1132,7 +1132,10 @@ mod tests {
     #[test]
     fn esc_closes_modal() {
         let mut app = AppState::new();
-        app.modal = Some(Modal::Help);
+        app.modal = Some(Modal::Help {
+            page: HelpPage::List,
+            parent: None,
+        });
         let intent = app.on_input(key(KeyCode::Esc));
         assert_eq!(intent, Intent::Redraw);
         assert!(app.modal.is_none(), "modal should be closed");
@@ -1147,12 +1150,209 @@ mod tests {
     }
 
     #[test]
-    fn question_mark_returns_open_help() {
-        // `?` is a pure intent: the event loop opens the modal. Asserting the
-        // intent keeps `on_input` side-effect-light and matches `:help`.
+    fn question_mark_opens_help_on_focused_context() {
+        // `?` opens the context-paged Help directly on the page matching the
+        // focused pane (List focus → List page).
         let mut app = AppState::new();
         let intent = app.on_input(key(KeyCode::Char('?')));
-        assert_eq!(intent, Intent::OpenHelp);
+        assert_eq!(intent, Intent::Redraw);
+        assert!(
+            matches!(
+                app.modal,
+                Some(Modal::Help {
+                    page: HelpPage::List,
+                    parent: None
+                })
+            ),
+            "? from List focus opens the List help page, got {:?}",
+            app.modal
+        );
+    }
+
+    /// Helper: the current Help page, or panic if Help isn't open.
+    fn help_page(app: &AppState) -> HelpPage {
+        match &app.modal {
+            Some(Modal::Help { page, .. }) => *page,
+            other => panic!("expected Help modal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn question_mark_opens_help_on_each_focus() {
+        for (focus, expect) in [
+            (Focus::List, HelpPage::List),
+            (Focus::Header, HelpPage::Header),
+            (Focus::Activity, HelpPage::Activity),
+        ] {
+            let mut app = AppState::new();
+            app.set_view(fixture_vm());
+            app.focus = focus;
+            app.on_input(key(KeyCode::Char('?')));
+            assert_eq!(help_page(&app), expect, "? from {focus:?}");
+        }
+    }
+
+    #[test]
+    fn help_right_arrow_cycles_through_all_contexts() {
+        let mut app = AppState::new();
+        app.modal = Some(Modal::Help {
+            page: HelpPage::Global,
+            parent: None,
+        });
+        // → walks the full tab order and wraps back to Global.
+        let order = [
+            HelpPage::List,
+            HelpPage::Header,
+            HelpPage::Activity,
+            HelpPage::Detail,
+            HelpPage::Picker,
+            HelpPage::Settings,
+            HelpPage::Cmds,
+            HelpPage::Global,
+        ];
+        for expect in order {
+            app.on_input(key(KeyCode::Right));
+            assert_eq!(help_page(&app), expect);
+        }
+    }
+
+    #[test]
+    fn help_left_arrow_cycles_backwards() {
+        let mut app = AppState::new();
+        app.modal = Some(Modal::Help {
+            page: HelpPage::Global,
+            parent: None,
+        });
+        // ← from Global wraps to the last page (Cmds), then backwards.
+        app.on_input(key(KeyCode::Left));
+        assert_eq!(help_page(&app), HelpPage::Cmds);
+        app.on_input(key(KeyCode::Left));
+        assert_eq!(help_page(&app), HelpPage::Settings);
+    }
+
+    #[test]
+    fn help_question_mark_closes_and_restores_parent() {
+        // Opened over a Detail modal → ? restores the Detail modal.
+        let parent = Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        };
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Help {
+            page: HelpPage::Detail,
+            parent: Some(Box::new(parent.clone())),
+        });
+        app.on_input(key(KeyCode::Char('?')));
+        assert_eq!(app.modal, Some(parent), "? restores the parent modal");
+    }
+
+    #[test]
+    fn help_question_mark_from_detail_modal_opens_detail_page() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        app.on_input(key(KeyCode::Char('?')));
+        assert_eq!(help_page(&app), HelpPage::Detail);
+        // And the Detail modal is preserved as the parent for restore-on-close.
+        assert!(
+            matches!(
+                &app.modal,
+                Some(Modal::Help {
+                    parent: Some(p),
+                    ..
+                }) if matches!(**p, Modal::Detail { .. })
+            ),
+            "Help over Detail keeps Detail as parent"
+        );
+    }
+
+    #[test]
+    fn help_pages_contain_their_expected_keys() {
+        use crate::ui::{help_page_rows, HelpRow};
+
+        // Collect the (key, desc) pairs from both sub-columns of a page.
+        fn pairs(page: HelpPage) -> Vec<(&'static str, &'static str)> {
+            let (l, r) = help_page_rows(page);
+            l.into_iter()
+                .chain(r)
+                .filter_map(|row| match row {
+                    HelpRow::Key(k, d) => Some((k, d)),
+                    _ => None,
+                })
+                .collect()
+        }
+        fn has_key(page: HelpPage, needle: &str) -> bool {
+            pairs(page).iter().any(|(k, _)| k.contains(needle))
+        }
+
+        // Each context page surfaces its defining keys.
+        assert!(has_key(HelpPage::Global, "?"));
+        assert!(has_key(HelpPage::Global, "[ ]"));
+        assert!(has_key(HelpPage::List, "a")); // fetch all preferred formats
+        assert!(has_key(HelpPage::List, "e")); // edit (previously missing)
+        assert!(has_key(HelpPage::List, "m")); // mark not-found (previously missing)
+        assert!(has_key(HelpPage::Header, "D")); // delete list (previously missing)
+        assert!(has_key(HelpPage::Header, "s")); // start/resume list
+        assert!(has_key(HelpPage::Activity, "space")); // collapse/expand (previously missing)
+        assert!(has_key(HelpPage::Detail, "S")); // download series (previously missing)
+        assert!(has_key(HelpPage::Detail, "tab")); // switch sub-pane
+        assert!(has_key(HelpPage::Picker, "v")); // candidate metadata (previously missing)
+        assert!(has_key(HelpPage::Settings, "c")); // cleanup (previously missing)
+        assert!(has_key(HelpPage::Settings, "S-J / S-K")); // reorder priority
+        assert!(has_key(HelpPage::Cmds, ":pause-all"));
+        assert!(has_key(HelpPage::Cmds, ":reorganize")); // unadvertised command
+    }
+
+    #[test]
+    fn help_pages_use_corrected_descriptions() {
+        use crate::ui::{help_page_rows, HelpRow};
+
+        fn desc_for(page: HelpPage, key_needle: &str) -> String {
+            let (l, r) = help_page_rows(page);
+            l.into_iter()
+                .chain(r)
+                .find_map(|row| match row {
+                    HelpRow::Key(k, d) if k.contains(key_needle) => Some(d.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        }
+
+        // Settings ←/→ = nudge number field (NOT filter chips).
+        let settings_arrows = desc_for(HelpPage::Settings, "\u{2190}");
+        assert!(
+            settings_arrows.contains("nudge") && settings_arrows.contains("number"),
+            "Settings ←/→ row must say nudge number field, got {settings_arrows:?}"
+        );
+
+        // Detail `d` = download focused variation (NOT open detail).
+        let detail_d = desc_for(HelpPage::Detail, "d");
+        assert!(
+            detail_d.contains("download") && detail_d.contains("variation"),
+            "Detail d row must be download-variation, got {detail_d:?}"
+        );
+
+        // List `d` = open detail (per-context split).
+        let list_d = desc_for(HelpPage::List, "d");
+        assert!(
+            list_d.contains("detail"),
+            "List d row must open detail, got {list_d:?}"
+        );
+
+        // `[ ]` rotation includes the "All" stop.
+        let lists = desc_for(HelpPage::Global, "[ ]");
+        assert!(
+            lists.contains("All"),
+            "[ ] row must mention the All stop, got {lists:?}"
+        );
     }
 
     #[test]
@@ -1332,12 +1532,18 @@ mod tests {
 
     #[test]
     fn render_help_modal_does_not_panic() {
-        let backend = TestBackend::new(120, 30);
-        let mut terminal = Terminal::new(backend).unwrap();
-        let mut app = AppState::new();
-        app.set_view(fixture_vm());
-        app.modal = Some(Modal::Help);
-        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        // Render every page at a couple of widths to exercise the tab row,
+        // global strip, two-column grid, and footer.
+        for &(w, h) in &[(120u16, 30u16), (80, 24)] {
+            for page in HelpPage::ALL {
+                let backend = TestBackend::new(w, h);
+                let mut terminal = Terminal::new(backend).unwrap();
+                let mut app = AppState::new();
+                app.set_view(fixture_vm());
+                app.modal = Some(Modal::Help { page, parent: None });
+                terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+            }
+        }
     }
 
     /// Default draft used in settings tests (no view loaded — uses engine defaults).
@@ -4714,7 +4920,10 @@ mod tests {
             let mut terminal = Terminal::new(backend).unwrap();
             let mut app = AppState::new();
             app.set_view(fixture_vm());
-            app.modal = Some(Modal::Help);
+            app.modal = Some(Modal::Help {
+                page: HelpPage::List,
+                parent: None,
+            });
             terminal.draw(|f| ui::render(f, &mut app)).unwrap();
             let buf = buffer_string(&terminal);
             assert!(buf.contains('\u{23ce}'), "⏎ MUST appear in the Help screen");

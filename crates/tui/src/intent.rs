@@ -46,9 +46,6 @@ pub enum Intent {
     /// Open the variation-picker modal for the given flat index.
     OpenPicker { flat_index: usize },
 
-    /// Open the help screen.
-    OpenHelp,
-
     /// Pause a downloading variation.
     Pause {
         group_path: Vec<usize>,

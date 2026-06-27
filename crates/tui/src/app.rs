@@ -266,6 +266,76 @@ pub enum Focus {
 }
 
 // ---------------------------------------------------------------------------
+// Help pages (context-paged Help redesign)
+// ---------------------------------------------------------------------------
+
+/// One page of the context-paged Help overlay. `?` opens the page matching the
+/// live context (focused pane / open modal); `←`/`→` cycle through them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpPage {
+    Global,
+    List,
+    Header,
+    Activity,
+    Detail,
+    Picker,
+    Settings,
+    Cmds,
+}
+
+impl HelpPage {
+    /// All pages, in tab-row order.
+    pub const ALL: [HelpPage; 8] = [
+        HelpPage::Global,
+        HelpPage::List,
+        HelpPage::Header,
+        HelpPage::Activity,
+        HelpPage::Detail,
+        HelpPage::Picker,
+        HelpPage::Settings,
+        HelpPage::Cmds,
+    ];
+
+    /// Index of this page within [`HelpPage::ALL`].
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|&p| p == self).unwrap_or(0)
+    }
+
+    /// Next page (wraps): `→`.
+    pub fn next(self) -> HelpPage {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    /// Previous page (wraps): `←`.
+    pub fn prev(self) -> HelpPage {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+
+    /// The page that matches the currently focused pane (no modal open).
+    pub fn from_focus(focus: Focus) -> HelpPage {
+        match focus {
+            Focus::Header => HelpPage::Header,
+            Focus::List => HelpPage::List,
+            Focus::Activity => HelpPage::Activity,
+        }
+    }
+
+    /// Short tab-row label.
+    pub fn tab_label(self) -> &'static str {
+        match self {
+            HelpPage::Global => "Global",
+            HelpPage::List => "List",
+            HelpPage::Header => "Header",
+            HelpPage::Activity => "Activity",
+            HelpPage::Detail => "Detail",
+            HelpPage::Picker => "Picker",
+            HelpPage::Settings => "Settings",
+            HelpPage::Cmds => "Cmds",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Status filter (§ wireframe filter row)
 // ---------------------------------------------------------------------------
 
@@ -366,8 +436,13 @@ pub enum Modal {
     },
     /// Settings key-value editor.
     Settings,
-    /// Full help screen.
-    Help,
+    /// Context-paged help overlay. Opens on `page` (matching the live context);
+    /// `←`/`→` page through contexts. `parent` is the modal to restore on close
+    /// when Help was opened from on top of another modal (Detail/Picker/Settings).
+    Help {
+        page: HelpPage,
+        parent: Option<Box<Modal>>,
+    },
     /// Delete-list confirmation: "Delete '<title>' and its N books? [y/n]"
     Confirm {
         /// Human-readable list title.
@@ -1404,7 +1479,14 @@ impl AppState {
                         }
                         Intent::Redraw
                     }
-                    KeyCode::Char('?') => Intent::OpenHelp,
+                    KeyCode::Char('?') => {
+                        // Open Help on the page matching the focused pane.
+                        self.modal = Some(Modal::Help {
+                            page: HelpPage::from_focus(self.focus),
+                            parent: None,
+                        });
+                        Intent::Redraw
+                    }
                     // `[` / `]` — GLOBAL list cycle: works from any pane, never
                     // changes focus. The rotation includes the aggregate "All"
                     // stop as one extra position before the first real list:
@@ -1696,6 +1778,36 @@ impl AppState {
             return Intent::Redraw;
         }
 
+        // Context-paged Help: Esc/`?` close (restoring any parent modal); `←`/`→`
+        // page through contexts. Handled before the clone so we can move `parent`
+        // out on close.
+        if matches!(&self.modal, Some(Modal::Help { .. })) {
+            if let Event::Key(KeyEvent { code, .. }) = ev {
+                match code {
+                    KeyCode::Esc | KeyCode::Char('?') => {
+                        let parent = if let Some(Modal::Help { parent, .. }) = self.modal.take() {
+                            parent.map(|b| *b)
+                        } else {
+                            None
+                        };
+                        self.modal = parent;
+                    }
+                    KeyCode::Left => {
+                        if let Some(Modal::Help { page, .. }) = &mut self.modal {
+                            *page = page.prev();
+                        }
+                    }
+                    KeyCode::Right => {
+                        if let Some(Modal::Help { page, .. }) = &mut self.modal {
+                            *page = page.next();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return Intent::Redraw;
+        }
+
         let modal = match &self.modal {
             Some(m) => m.clone(),
             None => return Intent::Redraw,
@@ -1787,6 +1899,14 @@ impl AppState {
                                     });
                                 }
                             }
+                            Intent::Redraw
+                        }
+                        // `?` — open Help on the Picker page, restoring the picker on close.
+                        KeyCode::Char('?') => {
+                            self.modal = Some(Modal::Help {
+                                page: HelpPage::Picker,
+                                parent: Some(Box::new(modal.clone())),
+                            });
                             Intent::Redraw
                         }
                         _ => Intent::Redraw,
@@ -2045,6 +2165,14 @@ impl AppState {
                                     }
                                 }
                             }
+                            Intent::Redraw
+                        }
+                        // `?` — open Help on the Detail page, restoring detail on close.
+                        KeyCode::Char('?') => {
+                            self.modal = Some(Modal::Help {
+                                page: HelpPage::Detail,
+                                parent: Some(Box::new(modal.clone())),
+                            });
                             Intent::Redraw
                         }
                         _ => Intent::Redraw,
@@ -2345,16 +2473,7 @@ impl AppState {
                 }
             }
 
-            Modal::Help => match ev {
-                Event::Key(KeyEvent { code, .. }) => match code {
-                    KeyCode::Esc | KeyCode::Char('?') => {
-                        self.modal = None;
-                        Intent::Redraw
-                    }
-                    _ => Intent::Redraw,
-                },
-                _ => Intent::Redraw,
-            },
+            Modal::Help { .. } => Intent::Redraw, // handled above (before the clone)
 
             Modal::Confirm { target_id, .. } => {
                 let id = target_id.clone();
@@ -2483,6 +2602,15 @@ impl AppState {
                 KeyCode::Char('r') => Intent::Command("refresh-mirrors".into()),
                 KeyCode::Char('o') => Intent::Command("reorganize".into()),
                 KeyCode::Char('c') => Intent::Command("cleanup".into()),
+                // `?` — open Help on the Settings page; restore Settings on close.
+                // The draft lives in `self.settings_draft`, untouched by Help.
+                KeyCode::Char('?') => {
+                    self.modal = Some(Modal::Help {
+                        page: HelpPage::Settings,
+                        parent: Some(Box::new(Modal::Settings)),
+                    });
+                    Intent::Redraw
+                }
                 _ => Intent::Redraw,
             },
             _ => Intent::Redraw,
