@@ -2608,6 +2608,68 @@ mod tests {
         );
     }
 
+    /// Task #4 regression: a stacked book whose ALTERNATIVE copy is actively
+    /// downloading. The `↳ alt. copy` sub-row must render the live download
+    /// (`dling` + host), NOT stay stuck on `queued`/host `—`; and the Activity
+    /// pane must list that copy exactly ONCE (under its host group), never also
+    /// under a `○ queued` section.
+    #[test]
+    fn downloading_alt_copy_renders_dling_and_is_not_double_listed() {
+        use ratatui::layout::Rect;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+
+        // Primary copy already done; the SECOND (alt) copy is downloading from a
+        // specific CDN host. armed_variations ranks done < downloading, so the
+        // downloading copy becomes the `↳ alt. copy` sub-row.
+        let mut alt = mk_var("Treasure Island", "pdf", "downloading", 12, &"e".repeat(32));
+        alt.host = Some("cdn4.booksdl.lc".into());
+        app.flat[0].book.versions = vec![
+            mk_var("Treasure Island", "epub", "done", 100, &"d".repeat(32)),
+            alt,
+        ];
+
+        // Full list render: the alt-copy sub-row reflects the live download.
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let list_buf = buffer_string(&terminal);
+        assert!(
+            list_buf.contains("alt. copy"),
+            "the alt-copy sub-row must render: {list_buf:?}"
+        );
+        assert!(
+            list_buf.contains("cdn4.booksdl.lc"),
+            "the alt-copy sub-row must show the live download host: {list_buf:?}"
+        );
+        assert!(
+            list_buf.contains("dling"),
+            "the downloading alt copy must read 'dling', not 'queued': {list_buf:?}"
+        );
+
+        // Activity pane in isolation: the copy appears ONCE (host group), with no
+        // separate `○ queued` section double-listing it.
+        let area = Rect::new(0, 0, 120, 14);
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let act_buf = buffer_string(&terminal);
+        assert!(
+            act_buf.contains("cdn4.booksdl.lc"),
+            "Activity must show the downloading copy under its host group: {act_buf:?}"
+        );
+        assert!(
+            !act_buf.contains("\u{25cb} queued"),
+            "a downloading copy must NOT also appear under a '○ queued' section: {act_buf:?}"
+        );
+        let title_hits = act_buf.matches("Treasure Island").count();
+        assert_eq!(
+            title_hits, 1,
+            "the downloading copy must be listed exactly once in Activity, got {title_hits}: {act_buf:?}"
+        );
+    }
+
     #[test]
     fn activity_scroll_does_not_affect_book_selection() {
         // While Activity is focused, j/k must not move app.selected.

@@ -652,6 +652,61 @@ mod unit {
         assert_eq!(v.speed_bps, None);
         assert_eq!(v.eta_secs, None);
     }
+
+    /// Task #4 regression: a book with two candidates where the SECONDARY
+    /// (non-first) candidate is the one actively downloading. The viewmodel maps
+    /// each candidate's OWN job, so the secondary `ViewVariation` must reflect
+    /// downloading state + host + progress — it must NOT report "queued" while
+    /// bytes flow (the bug was the alt-copy sub-row stuck on "queued"/host "—").
+    #[test]
+    fn secondary_candidate_downloading_is_reflected_per_variation() {
+        use libgen_core::model::{BookInput, BookRequest};
+        let mut req = BookRequest::new(BookInput {
+            title: "Diary of a Wimpy Kid".into(),
+            ..Default::default()
+        });
+
+        // Primary candidate: an available (un-armed) epub.
+        let mut primary = cand();
+        primary.md5 = "1".repeat(32);
+        primary.extension = Some(Format::Epub);
+        primary.job = None; // available
+
+        // Secondary candidate: actively downloading from a specific host.
+        let mut secondary = cand();
+        secondary.md5 = "2".repeat(32);
+        secondary.extension = Some(Format::Pdf);
+        secondary.job = Some(DownloadJob {
+            state: JobState::Downloading,
+            host: Some("cdn4.booksdl.lc".into()),
+            bytes_done: 12,
+            total_bytes: Some(100),
+            speed_bps: Some(53_000),
+            ..Default::default()
+        });
+
+        req.candidates = vec![primary, secondary];
+        let book = build_book(&req, 0, 1);
+
+        // versions are 1:1 with candidates, in order.
+        assert_eq!(book.versions.len(), 2);
+        let prim = &book.versions[0];
+        let sec = &book.versions[1];
+
+        assert_eq!(prim.state, "available", "primary stays available");
+
+        assert_eq!(
+            sec.state, "downloading",
+            "the secondary candidate's OWN job must drive its state"
+        );
+        assert_eq!(
+            sec.host.as_deref(),
+            Some("cdn4.booksdl.lc"),
+            "the downloading host must flow to the alt-copy variation"
+        );
+        assert_eq!(sec.progress, 12, "12/100 bytes → 12% on the alt copy");
+        assert_eq!(sec.speed_bps, Some(53_000));
+    }
 }
 
 #[cfg(test)]
