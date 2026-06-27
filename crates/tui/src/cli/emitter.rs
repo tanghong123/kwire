@@ -7,7 +7,7 @@
 //! newlines instead.
 
 use std::io::{self, IsTerminal, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use libgen_core::download::current_edge;
@@ -16,6 +16,59 @@ use libgen_core::orchestrator::Event;
 use libgen_core::queue::Progress;
 use libgen_core::search::{SearchEvent, SearchObserver};
 use libgen_engine::{BookStatePayload, EngineEmitter};
+
+/// Braille-dots spinner frames, advanced one step per progress render. The
+/// classic 10-frame rotating-dot cycle reads as a smooth spin in a single cell
+/// and animates even in the indeterminate "connecting / ?% / ? eta" phase, where
+/// it's the only sign of life. (A bar-shimmer set like `⣷⣯⣟⡿⢿⣻⣽⣾` also reads
+/// well, but the rotating dots are the most universally recognised.)
+const SPINNER: [&str; 10] = [
+    "\u{280B}", // ⠋
+    "\u{2819}", // ⠙
+    "\u{2839}", // ⠹
+    "\u{2838}", // ⠸
+    "\u{283C}", // ⠼
+    "\u{2834}", // ⠴
+    "\u{2826}", // ⠦
+    "\u{2827}", // ⠧
+    "\u{2807}", // ⠇
+    "\u{280F}", // ⠏
+];
+
+// ---------------------------------------------------------------------------
+// CursorGuard
+// ---------------------------------------------------------------------------
+
+/// Hides the terminal cursor for the lifetime of a download and restores it on
+/// `Drop` — so the cursor reappears on normal completion, on an early `?` error
+/// return, and on a panic unwind. (Ctrl-C, which by default kills the process
+/// without running destructors, is restored by a small signal handler in
+/// `cmd_get`.) A no-op when stdout isn't a TTY (piped output has no cursor to
+/// hide and we mustn't pollute the pipe with escape codes).
+pub struct CursorGuard {
+    active: bool,
+}
+
+impl CursorGuard {
+    /// Hide the cursor (`\x1b[?25l`) when `is_tty`; otherwise a no-op guard.
+    pub fn hide(is_tty: bool) -> Self {
+        if is_tty {
+            print!("\u{1b}[?25l");
+            io::stdout().flush().ok();
+        }
+        CursorGuard { active: is_tty }
+    }
+}
+
+impl Drop for CursorGuard {
+    fn drop(&mut self) {
+        if self.active {
+            // \x1b[?25h → show cursor.
+            print!("\u{1b}[?25h");
+            io::stdout().flush().ok();
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // CliEmitter
@@ -39,6 +92,10 @@ pub struct CliEmitter {
     start_host: Mutex<Option<String>>,
     /// Whether the one-shot "serving from <edge>" line has already been emitted.
     serving_emitted: AtomicBool,
+    /// Current animated-spinner frame index. Advances one step on every progress
+    /// render so the leading braille dot appears to spin. `Atomic` (not `Cell`)
+    /// to keep the emitter `Sync` for the `EngineEmitter` trait.
+    spinner_frame: AtomicUsize,
 }
 
 impl CliEmitter {
@@ -51,6 +108,7 @@ impl CliEmitter {
             format_label,
             start_host: Mutex::new(None),
             serving_emitted: AtomicBool::new(false),
+            spinner_frame: AtomicUsize::new(0),
         }
     }
 
@@ -63,7 +121,16 @@ impl CliEmitter {
             format_label: None,
             start_host: Mutex::new(None),
             serving_emitted: AtomicBool::new(false),
+            spinner_frame: AtomicUsize::new(0),
         }
+    }
+
+    /// Advance and return the next animated-spinner frame. Each call moves one
+    /// step through [`SPINNER`] (wrapping), so successive progress renders show a
+    /// spinning braille dot.
+    fn next_spinner(&self) -> &'static str {
+        let i = self.spinner_frame.fetch_add(1, Ordering::Relaxed) % SPINNER.len();
+        SPINNER[i]
     }
 
     /// Render the chronicle label prefix: `"EPUB "` when known, else empty.
@@ -136,7 +203,8 @@ impl CliEmitter {
                 let tb = *total_bytes;
                 let spd = *speed_bps;
                 let eta = *eta_secs;
-                let line = format_progress_line(bd, tb, spd, eta, self.term_width());
+                let spinner = self.next_spinner();
+                let line = format_progress_line(spinner, bd, tb, spd, eta, self.term_width());
                 if self.is_tty {
                     print!("\r{line}");
                     io::stdout().flush().ok();
@@ -300,49 +368,63 @@ impl EngineEmitter for CliEmitter {
 
 /// Format a download-progress status line.
 ///
-/// When `total_bytes` is known (and non-zero) the full readout is rendered:
-/// `⬇  47%  1.4 MB/s  eta 1m04s  ▰▰▰▰▱▱▱▱▱▱`.
+/// Layout: the animated `spinner` leads, the `▰▱` bar fills the middle, and a
+/// FIXED-WIDTH, right-aligned stats block (pct / speed / eta) sits at the END so
+/// the values never shift the bar as they change:
 ///
-/// When `total_bytes` is `None` (or 0) — common for libgen CDN mirrors that omit
-/// Content-Length — an *indeterminate* readout is rendered instead of a bogus
-/// `?%`/`??????????`/`eta ?`: the bytes downloaded so far plus speed, e.g.
-/// `⬇ 5.2 MB · 310 KB/s`.
+/// ```text
+/// {spinner} {bar…………}   47%   1.4 MB/s  eta 1m04s
+/// ```
 ///
-/// `term_width` is the terminal width in columns; the progress bar grows to fill
-/// whatever space is left after the `⬇ pct speed eta ` prefix, so it spans the
-/// full width instead of a fixed short stub.
+/// When `total_bytes` is known (and non-zero) the bar tracks the real percentage
+/// and pct/eta show concrete values. When `total_bytes` is `None` (or 0) — common
+/// for libgen CDN mirrors that omit Content-Length — the layout is *identical*
+/// (so nothing jumps width): the spinner + an empty bar still render, pct shows a
+/// dash, eta shows `eta —`, and the speed is still shown when known. The spinner
+/// is the sign of life in that indeterminate phase.
+///
+/// `term_width` is the terminal width in columns; the bar grows to fill whatever
+/// space is left between the leading spinner and the trailing fixed stats block.
 pub fn format_progress_line(
+    spinner: &str,
     bytes_done: u64,
     total_bytes: Option<u64>,
     speed_bps: Option<u64>,
     eta_secs: Option<u64>,
     term_width: usize,
 ) -> String {
-    let speed_str = speed_bps
+    // Speed is shown identically in both phases — concrete when known, a dash
+    // (NOT "?") when the rate isn't available yet.
+    let speed_field = speed_bps
         .map(format_speed)
-        .unwrap_or_else(|| "?".to_string());
+        .unwrap_or_else(|| "\u{2014}".to_string());
 
-    match total_bytes.filter(|&t| t > 0) {
+    let (bar_pct, pct_field, eta_field) = match total_bytes.filter(|&t| t > 0) {
         Some(total) => {
             let pct = (bytes_done * 100 / total).min(100);
-            let eta_str = eta_secs.map(format_eta).unwrap_or_else(|| "?".to_string());
-            // ⬇ = U+2B07 DOWNWARDS BLACK ARROW. Render the prefix first, measure its
-            // display width, then let the bar fill the rest of the terminal width.
-            let prefix = format!("\u{2B07} {pct:3}%  {speed_str}  eta {eta_str}  ");
-            let prefix_w = crate::textfit::display_width(&prefix);
-            // Leave one trailing column so the bar never wraps to the next row;
-            // floor at a small width so a very narrow terminal still shows a bar.
-            let bar_w = term_width.saturating_sub(prefix_w + 1).clamp(4, 200);
-            let bar = format_bar(pct, bar_w);
-            format!("{prefix}{bar}")
+            let eta_field = match eta_secs {
+                Some(s) => format!("eta {}", format_eta(s)),
+                None => "eta \u{2014}".to_string(),
+            };
+            (pct, format!("{pct}%"), eta_field)
         }
-        None => {
-            // Indeterminate: show progress as bytes-so-far + speed.
-            // · = U+00B7 MIDDLE DOT
-            let done_str = super::cmd_search::human_size(bytes_done);
-            format!("\u{2B07} {done_str} \u{00B7} {speed_str}")
-        }
-    }
+        // Indeterminate: empty bar, dash for pct/eta — same fixed-width layout.
+        None => (0, "\u{2014}".to_string(), "eta \u{2014}".to_string()),
+    };
+
+    // FIXED-WIDTH, right-aligned stats block at the END so changing values never
+    // shift the bar. pct in 4 cols ("  5%"/" 47%"/"100%"), speed in 9, eta in 9.
+    let stats = format!("{pct_field:>4}  {speed_field:>9}  {eta_field:>9}");
+    // `{spinner} ` leads; `  {stats}` trails. Measure both by display width, then
+    // let the ▰▱ bar fill the middle.
+    let head = format!("{spinner} ");
+    let tail = format!("  {stats}");
+    let used = crate::textfit::display_width(&head) + crate::textfit::display_width(&tail);
+    // Leave one trailing column so the line never wraps to the next row; floor at
+    // a small width so a very narrow terminal still shows a bar.
+    let bar_w = term_width.saturating_sub(used + 1).clamp(4, 200);
+    let bar = format_bar(bar_pct, bar_w);
+    format!("{head}{bar}{tail}")
 }
 
 /// Render a progress bar with `width` cells using filled (`▰`) / empty (`▱`),
@@ -394,11 +476,17 @@ mod tests {
     fn progress_line_known_total() {
         // 470 / 1000 = 47 %; speed 1.5 MB/s → rounds to "1.5 MB/s"; eta 64 s = 1m04s
         // 1_500_000 / 1_048_576 ≈ 1.43 → "{:.1}" = "1.4 MB/s"
-        let line = format_progress_line(470, Some(1000), Some(1_500_000), Some(64), 80);
+        let line = format_progress_line(SPINNER[0], 470, Some(1000), Some(1_500_000), Some(64), 80);
         assert!(line.contains("47%"), "pct: {line:?}");
         assert!(line.contains("1.4 MB/s"), "speed: {line:?}");
-        assert!(line.contains("1m04s"), "eta: {line:?}");
-        assert!(line.contains('\u{2B07}'), "⬇ missing: {line:?}");
+        assert!(line.contains("eta 1m04s"), "eta: {line:?}");
+        // The leading braille spinner frame replaces the old ⬇ and the arrow is gone.
+        assert!(line.starts_with(SPINNER[0]), "spinner leads: {line:?}");
+        assert!(!line.contains('\u{2B07}'), "old ⬇ arrow removed: {line:?}");
+        // The stats block sits at the END — the bar precedes pct/speed/eta.
+        let last_bar = line.rfind(['\u{25B0}', '\u{25B1}']).unwrap();
+        let pct_at = line.find("47%").unwrap();
+        assert!(last_bar < pct_at, "bar before stats: {line:?}");
         // The bar fills the remaining terminal width: filled + empty cells together
         // are far wider than the old fixed 10-cell stub, and the filled fraction
         // tracks the percentage.
@@ -419,10 +507,34 @@ mod tests {
     }
 
     #[test]
+    fn progress_line_stats_fixed_width() {
+        // Stats block is right-aligned at a FIXED width, so the bar does not shift
+        // as pct/speed/eta change: a 5 % line and a 100 % line have the SAME stats
+        // block width (and the same total line width on the same terminal).
+        let a = format_progress_line(SPINNER[0], 50, Some(1000), Some(1024), Some(5), 80);
+        let b = format_progress_line(
+            SPINNER[0],
+            1000,
+            Some(1000),
+            Some(2_000_000),
+            Some(3600),
+            80,
+        );
+        assert_eq!(
+            crate::textfit::display_width(&a),
+            crate::textfit::display_width(&b),
+            "lines stay the same width: {a:?} vs {b:?}"
+        );
+        // pct field right-aligned in 4 cols: "  5%" and "100%".
+        assert!(a.contains("  5%"), "pct right-aligned: {a:?}");
+        assert!(b.contains("100%"), "pct right-aligned: {b:?}");
+    }
+
+    #[test]
     fn progress_line_fills_terminal_width() {
         // A wider terminal → a wider bar (the bar is responsive, not fixed).
-        let narrow = format_progress_line(500, Some(1000), Some(1024), Some(10), 40);
-        let wide = format_progress_line(500, Some(1000), Some(1024), Some(10), 120);
+        let narrow = format_progress_line(SPINNER[0], 500, Some(1000), Some(1024), Some(10), 40);
+        let wide = format_progress_line(SPINNER[0], 500, Some(1000), Some(1024), Some(10), 120);
         let cells = |s: &str| {
             s.chars()
                 .filter(|&c| c == '\u{25B0}' || c == '\u{25B1}')
@@ -439,23 +551,35 @@ mod tests {
 
     #[test]
     fn progress_line_unknown_total() {
-        // No Content-Length: render bytes-so-far + speed, NOT a bogus %/bar/eta.
-        // 5_452_595 bytes ≈ 5.2 MB; 317_440 B/s ≈ 310 KB/s.
-        let line = format_progress_line(5_452_595, None, Some(317_440), None, 80);
-        assert!(line.contains("5.2 MB"), "bytes: {line:?}");
-        assert!(line.contains("310 KB/s"), "speed: {line:?}");
-        assert!(line.contains('\u{2B07}'), "⬇ missing: {line:?}");
-        // Must NOT show the old indeterminate placeholders.
-        assert!(!line.contains("?%"), "should not show ?%: {line:?}");
+        // No Content-Length: identical fixed-width layout — spinner + empty bar +
+        // dash pct/eta, with the speed still shown. No bogus "?%"/"eta ?".
+        let line = format_progress_line(SPINNER[0], 5_452_595, None, Some(317_440), None, 80);
+        assert!(line.contains("310 KB/s"), "speed still shown: {line:?}");
+        assert!(line.contains('\u{2014}'), "dash pct/eta: {line:?}"); // —
+        assert!(line.contains("eta \u{2014}"), "eta dash: {line:?}");
+        assert!(line.starts_with(SPINNER[0]), "spinner leads: {line:?}");
+        // No bogus placeholders, no old arrow.
+        assert!(!line.contains("?%"), "no ?%: {line:?}");
+        assert!(!line.contains('?'), "no '?': {line:?}");
+        assert!(!line.contains('\u{2B07}'), "no ⬇: {line:?}");
+        // The bar still renders (empty), so the line stays the full width.
         assert!(
-            !line.contains('\u{25B1}') && !line.contains('?'),
-            "should not show a ?-bar: {line:?}"
+            line.contains('\u{25B1}'),
+            "indeterminate bar still renders: {line:?}"
         );
+        assert!(crate::textfit::display_width(&line) <= 80);
     }
 
     #[test]
     fn progress_line_complete() {
-        let line = format_progress_line(1000, Some(1000), Some(2 * 1024 * 1024), Some(0), 80);
+        let line = format_progress_line(
+            SPINNER[0],
+            1000,
+            Some(1000),
+            Some(2 * 1024 * 1024),
+            Some(0),
+            80,
+        );
         assert!(line.contains("100%"), "100%: {line:?}");
         // bar must be all filled — no empty cells at 100 %.
         assert_eq!(
@@ -467,6 +591,22 @@ mod tests {
             line.chars().filter(|&c| c == '\u{25B0}').count() > 10,
             "full-width filled bar: {line:?}"
         );
+    }
+
+    // ── spinner animation ────────────────────────────────────────────────────
+
+    #[test]
+    fn spinner_advances_each_render() {
+        // Each `next_spinner` call advances one frame through SPINNER and wraps.
+        let emitter = CliEmitter::for_test(true);
+        assert_eq!(emitter.next_spinner(), SPINNER[0]);
+        assert_eq!(emitter.next_spinner(), SPINNER[1]);
+        assert_eq!(emitter.next_spinner(), SPINNER[2]);
+        // Advance to just before the wrap, then confirm it wraps to frame 0.
+        for _ in 3..SPINNER.len() {
+            emitter.next_spinner();
+        }
+        assert_eq!(emitter.next_spinner(), SPINNER[0], "wraps after one cycle");
     }
 
     // ── format_eta ──────────────────────────────────────────────────────────

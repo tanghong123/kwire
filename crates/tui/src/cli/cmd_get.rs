@@ -15,7 +15,7 @@ use libgen_core::queue::{DownloadRequest, Progress};
 use libgen_engine::{build_scheduler, build_search, Config};
 use tokio::sync::mpsc;
 
-use super::emitter::CliEmitter;
+use super::emitter::{CliEmitter, CursorGuard};
 
 #[derive(ClapArgs)]
 pub struct GetArgs {
@@ -230,6 +230,24 @@ async fn download_by_md5(
 
     let (tx, mut rx) = mpsc::channel::<Progress>(256);
 
+    // Hide the terminal cursor for the duration of the live progress bar and
+    // restore it on Drop — covers normal completion, the `?` error returns below,
+    // and panic unwinds. (No-op when stdout isn't a TTY.)
+    let _cursor = CursorGuard::hide(emitter.is_tty);
+    // Ctrl-C kills the process WITHOUT running destructors, so the guard's Drop
+    // wouldn't fire and the cursor would stay hidden. Restore it explicitly on
+    // SIGINT, then exit with the conventional 130, but only when we're a TTY.
+    if emitter.is_tty {
+        tokio::spawn(async {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                // \x1b[?25h → show cursor.
+                print!("\u{1b}[?25h");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                std::process::exit(130);
+            }
+        });
+    }
+
     // Drain progress events on this task, streaming them live through the emitter.
     // We collect the events here so we don't need to move `emitter` into a spawn.
     let run_handle = {
@@ -240,6 +258,11 @@ async fn download_by_md5(
     while let Some(ev) = rx.recv().await {
         emitter.print_progress(&ev);
     }
+
+    // Restore the cursor BEFORE the saved/verified chronicle lines print (rather
+    // than waiting for the function-end Drop), so those lines render with a
+    // visible cursor.
+    drop(_cursor);
 
     let outcomes = run_handle.await.context("scheduler task panicked")?;
 
@@ -446,10 +469,12 @@ mod tests {
         // Validate that the progress-line formatter (via the emitter module)
         // produces the expected format for a Bytes event.
         use super::super::emitter::format_progress_line;
-        let line = format_progress_line(500, Some(1000), Some(512 * 1024), Some(10), 80);
+        // Leading arg is the animated spinner frame (a braille glyph).
+        let line =
+            format_progress_line("\u{280B}", 500, Some(1000), Some(512 * 1024), Some(10), 80);
         assert!(line.contains("50%"), "pct: {line:?}");
         assert!(line.contains("512 KB/s"), "speed: {line:?}");
-        assert!(line.contains("10s"), "eta: {line:?}");
+        assert!(line.contains("eta 10s"), "eta: {line:?}");
     }
 
     #[test]
