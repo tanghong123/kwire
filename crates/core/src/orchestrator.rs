@@ -460,6 +460,9 @@ impl Orchestrator {
             if let Some(best) = req.candidates.first_mut() {
                 request_job(best);
             }
+            // Auto-match backfills the chosen copy's metadata (author/year) into
+            // the book's empty fields right away (desktop parity).
+            crate::model::backfill_input_from_selected(&mut req);
         }
         req.log_event(None, None, "discovered", discovery_detail(&req));
         self.store
@@ -543,6 +546,9 @@ impl Orchestrator {
             if let Some(best) = req.candidates.first_mut() {
                 request_job(best);
             }
+            // Auto-match backfills the chosen copy's metadata (author/year) into
+            // the book's empty fields right away (desktop parity).
+            crate::model::backfill_input_from_selected(&mut req);
         }
         req.log_event(None, None, "discovered", discovery_detail(&req));
         self.store
@@ -984,6 +990,8 @@ impl Orchestrator {
                 if let Some(best) = req.candidates.first_mut() {
                     request_job(best);
                 }
+                // Auto-match backfills the chosen copy's metadata (desktop parity).
+                crate::model::backfill_input_from_selected(&mut req);
             }
 
             req.log_event(None, None, "discovered", discovery_detail(&req));
@@ -1106,6 +1114,10 @@ impl Orchestrator {
                 });
             }
         }
+        // Back-fill any missing metadata (author/year) from the chosen copy
+        // immediately, so picking a copy fills in a blank author without waiting
+        // for the download to start (desktop parity — see `backfill_input_from_selected`).
+        crate::model::backfill_input_from_selected(&mut req);
         self.store
             .update_request(self.list_id, group_path, book_index, &req)?;
         Ok(())
@@ -6255,6 +6267,53 @@ mod tests {
                     .iter()
                     .any(|c| matches!(c.job.as_ref().map(|j| &j.state), Some(JobState::Pending))),
             "book is now actionable for Download"
+        );
+    }
+
+    /// Task 9: `select_candidate` back-fills the book's missing author from the
+    /// CHOSEN copy immediately (before any download), so the shared core path
+    /// gives the TUI the same backfill the desktop already showed.
+    #[tokio::test]
+    async fn select_candidate_backfills_author_from_chosen_copy() {
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch = Orchestrator::new(store, &small_list(), search, "/books").unwrap();
+        let (tx, rx) = mpsc::channel(64);
+        let t = tokio::spawn(drain(rx));
+        orch.query_all(&tx).await.unwrap();
+        drop(tx);
+        let _ = t.await.unwrap();
+
+        // Blank the book's author, clear jobs/selection, and give the second
+        // copy a distinctive author to backfill from.
+        let chosen;
+        {
+            let mut req = orch.request_at(&[0], 0).unwrap().unwrap();
+            assert!(req.candidates.len() >= 2, "need >= 2 variations");
+            req.input.authors.clear();
+            req.backfilled.clear();
+            req.selected = None;
+            for c in &mut req.candidates {
+                c.job = None;
+            }
+            chosen = req.candidates[1].md5.clone();
+            req.candidates[1].authors = vec!["Walter Isaacson".into()];
+            orch.store
+                .update_request(orch.list_id, &[0], 0, &req)
+                .unwrap();
+        }
+
+        orch.select_candidate(&[0], 0, &chosen).unwrap();
+
+        let req = orch.request_at(&[0], 0).unwrap().unwrap();
+        assert_eq!(
+            req.input.authors,
+            vec!["Walter Isaacson".to_string()],
+            "select_candidate backfills the author from the chosen copy"
+        );
+        assert!(
+            req.backfilled.iter().any(|b| b == "authors"),
+            "the backfilled author is recorded so the user's edits stay protected"
         );
     }
 

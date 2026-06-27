@@ -367,6 +367,36 @@ pub fn backfill_input(req: &mut BookRequest) -> bool {
         Some(c) => c.clone(),
         None => return false,
     };
+    apply_backfill(req, &source)
+}
+
+/// Back-fill a book's EMPTY metadata from its SELECTED candidate, regardless of
+/// whether that copy has started acquiring yet.
+///
+/// [`backfill_input`] only fires once a copy is acquiring (Resolving/…/Done), so
+/// a freshly matched or hand-picked copy wouldn't fill in a missing author until
+/// its download actually began. The desktop back-fills as soon as a copy is
+/// chosen; this brings the shared core path (and therefore the TUI) to parity:
+/// call it right after `req.selected` is set (auto-match or explicit select).
+/// Same field rules as [`backfill_input`] (user-owned values are never
+/// overwritten); a no-op when nothing is selected. Returns `true` if it changed
+/// `req`.
+pub fn backfill_input_from_selected(req: &mut BookRequest) -> bool {
+    let sel = match req.selected.clone() {
+        Some(s) => s,
+        None => return false,
+    };
+    let source = match req.candidates.iter().find(|c| c.md5 == sel) {
+        Some(c) => c.clone(),
+        None => return false,
+    };
+    apply_backfill(req, &source)
+}
+
+/// Shared field-by-field back-fill from an explicit `source` candidate (used by
+/// both [`backfill_input`] and [`backfill_input_from_selected`]). See
+/// [`backfill_input`] for the per-field ownership rules.
+fn apply_backfill(req: &mut BookRequest, source: &Candidate) -> bool {
     let mut changed = false;
     let in_backfilled = |req: &BookRequest, f: &str| req.backfilled.iter().any(|b| b == f);
 
@@ -902,6 +932,61 @@ mod tests {
         assert!(req.input.authors.is_empty());
         assert_eq!(req.input.year, None);
         assert!(req.backfilled.is_empty());
+    }
+
+    #[test]
+    fn backfill_from_selected_fills_author_before_download() {
+        // Task 9: a freshly SELECTED copy (only `Pending`, not yet acquiring)
+        // backfills the missing author immediately — `backfill_input` (acquiring
+        // only) would be a no-op here.
+        let mut req = BookRequest::new(BookInput {
+            title: "Steve Jobs".into(),
+            ..Default::default()
+        });
+        req.candidates = vec![
+            meta_cand("m1", &["Walter Isaacson"], Some(2011), None, None, None),
+            meta_cand("m2", &["Someone Else"], Some(1999), None, None, None),
+        ];
+        req.selected = Some("m1".into());
+        // The acquiring-only path does nothing (no copy is acquiring)…
+        assert!(!backfill_input(&mut req), "acquiring-only path is a no-op");
+        // …but the selected-source path backfills from the chosen copy.
+        assert!(backfill_input_from_selected(&mut req));
+        assert_eq!(req.input.authors, vec!["Walter Isaacson".to_string()]);
+        assert_eq!(req.input.year, Some(2011));
+        assert!(req.backfilled.iter().any(|b| b == "authors"));
+    }
+
+    #[test]
+    fn backfill_from_selected_never_overwrites_user_author() {
+        let mut req = BookRequest::new(BookInput {
+            title: "Steve Jobs".into(),
+            authors: vec!["My Author".into()],
+            ..Default::default()
+        });
+        req.candidates = vec![meta_cand(
+            "m1",
+            &["Walter Isaacson"],
+            None,
+            None,
+            None,
+            None,
+        )];
+        req.selected = Some("m1".into());
+        assert!(!backfill_input_from_selected(&mut req));
+        assert_eq!(req.input.authors, vec!["My Author".to_string()]);
+    }
+
+    #[test]
+    fn backfill_from_selected_noop_when_nothing_selected() {
+        let mut req = BookRequest::new(BookInput {
+            title: "Steve Jobs".into(),
+            ..Default::default()
+        });
+        req.candidates = vec![meta_cand("m1", &["A"], None, None, None, None)];
+        // No `selected` → no source → no change.
+        assert!(!backfill_input_from_selected(&mut req));
+        assert!(req.input.authors.is_empty());
     }
 
     #[test]
