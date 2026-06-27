@@ -6743,6 +6743,80 @@ mod tests {
         );
     }
 
+    /// Task #2: the list view and the detail variations table share `state_label`,
+    /// so a downloading copy reads the SAME short `dling` label in both — with NO
+    /// percentage (the progress bar / Activity pane convey it).
+    #[test]
+    fn list_and_detail_share_short_dling_label() {
+        use crate::app::DetailSubFocus;
+        let backend = TestBackend::new(132, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        app.flat[0].book.versions = vec![mk_var(
+            "Downloading Copy",
+            "mobi",
+            "downloading",
+            50,
+            &"b".repeat(32),
+        )];
+
+        // List render: the primary row's state cell must read "dling". (The
+        // Activity pane separately shows the live "50%" progress — that's the
+        // progress display, not the state label, so we don't assert against it.)
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let list_buf = buffer_string(&terminal);
+        assert!(
+            list_buf.contains("dling"),
+            "list must show the short 'dling' label: {list_buf}"
+        );
+
+        // Detail render: identical short label, and the old "downloading 50%"
+        // state-cell wording is gone (the % is dropped from the label).
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let detail_buf = buffer_string(&terminal);
+        assert!(
+            detail_buf.contains("dling"),
+            "detail must show the same short 'dling' label: {detail_buf}"
+        );
+        assert!(
+            !detail_buf.contains("downloading 50%"),
+            "detail state cell must drop the percentage (no 'downloading 50%'): {detail_buf}"
+        );
+    }
+
+    /// Task #2: list `available` reads `avail` (matching the detail table), so the
+    /// two never drift on the available state either.
+    #[test]
+    fn list_available_state_reads_avail() {
+        let backend = TestBackend::new(132, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        app.flat[0].book.versions = vec![mk_var(
+            "Available Copy",
+            "epub",
+            "available",
+            0,
+            &"a".repeat(32),
+        )];
+
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let list_buf = buffer_string(&terminal);
+        assert!(
+            list_buf.contains("avail"),
+            "list available state must read 'avail': {list_buf}"
+        );
+    }
+
     /// Render smoke test for #11: the picker renders candidate rows + the border
     /// "choose a copy" title without panicking, via the flex-row path.
     #[test]

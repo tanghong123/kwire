@@ -907,41 +907,45 @@ mod filter_chip_tests {
 // 2  Book table
 // ---------------------------------------------------------------------------
 
+/// Canonical SHORT state label, shared by the list view (primary row +
+/// "↳ alt. copy" sub-rows) and the detail variations table so the two can't
+/// drift. Returns plain text only — the COLOR is applied separately via
+/// `theme::style_for_state` (keyed off the raw state). Accepts both per-copy
+/// job states ("downloading", "available", …) and book-level discovery states
+/// ("not_found", "needs_selection", "querying") so every status renders the
+/// same wording everywhere.
+fn state_label(state: &str) -> &str {
+    match state {
+        "done" => "done",
+        // No percentage: the progress bar / Activity pane already convey it.
+        "downloading" => "dling",
+        "available" => "avail",
+        "queued" | "pending" => "queued",
+        "querying" | "queuing" => "querying",
+        "paused" => "paused",
+        "failed" | "cancelled" => "failed",
+        "not_found" | "not found" => "not found",
+        "needs_selection" | "choose" => "choose",
+        other => other,
+    }
+}
+
 /// Per-variation display cells for a SINGLE armed copy (used for the primary
 /// row of a stacked book and for each "↳ alt. copy" sub-row). Returns
-/// `(fmt, size, state_label, progress)`.
-fn variation_display(v: &libgen_engine::ViewVariation, tick: u64) -> (String, String, String, u32) {
-    let state_label = match v.state.as_str() {
-        "done" => "\u{2713} done".to_string(),
-        "downloading" => format!("{} {}%", theme::spinner(tick), v.progress),
-        "queued" => "\u{00b7} queued".to_string(),
-        "paused" => "\u{23f8} paused".to_string(),
-        "failed" | "cancelled" => "\u{2717} failed".to_string(),
-        other => other.to_string(),
-    };
+/// `(fmt, size, state_label, progress)`. Color is applied by the caller via
+/// `theme::style_for_state(&v.state)`.
+fn variation_display(v: &libgen_engine::ViewVariation) -> (String, String, String, u32) {
     let size = if v.size > 0 {
         format!("{} MB", v.size)
     } else {
         "\u{2014}".to_string()
     };
-    (v.fmt.clone(), size, state_label, v.progress)
-}
-
-/// Map a rendered state label back to a core state key for `style_for_state`.
-fn state_key_for_label(label: &str) -> &'static str {
-    if label.contains("done") {
-        "done"
-    } else if label.contains('%') {
-        "downloading"
-    } else if label.contains("failed") || label.contains("not found") {
-        "failed"
-    } else if label.contains("choose") {
-        "available"
-    } else if label.contains("paused") {
-        "paused"
-    } else {
-        "queued"
-    }
+    (
+        v.fmt.clone(),
+        size,
+        state_label(&v.state).to_string(),
+        v.progress,
+    )
 }
 
 /// One pre-collected library table row (group divider or a body book/sub-row),
@@ -1033,21 +1037,27 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
         let armed = armed_variations(book);
         let stacked = armed.len() >= 2;
 
-        // Determine the PRIMARY row's rest-field cells.
-        let (display_fmt, display_size, display_state, _progress) = if stacked {
-            variation_display(armed[0], app.tick)
+        // Determine the PRIMARY row's rest-field cells. `state_key` is the RAW
+        // state used to color the cell via `theme::style_for_state`.
+        let (display_fmt, display_size, display_state, _progress, state_key) = if stacked {
+            let (f, s, st, p) = variation_display(armed[0]);
+            (f, s, st, p, armed[0].state.clone())
         } else if book.versions.is_empty() {
-            let disc = match book.discovery.as_str() {
-                "not_found" => "\u{2717} not found",
-                "needs_selection" => "\u{25cf} choose",
-                "queuing" | "querying" => "\u{280b} querying",
+            // No version yet — show the book-level discovery state. The style
+            // key mirrors the discovery semantics: choose = needs-you,
+            // not_found = failed, everything else = dim/queued.
+            let key = match book.discovery.as_str() {
+                "not_found" => "not_found",
+                "needs_selection" => "available",
+                "queuing" | "querying" => "queued",
                 _ => "queued",
             };
             (
                 "???".to_string(),
                 "\u{2014}".to_string(),
-                disc.to_string(),
+                state_label(&book.discovery).to_string(),
                 0u32,
+                key.to_string(),
             )
         } else {
             let best = book
@@ -1057,23 +1067,21 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 .or_else(|| book.versions.iter().find(|v| v.state == "done"))
                 .or_else(|| book.versions.first())
                 .unwrap();
-            let state_label = match best.state.as_str() {
-                "done" => "\u{2713} done".to_string(),
-                "downloading" => format!("{} {}%", theme::spinner(app.tick), best.progress),
-                "failed" | "cancelled" => "\u{2717} failed".to_string(),
-                "queued" => "\u{00b7} queued".to_string(),
-                "paused" => "\u{23f8} paused".to_string(),
-                _ => best.state.clone(),
-            };
             let size_label = if best.size > 0 {
                 format!("{} MB", best.size)
             } else {
                 "\u{2014}".to_string()
             };
-            (best.fmt.clone(), size_label, state_label, best.progress)
+            (
+                best.fmt.clone(),
+                size_label,
+                state_label(&best.state).to_string(),
+                best.progress,
+                best.state.clone(),
+            )
         };
 
-        let state_style = theme::style_for_state(state_key_for_label(&display_state));
+        let state_style = theme::style_for_state(&state_key);
         let base_style = if is_selected {
             style_selected()
         } else {
@@ -1147,8 +1155,8 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 let sub_selected = var_focused && app.focus == Focus::List;
                 let sub_inactive = var_focused && app.focus != Focus::List;
 
-                let (vfmt, vsize, vstate, _vprog) = variation_display(v, app.tick);
-                let vstate_style = theme::style_for_state(state_key_for_label(&vstate));
+                let (vfmt, vsize, vstate, _vprog) = variation_display(v);
+                let vstate_style = theme::style_for_state(&v.state);
                 let vbase_style = if sub_selected {
                     style_selected()
                 } else {
@@ -2559,7 +2567,8 @@ fn render_detail_modal(
     );
 
     // ── Variation rows (#1): manual flex layout, NOT a fixed-column Table ─────
-    // Dropped the Src column + MD5; State "available"→"avail"; progress bar moved
+    // Dropped the Src column + MD5; State uses shared short labels (avail/dling/
+    // done) via `state_label`; progress bar moved
     // to its own line below each actively-downloading row. Title·Author flexes
     // (≥60%); the rest fields are capped at 40% (Mode A) else everything packs
     // into one comma string (Mode B). Focused row marquees, others ellipsize.
@@ -2580,13 +2589,10 @@ fn render_detail_modal(
                 "\u{2014}".into()
             };
             let mat = format!("{:.2}", v.score);
-            let state = match v.state.as_str() {
-                "available" => "avail".into(),
-                // MD5 removed from this table (stays in the picker + `v` snapshot).
-                "done" => "done \u{00b7} \u{2713}".into(),
-                "downloading" => format!("downloading {}%", v.progress),
-                other => other.to_string(),
-            };
+            // Shared short labels (see `state_label`) so the detail table and
+            // the list view never drift. The ✓/spinner glyphs live in the
+            // separate accent column, so this cell is plain text.
+            let state = state_label(&v.state).to_string();
             (fmt, size, mat, state)
         })
         .collect();
