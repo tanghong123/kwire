@@ -1375,7 +1375,7 @@ fn activity_leg_line(
     ])
 }
 
-fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
+pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
     // Count download states.
     let downloading_count = app
         .flat
@@ -1451,6 +1451,8 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
     ]);
 
     if !app.activity_expanded {
+        // Collapsed: only the header line shows, nothing to scroll.
+        app.activity_content_len = 0;
         frame.render_widget(Paragraph::new(header_line).style(style_normal()), area);
         return;
     }
@@ -1740,6 +1742,11 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
         )));
         leg_map.push(None);
     }
+
+    // Record the full content length so `scroll_activity` can bound the scroll
+    // offset across the WHOLE list (incl. the queued section), making the queued
+    // rows reachable when they overflow the visible height.
+    app.activity_content_len = all_content.len();
 
     // Apply scroll windowing to content lines.
     let n = all_content.len();

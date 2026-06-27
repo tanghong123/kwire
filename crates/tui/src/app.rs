@@ -683,6 +683,13 @@ pub struct AppState {
     /// Activity pane scroll offset (when focus == Activity).
     pub activity_selected: usize,
 
+    /// Total number of windowable content lines in the (expanded) Activity pane
+    /// — host headers + transfer legs + the queued header + queued rows. Set by
+    /// `render_activity` each frame and read by `scroll_activity` so the scroll
+    /// bound covers the whole list (incl. the queued section at the bottom), not
+    /// just the selectable download legs. 0 while collapsed.
+    pub activity_content_len: usize,
+
     /// Rects from the most-recent render pass (for mouse hit-testing).
     pub last_rects: LastRects,
 
@@ -893,6 +900,7 @@ impl AppState {
             command_buf: None,
             modal: None,
             activity_selected: 0,
+            activity_content_len: 0,
             last_rects: LastRects::default(),
             settings_selected: 0,
             settings_draft: None,
@@ -3361,7 +3369,10 @@ impl AppState {
     }
 
     fn scroll_activity(&mut self, delta: usize) {
-        let n = self.activity_row_count();
+        // Bound by the full windowable content length (set by render) so the
+        // queued list at the bottom of the pane is reachable when it overflows;
+        // fall back to the leg count before the first render populates it.
+        let n = self.activity_content_len.max(self.activity_row_count());
         if n == 0 {
             self.activity_selected = 0;
             return;

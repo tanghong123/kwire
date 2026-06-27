@@ -162,6 +162,15 @@ mod tests {
         }
     }
 
+    /// Build a `FlatBook` whose single version is QUEUED (armed but not yet
+    /// connecting) — feeds the Activity pane's `○ queued N↓` section.
+    fn make_queued_flat_book(title: &str, bi: usize) -> FlatBook {
+        let mut fb = make_downloading_flat_book(title, 0, bi);
+        fb.book.versions[0].state = "queued".into();
+        fb.book.versions[0].progress = 0;
+        fb
+    }
+
     /// Collect the terminal buffer into a single string (one long line).
     fn buffer_string(terminal: &Terminal<TestBackend>) -> String {
         terminal
@@ -2541,6 +2550,62 @@ mod tests {
 
         app.on_input(key(KeyCode::Char('k')));
         assert_eq!(app.activity_selected, 0, "'k' should retreat scroll offset");
+    }
+
+    /// Task #3: the Activity pane's queued list must SCROLL — when many queued
+    /// rows overflow the visible height, scrolling down (↓/j while Focus::Activity)
+    /// brings the bottom-most queued item into view. Renders the Activity pane in
+    /// isolation so book titles from the List pane can't pollute the assertion.
+    #[test]
+    fn activity_queued_list_scrolls_into_view() {
+        use ratatui::layout::Rect;
+        let backend = TestBackend::new(80, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+
+        // One active download leg (host group + selectable leg) + many queued
+        // copies whose rows overflow a 12-row Activity pane.
+        let mut flat = vec![make_downloading_flat_book("Active Book", 0, 0)];
+        for i in 0..30 {
+            flat.push(make_queued_flat_book(
+                &format!("Queued Title {:02}", i),
+                i + 1,
+            ));
+        }
+        app.flat = flat;
+        app.focus = Focus::Activity;
+        app.activity_expanded = true;
+
+        let area = Rect::new(0, 0, 80, 12);
+
+        // First render populates `activity_content_len` and shows the overflow.
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let before = buffer_string(&terminal);
+        assert!(
+            before.contains("more"),
+            "queued list should overflow with a '▾ N more' indicator: {before:?}"
+        );
+        assert!(
+            !before.contains("Queued Title 29"),
+            "the last queued item must be hidden BEFORE scrolling: {before:?}"
+        );
+
+        // Scroll all the way down (the bound now spans the whole content list,
+        // including the queued section at the bottom).
+        for _ in 0..50 {
+            app.on_input(key(KeyCode::Down));
+        }
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let after = buffer_string(&terminal);
+        assert!(
+            after.contains("Queued Title 29"),
+            "scrolling must bring the last queued item into view: {after:?}"
+        );
     }
 
     #[test]
