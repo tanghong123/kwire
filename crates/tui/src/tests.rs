@@ -4382,6 +4382,8 @@ mod tests {
         let mut app = AppState::new();
         app.set_view(fixture_vm());
         app.focus = Focus::Activity;
+        // p/c/r are only advertised when a download leg is focused.
+        insert_transfer(&mut app, &"a".repeat(32));
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let buf = buffer_string(&terminal);
         assert!(
@@ -5327,5 +5329,217 @@ mod tests {
         assert_eq!(app.aggregate_origin(0), Some(("list1".into(), 0)));
         assert_eq!(app.aggregate_origin(2), Some(("list2".into(), 0)));
         assert_eq!(app.aggregate_origin(3), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Contextual hot keys (J2) — header list ops, click-focus, activity hint,
+    // detail relabel + download-series.
+    // -----------------------------------------------------------------------
+
+    fn two_lists() -> Vec<crate::app::ListSummary> {
+        vec![
+            crate::app::ListSummary {
+                id: "L1".into(),
+                title: "List 1".into(),
+                done: 0,
+                total: 1,
+            },
+            crate::app::ListSummary {
+                id: "L2".into(),
+                title: "List 2".into(),
+                done: 0,
+                total: 1,
+            },
+        ]
+    }
+
+    /// Header focus owns the LIST ops: r/p/s/D reuse the `:` command handlers.
+    #[test]
+    fn header_focus_list_ops_dispatch_commands() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Header;
+        assert_eq!(
+            app.on_input(key(KeyCode::Char('r'))),
+            Intent::Command("requery".into()),
+            "Header r → :requery (re-search the list)"
+        );
+        assert_eq!(
+            app.on_input(key(KeyCode::Char('p'))),
+            Intent::Command("pause".into()),
+            "Header p → :pause (pause the list)"
+        );
+        assert_eq!(
+            app.on_input(key(KeyCode::Char('s'))),
+            Intent::Command("start".into()),
+            "Header s → :start (resume the list)"
+        );
+        assert_eq!(
+            app.on_input(key(KeyCode::Char('D'))),
+            Intent::Command("delete".into()),
+            "Header D → :delete (confirm-gated list delete)"
+        );
+    }
+
+    /// The header-only list-op keys must NOT fire from List focus, where the same
+    /// letters either mean book ops (r = retry) or nothing (s/D).
+    #[test]
+    fn list_op_keys_inert_outside_header() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::List;
+        // `s` and `D` are no-ops in List focus (not list ops).
+        assert_eq!(app.on_input(key(KeyCode::Char('s'))), Intent::Redraw);
+        assert_eq!(app.on_input(key(KeyCode::Char('D'))), Intent::Redraw);
+        // `r` in List focus is book retry, never :requery.
+        let r = app.on_input(key(KeyCode::Char('r')));
+        assert!(
+            !matches!(r, Intent::Command(_)),
+            "List r must not dispatch a command, got {:?}",
+            r
+        );
+    }
+
+    /// Clicking a list chip switches to it AND focuses the Header so the list hot
+    /// keys are immediately live.
+    #[test]
+    fn click_list_chip_focuses_header() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.all_lists = two_lists();
+        app.active_list_idx = 0;
+        app.focus = Focus::List;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let rect = app
+            .last_rects
+            .list_chips
+            .iter()
+            .find(|(_, i)| *i == 1)
+            .map(|(r, _)| *r)
+            .expect("list chip 1 rect registered");
+        let intent = app.on_input(mouse_left_click(rect.x + 1, rect.y));
+        assert!(
+            matches!(intent, Intent::SwitchList { ref id } if id == "L2"),
+            "click switches to L2, got {:?}",
+            intent
+        );
+        assert_eq!(
+            app.focus,
+            Focus::Header,
+            "click on a list chip must focus the Header so list hot keys activate"
+        );
+    }
+
+    /// Activity hint hides p/c/r when there are no download legs, and shows them
+    /// once a leg exists.
+    #[test]
+    fn activity_hint_hides_pcr_when_empty() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // no downloading books
+        app.focus = Focus::Activity;
+        assert!(!app.activity_has_legs(), "fixture has no legs");
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let empty = buffer_string(&terminal);
+        assert!(empty.contains("collapse"), "empty activity shows collapse");
+        assert!(
+            !empty.contains("pause"),
+            "empty activity must NOT advertise p pause"
+        );
+
+        // Add a leg → p/c/r come back.
+        insert_transfer(&mut app, &"a".repeat(32));
+        assert!(app.activity_has_legs());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let with_leg = buffer_string(&terminal);
+        assert!(
+            with_leg.contains("pause"),
+            "a focused leg re-advertises p pause"
+        );
+    }
+
+    /// Detail modal: the not-found hotkey now reads the verb "mark unavailable",
+    /// and the dead p/c chips are gone.
+    #[test]
+    fn detail_hint_relabels_not_found_to_mark_unavailable() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let s = buffer_string(&terminal);
+        assert!(
+            s.contains("mark unavailable"),
+            "detail hint relabels not-found → mark unavailable"
+        );
+        assert!(
+            !s.contains("not-found"),
+            "stale 'not-found' label must be gone"
+        );
+        assert!(s.contains("series"), "detail advertises S series");
+    }
+
+    /// Settings title shows the active list name ONLY when more than one list
+    /// exists; with a single list it is omitted as redundant noise.
+    #[test]
+    fn settings_title_omits_list_name_with_one_list() {
+        let render_title = |n_lists: usize| -> String {
+            let backend = TestBackend::new(120, 30);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut app = AppState::new();
+            app.set_view(fixture_vm()); // view title = "Test List"
+            app.all_lists = (0..n_lists)
+                .map(|i| crate::app::ListSummary {
+                    id: format!("L{i}"),
+                    title: format!("List {i}"),
+                    done: 0,
+                    total: 1,
+                })
+                .collect();
+            app.modal = Some(Modal::Settings);
+            app.settings_draft = Some(default_draft());
+            terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+            buffer_string(&terminal)
+        };
+        // One list → bare " Settings " title, no "·" + name.
+        let one = render_title(1);
+        assert!(
+            !one.contains("Settings · Test List"),
+            "single list must omit the list name from the Settings title"
+        );
+        // Two lists → name shown.
+        let many = render_title(2);
+        assert!(
+            many.contains("Settings · Test List"),
+            "multiple lists must show the list name in the Settings title"
+        );
+    }
+
+    /// Detail modal: `S` reuses the :download-series handler and closes the modal.
+    #[test]
+    fn detail_s_dispatches_download_series() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        let intent = app.on_input(key(KeyCode::Char('S')));
+        assert_eq!(intent, Intent::Command("download-series".into()));
+        assert!(
+            app.modal.is_none(),
+            "download-series closes the detail modal"
+        );
     }
 }

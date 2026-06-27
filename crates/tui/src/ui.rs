@@ -1359,7 +1359,36 @@ fn selected_book_hint_state(app: &AppState) -> &'static str {
 
 fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
     // The command-line input is rendered in its own row by render_command_line;
-    // this bar shows a transient status message or the focus-appropriate hint keys.
+    // this bar shows a transient status message, a `:`-mode prompt, or the
+    // focus-appropriate hint keys.
+
+    // ── `:` command-line mode → a PROMPT plus only the keys live here. ──
+    // The `:add` argument sub-mode shows the book-entry prompt; the bare
+    // command line shows a generic "type a command" prompt.
+    if let Some(buf) = app.command_buf.as_deref() {
+        let in_add = {
+            let t = buf.trim_start();
+            t == "add" || t.starts_with("add ")
+        };
+        let prompt = if in_add {
+            "enter a book title (and author) or the MD5"
+        } else {
+            "type a command"
+        };
+        let key = Style::default().fg(C_DONE).bg(C_PANEL);
+        let mut spans: Vec<Span> = vec![Span::styled(prompt.to_string(), style_hint())];
+        spans.push(Span::styled("  \u{00b7} ", style_hint()));
+        // Tab is only meaningful while the completion wildmenu is open.
+        if !app.completion_candidates.is_empty() {
+            spans.push(Span::styled("Tab", key));
+            spans.push(Span::styled(" complete \u{00b7} ", style_hint()));
+        }
+        spans.push(Span::styled("esc", key));
+        spans.push(Span::styled(" cancel", style_hint()));
+        frame.render_widget(Paragraph::new(Line::from(spans)).style(style_hint()), area);
+        return;
+    }
+
     let content = if let Some(ref msg) = app.status_msg {
         // Transient status message — shown until the next keypress.
         Line::from(Span::styled(msg.as_str(), Style::default().fg(C_BRIGHT)))
@@ -1368,7 +1397,10 @@ fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
         const GLOBALS: &str = "  : command \u{00b7} ? help \u{00b7} q quit";
         let hint: String = match app.focus {
             Focus::Header => {
-                format!("\u{2190}\u{2192} filter  [ ] list{GLOBALS}")
+                // Header focus owns the LIST ops (re-search / pause / start / delete).
+                format!(
+                    "\u{2190}\u{2192} filter  r re-search \u{00b7} p pause \u{00b7} s start \u{00b7} D delete  [ ] list{GLOBALS}"
+                )
             }
             Focus::List => {
                 let state = selected_book_hint_state(app);
@@ -1381,7 +1413,13 @@ fn render_hint_bar(frame: &mut Frame, app: &AppState, area: Rect) {
                 }
             }
             Focus::Activity => {
-                format!("p pause \u{00b7} c cancel \u{00b7} r retry{GLOBALS}")
+                // p/c/r act on the focused download leg — only show them when a leg
+                // exists; otherwise just the pane/collapse keys.
+                if app.activity_has_legs() {
+                    format!("p pause \u{00b7} c cancel \u{00b7} r retry \u{00b7} space collapse{GLOBALS}")
+                } else {
+                    format!("tab pane \u{00b7} space collapse{GLOBALS}")
+                }
             }
         };
         hint_line(&hint)
@@ -2046,8 +2084,11 @@ fn render_detail_modal(
     render_rule(frame, split[8]);
 
     // Context-aware hint: varies by sub-focus and selected variation state.
+    // `m` now reads "mark unavailable" (a verb). `S` (download-series) is live in
+    // the whole detail context, so every row advertises it. The stale `p`/`c`
+    // chips are gone — neither key fires inside the detail modal.
     let detail_hint: &str = match sub_focus {
-        DetailSubFocus::History => "esc back",
+        DetailSubFocus::History => "S series \u{00b7} esc back",
         DetailSubFocus::Variations => {
             let var_state = fb
                 .book
@@ -2057,17 +2098,17 @@ fn render_detail_modal(
                 .unwrap_or("available");
             match var_state {
                 "done" => {
-                    "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
+                    "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
                 }
                 "downloading" => {
-                    "p pause \u{00b7} c cancel  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
+                    "e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
                 }
                 "failed" | "cancelled" => {
-                    "r retry  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
+                    "r retry  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
                 }
                 _ => {
                     // available / queued
-                    "d download  e edit \u{00b7} x remove \u{00b7} m not-found \u{00b7} esc back"
+                    "d download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
                 }
             }
         }
@@ -2091,10 +2132,11 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
         .border_type(BorderType::Rounded)
         .border_style(style_dim())
         .title(Span::styled(
-            if let Some(v) = &app.view {
-                format!(" Settings \u{00b7} {} ", v.title)
-            } else {
-                " Settings ".to_string()
+            // Show the active list name ONLY when more than one list exists;
+            // with a single list it is redundant noise.
+            match &app.view {
+                Some(v) if app.all_lists.len() > 1 => format!(" Settings \u{00b7} {} ", v.title),
+                _ => " Settings ".to_string(),
             },
             style_dim(),
         ))
@@ -2294,9 +2336,12 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
                         value.clone()
                     };
                     let value_style = if is_editing {
+                        // Active inline editor: light text on the faint-green
+                        // selected-row bg (the block cursor `▏` is appended to the
+                        // buffer in `editing_buf`). No bright-orange — unreadable.
                         Style::default()
-                            .fg(C_BG)
-                            .bg(C_NEEDS_YOU)
+                            .fg(C_BRIGHT)
+                            .bg(C_SELECTED)
                             .add_modifier(Modifier::BOLD)
                     } else if is_sel {
                         style_selected()
@@ -2342,10 +2387,12 @@ fn render_settings_modal(frame: &mut Frame, app: &AppState) {
                 SettingsFieldKind::Text => "type",
                 SettingsFieldKind::ReadOnly => "",
             };
+            // Maintenance hot keys live in the Viewing sub-mode.
+            const MAINT: &str = "r mirrors \u{00b7} o reorganize \u{00b7} c cleanup";
             if field_hint.is_empty() {
-                "s save \u{00b7} esc cancel".into()
+                format!("{MAINT}  s save \u{00b7} esc cancel")
             } else {
-                format!("{field_hint}  s save \u{00b7} esc cancel")
+                format!("{field_hint}  {MAINT}  s save \u{00b7} esc cancel")
             }
         }
     };

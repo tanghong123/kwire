@@ -1129,7 +1129,8 @@ impl AppState {
                                 Intent::Redraw
                             }
                         }
-                        Focus::Header => Intent::Redraw,
+                        // Header focus → re-search (re-query) the whole active list.
+                        Focus::Header => Intent::Command("requery".into()),
                     },
                     KeyCode::Char('p') => match self.focus {
                         Focus::Activity => {
@@ -1149,7 +1150,8 @@ impl AppState {
                                 Intent::Redraw
                             }
                         }
-                        Focus::Header => Intent::Redraw,
+                        // Header focus → pause the whole active list.
+                        Focus::Header => Intent::Command("pause".into()),
                     },
                     KeyCode::Char('c') => match self.focus {
                         Focus::Activity => {
@@ -1317,6 +1319,15 @@ impl AppState {
                             };
                         }
                         Intent::Redraw
+                    }
+                    // ── Header-pane LIST ops (active ONLY when the Header is focused).
+                    // These reuse the `:` command handlers so behaviour is identical.
+                    // `s` start/resume the active list; `D` delete it (keeps y/n confirm).
+                    KeyCode::Char('s') if self.focus == Focus::Header => {
+                        Intent::Command("start".into())
+                    }
+                    KeyCode::Char('D') if self.focus == Focus::Header => {
+                        Intent::Command("delete".into())
                     }
                     _ => Intent::Redraw,
                 }
@@ -1783,6 +1794,14 @@ impl AppState {
                                 return intent;
                             }
                             Intent::Redraw
+                        }
+                        // #53 download-series — ONLY available in the detail (book)
+                        // context. Reuses the `:download-series` handler, which acts
+                        // on the list-selected book. Close the modal so its status
+                        // message is visible.
+                        KeyCode::Char('S') => {
+                            self.modal = None;
+                            Intent::Command("download-series".into())
                         }
                         // #70 universal Enter: open a snapshot popup for the focused row.
                         KeyCode::Enter => {
@@ -2258,6 +2277,12 @@ impl AppState {
                     self.enter_settings_field();
                     Intent::Redraw
                 }
+                // ── Maintenance hot keys (reuse the `:` command handlers) ──
+                // `r` refresh mirrors, `o` reorganize (move-preview + y/n),
+                // `c` cleanup leftover `.part` files (→ Trash).
+                KeyCode::Char('r') => Intent::Command("refresh-mirrors".into()),
+                KeyCode::Char('o') => Intent::Command("reorganize".into()),
+                KeyCode::Char('c') => Intent::Command("cleanup".into()),
                 _ => Intent::Redraw,
             },
             _ => Intent::Redraw,
@@ -2812,6 +2837,13 @@ impl AppState {
     /// Counts BOOKS that have at least one downloading version (matching the
     /// one-row-per-book display in `render_activity`), with a fallback to the
     /// live-telemetry transfer count.
+    /// True when the Activity pane currently has at least one download leg
+    /// (an in-flight transfer or a downloading variation). Drives whether the
+    /// hint bar advertises the per-leg `p`/`c`/`r` keys.
+    pub fn activity_has_legs(&self) -> bool {
+        self.activity_row_count() > 0
+    }
+
     fn activity_row_count(&self) -> usize {
         let flat_count = self
             .flat
