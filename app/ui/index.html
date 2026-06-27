@@ -2800,7 +2800,7 @@ function renderDetail() {
    Interaction (event delegation - robust + testable)
    ===================================================================== */
 document.addEventListener("click", function (e) {
-  var t = e.target.closest("[data-action],[data-filter],[data-fmtfilter],[data-list],[data-toggle],[data-open],[data-dl],[data-replace],[data-accept],[data-remove],[data-marknf],[data-cancelv],[data-canceldl],[data-pausev],[data-resumev],[data-reveal],[data-top],[data-series],[data-history],[data-fmtmv],[data-fmtrm],[data-fmtadd],[data-fmtshowall],[data-imptab],[data-toggle-set],[data-manual],[data-manualgo],[data-manualcancel],[data-requery],[data-editbook],[data-editsave],[data-editcancel],[data-removebook]");
+  var t = e.target.closest("[data-action],[data-filter],[data-fmtfilter],[data-list],[data-toggle],[data-open],[data-dl],[data-replace],[data-accept],[data-remove],[data-marknf],[data-cancelv],[data-canceldl],[data-pausev],[data-resumev],[data-reveal],[data-top],[data-series],[data-history],[data-fmtmv],[data-fmtrm],[data-fmtadd],[data-fmtshowall],[data-imptab],[data-toggle-set],[data-manual],[data-manualgo],[data-manualcancel],[data-requery],[data-editbook],[data-editsave],[data-editcancel],[data-removebook],[data-setlang]");
   if (!t) return;
 
   if (t.dataset.fmtmv) { // reorder preferred formats
