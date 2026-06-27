@@ -20,6 +20,9 @@ reqwest.workspace = true
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 
+# Shared UI-string catalog (parses the embedded app/ui/i18n.json).
+serde_json.workspace = true
+
 # Async
 tokio = { workspace = true }
 futures = { workspace = true }

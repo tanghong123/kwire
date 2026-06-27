@@ -332,7 +332,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     let cmd_line: Line = if let Some(ref buf) = app.command_buf {
         command_input_line(buf, outer[1].width.saturating_sub(2))
     } else if let Some(ref msg) = app.status_msg {
-        Line::from(Span::styled(msg.clone(), style_hint()))
+        Line::from(Span::styled(crate::i18n::decode(msg), style_hint()))
     } else {
         Line::default()
     };
@@ -635,7 +635,7 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
             // Idle chip: colored by its status family (amber/red/teal/green/dim).
-            Style::default().fg(filter_chip_color(filter.label()))
+            Style::default().fg(filter_chip_color(filter.label_key()))
         }
     };
 
@@ -1723,7 +1723,7 @@ fn hint_bar_lines(app: &AppState, width: u16) -> Vec<Line<'static>> {
     if let Some(ref msg) = app.status_msg {
         // Transient status message — shown until the next keypress.
         return vec![Line::from(Span::styled(
-            msg.clone(),
+            crate::i18n::decode(msg),
             Style::default().fg(C_BRIGHT),
         ))];
     }
@@ -2570,7 +2570,7 @@ fn render_detail_modal(
                         Style::default().fg(kind_color).add_modifier(Modifier::BOLD)
                     },
                 ),
-                Span::styled(e.detail.clone(), base_style),
+                Span::styled(crate::i18n::decode(&e.detail), base_style),
             ])
         })
         .collect();

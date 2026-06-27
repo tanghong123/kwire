@@ -94,15 +94,16 @@ pub fn style_for_state(state: &str) -> Style {
 }
 
 /// Color for a status-filter chip, keyed by status family (audit palette).
-/// The active/selected chip is rendered bright + underlined by the caller and
-/// does not go through this function.
-pub fn filter_chip_color(label: &str) -> Color {
-    match label {
-        "Needs you" => C_NEEDS_YOU,     // amber
-        "Cannot" => C_FAILED,           // red
-        "In progress" => C_DOWNLOADING, // teal / blue
-        "Done" => C_DONE,               // green
-        // All / Check / Queued and anything else: dim metadata.
+/// Keyed off the catalog label key (locale-stable) rather than the translated
+/// text. The active/selected chip is rendered bright + underlined by the caller
+/// and does not go through this function.
+pub fn filter_chip_color(label_key: &str) -> Color {
+    match label_key {
+        "filter.needs" => C_NEEDS_YOU,    // amber
+        "filter.cantdl" => C_FAILED,      // red
+        "filter.active" => C_DOWNLOADING, // teal / blue
+        "filter.done" => C_DONE,          // green
+        // filter.all / filter.review and anything else: dim metadata.
         _ => C_DIM,
     }
 }

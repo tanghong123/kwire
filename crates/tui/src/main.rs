@@ -17,6 +17,7 @@
 mod app;
 mod cli;
 mod guard;
+mod i18n;
 mod intent;
 #[cfg(test)]
 mod tests;

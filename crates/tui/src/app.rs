@@ -283,15 +283,23 @@ pub enum StatusFilter {
 }
 
 impl StatusFilter {
-    pub fn label(self) -> &'static str {
+    /// Catalog key for this filter's chrome label (shared with the desktop).
+    pub fn label_key(self) -> &'static str {
         match self {
-            StatusFilter::All => "All",
-            StatusFilter::NeedsYou => "Needs you",
-            StatusFilter::Check => "Check",
-            StatusFilter::Cannot => "Cannot",
-            StatusFilter::InProgress => "In progress",
-            StatusFilter::Done => "Done",
+            StatusFilter::All => "filter.all",
+            StatusFilter::NeedsYou => "filter.needs",
+            StatusFilter::Check => "filter.review",
+            StatusFilter::Cannot => "filter.cantdl",
+            StatusFilter::InProgress => "filter.active",
+            StatusFilter::Done => "filter.done",
         }
+    }
+
+    /// The filter's localized chrome label, resolved from the shared catalog so
+    /// it matches the desktop's English (e.g. "Cannot download", "Check
+    /// download").
+    pub fn label(self) -> String {
+        crate::i18n::tr(self.label_key())
     }
 
     /// Cycle through filters in order (right arrow).

@@ -746,6 +746,13 @@ function pad(n) { return (n < 10 ? "0" : "") + n; }
                      nodes on load + on every language change.
    Add a key to BOTH `en` and `zh`. t() falls back en → key, so a missing
    translation degrades gracefully rather than blanking the UI.
+
+   ⚠ SHARED CATALOG — canonical source is `app/ui/i18n.json`.
+   The Kwire TUI (crates/tui/src/i18n.rs) embeds that JSON so both surfaces show
+   identical strings. This page is a self-contained file://-openable prototype
+   (no build step, can't fetch() a sidecar), so the catalog stays inlined here.
+   KEEP THIS OBJECT AND i18n.json IN SYNC: when you add/change/remove a key,
+   update BOTH. They must contain the exact same keys + templates.
    ===================================================================== */
 var I18N = {
   en: {
