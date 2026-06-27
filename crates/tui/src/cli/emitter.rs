@@ -14,6 +14,7 @@ use libgen_core::download::current_edge;
 use libgen_core::model::DownloadList;
 use libgen_core::orchestrator::Event;
 use libgen_core::queue::Progress;
+use libgen_core::search::{SearchEvent, SearchObserver};
 use libgen_engine::{BookStatePayload, EngineEmitter};
 
 // ---------------------------------------------------------------------------
@@ -169,6 +170,68 @@ impl CliEmitter {
                 eprintln!("{prefix}resuming on {host} (from {off})");
             }
             _ => {}
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CliSearchObserver
+// ---------------------------------------------------------------------------
+
+/// Streams search-stage activity to **stderr** as the client works through
+/// mirrors — mirroring the download chronicle — so the user sees what is being
+/// tried *before* the final verdict. Also records the distinct hosts queried, in
+/// order, so the caller can build a precise "no candidates on any mirror
+/// (tried: …)" message on a true miss instead of a bare "no candidates found".
+pub struct CliSearchObserver {
+    /// Distinct hosts queried, in first-seen order.
+    tried: Mutex<Vec<String>>,
+}
+
+impl CliSearchObserver {
+    pub fn new() -> Self {
+        CliSearchObserver {
+            tried: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The distinct hosts queried so far, in order — for the exhaustion message.
+    pub fn tried_hosts(&self) -> Vec<String> {
+        self.tried.lock().map(|t| t.clone()).unwrap_or_default()
+    }
+
+    fn note_host(&self, host: &str) {
+        if let Ok(mut t) = self.tried.lock() {
+            if !t.iter().any(|h| h == host) {
+                t.push(host.to_string());
+            }
+        }
+    }
+}
+
+impl Default for CliSearchObserver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SearchObserver for CliSearchObserver {
+    fn on_event(&self, ev: &SearchEvent<'_>) {
+        match ev {
+            SearchEvent::Querying { host, .. } => {
+                self.note_host(host);
+                eprintln!("  searching {host}…");
+            }
+            SearchEvent::MirrorResult { host, count } => {
+                if *count == 0 {
+                    eprintln!("  {host}: 0 results");
+                } else {
+                    eprintln!("  {host}: {count} candidates");
+                }
+            }
+            SearchEvent::MirrorError { host, error } => {
+                eprintln!("  {host}: error ({error})");
+            }
         }
     }
 }

@@ -245,6 +245,37 @@ impl Transport for RecordingTransport {
 }
 
 // ---------------------------------------------------------------------------
+// Search progress observation
+// ---------------------------------------------------------------------------
+
+/// A single search-progress event, emitted as the client works through mirrors
+/// so a caller (e.g. the CLI) can stream activity *before* the final verdict —
+/// which mirror is being queried and how it fared. Mirrors the download
+/// chronicle so a flaky mirror that fails over is visible rather than silent.
+#[derive(Debug, Clone)]
+pub enum SearchEvent<'a> {
+    /// About to query `host` with the free-text `query`.
+    Querying { host: &'a str, query: &'a str },
+    /// `host` returned `count` candidates (`0` = an empty result/miss).
+    MirrorResult { host: &'a str, count: usize },
+    /// `host` failed outright (network or parse error).
+    MirrorError { host: &'a str, error: String },
+}
+
+/// Observes [`SearchEvent`]s as a search progresses. The default [`NoopObserver`]
+/// keeps the silent [`SearchClient::search`] path zero-cost.
+pub trait SearchObserver: Send + Sync {
+    fn on_event(&self, ev: &SearchEvent<'_>);
+}
+
+/// An observer that ignores every event (the default for `search`).
+pub struct NoopObserver;
+
+impl SearchObserver for NoopObserver {
+    fn on_event(&self, _ev: &SearchEvent<'_>) {}
+}
+
+// ---------------------------------------------------------------------------
 // Search client
 // ---------------------------------------------------------------------------
 
@@ -307,6 +338,18 @@ impl SearchClient {
     /// later strategy only adds genuinely new hits. We stop as soon as a strategy
     /// produced any candidate, keeping the request count polite (a few at most).
     pub async fn search(&self, input: &BookInput) -> Result<Vec<Candidate>> {
+        self.search_observed(input, &NoopObserver).await
+    }
+
+    /// Like [`SearchClient::search`], but reports per-mirror progress through
+    /// `observer` ([`SearchEvent`]s) as it works through the strategies and
+    /// mirrors. Callers that want to stream activity (the CLI) pass a real
+    /// observer; everything else uses [`SearchClient::search`] (a no-op observer).
+    pub async fn search_observed(
+        &self,
+        input: &BookInput,
+        observer: &dyn SearchObserver,
+    ) -> Result<Vec<Candidate>> {
         if self.mirrors.is_empty() {
             return Err(anyhow!("no search mirrors configured"));
         }
@@ -316,7 +359,7 @@ impl SearchClient {
         let mut last_err: Option<anyhow::Error> = None;
 
         for query in build_query_strategies(input) {
-            match self.search_query(&query).await {
+            match self.search_query(&query, observer).await {
                 Ok(cands) if !cands.is_empty() => {
                     // Does this strategy include a candidate the matcher could
                     // plausibly use (a real title-overlap with the request)? If a
@@ -353,13 +396,22 @@ impl SearchClient {
     /// order, returning the first mirror's non-empty candidate list (failover on
     /// error / empty). Returns `Ok(Vec::new())` if every mirror was tried without
     /// yielding candidates.
-    async fn search_query(&self, query: &str) -> Result<Vec<Candidate>> {
+    async fn search_query(
+        &self,
+        query: &str,
+        observer: &dyn SearchObserver,
+    ) -> Result<Vec<Candidate>> {
         let mut last_err: Option<anyhow::Error> = None;
         for mirror in &self.mirrors {
             let url = mirror
                 .search_url
                 .replace("{query}", &url_encode(query))
                 .replace("{limit}", &self.limit.to_string());
+
+            observer.on_event(&SearchEvent::Querying {
+                host: &mirror.host,
+                query,
+            });
 
             match self.transport.get(&url).await {
                 Ok(body) => {
@@ -372,17 +424,33 @@ impl SearchClient {
                     match parsed {
                         Ok(mut cands) if !cands.is_empty() => {
                             cands.truncate(self.limit);
+                            observer.on_event(&SearchEvent::MirrorResult {
+                                host: &mirror.host,
+                                count: cands.len(),
+                            });
                             return Ok(cands);
                         }
                         Ok(_) => {
+                            observer.on_event(&SearchEvent::MirrorResult {
+                                host: &mirror.host,
+                                count: 0,
+                            });
                             last_err = Some(anyhow!("{} returned no candidates", mirror.host));
                         }
                         Err(e) => {
+                            observer.on_event(&SearchEvent::MirrorError {
+                                host: &mirror.host,
+                                error: e.to_string(),
+                            });
                             last_err = Some(e.context(format!("parsing {}", mirror.host)));
                         }
                     }
                 }
                 Err(e) => {
+                    observer.on_event(&SearchEvent::MirrorError {
+                        host: &mirror.host,
+                        error: e.to_string(),
+                    });
                     tracing::warn!(host = %mirror.host, error = %e, "mirror failed, failing over");
                     last_err = Some(e);
                 }
@@ -1498,6 +1566,154 @@ mod tests {
         "#;
         let cfg = MirrorConfig::from_toml(toml).unwrap();
         assert_eq!(cfg.search_mirrors[0].host, "a");
+    }
+
+    // --- failover + observer ------------------------------------------------
+
+    /// A transport that maps a URL substring (the host) to a canned response, so
+    /// we can simulate a down mirror (Err), an empty mirror (Ok, no rows) and a
+    /// healthy mirror (Ok, a real results table) without touching the network.
+    struct MockTransport {
+        responses: Vec<(String, std::result::Result<String, String>)>,
+    }
+
+    #[async_trait::async_trait]
+    impl Transport for MockTransport {
+        async fn get(&self, url: &str) -> Result<String> {
+            for (needle, resp) in &self.responses {
+                if url.contains(needle.as_str()) {
+                    return resp.clone().map_err(|e| anyhow!(e));
+                }
+            }
+            Err(anyhow!("no mock for {url}"))
+        }
+    }
+
+    /// Records the events a search emits, as flat strings, for assertions.
+    #[derive(Default)]
+    struct RecordingObserver {
+        events: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl SearchObserver for RecordingObserver {
+        fn on_event(&self, ev: &SearchEvent<'_>) {
+            let s = match ev {
+                SearchEvent::Querying { host, .. } => format!("query {host}"),
+                SearchEvent::MirrorResult { host, count } => format!("result {host} {count}"),
+                SearchEvent::MirrorError { host, .. } => format!("error {host}"),
+            };
+            self.events.lock().unwrap().push(s);
+        }
+    }
+
+    /// Three libgen.li-family mirrors in priority order: a, b, c.
+    fn three_mirror_cfg() -> MirrorConfig {
+        MirrorConfig::from_toml(
+            r#"
+            [[search_mirror]]
+            host = "a.example"
+            search_url = "https://a.example/index.php?req={query}&res={limit}"
+            kind = "libgen_li_html"
+            priority = 1
+            [[search_mirror]]
+            host = "b.example"
+            search_url = "https://b.example/index.php?req={query}&res={limit}"
+            kind = "libgen_li_html"
+            priority = 2
+            [[search_mirror]]
+            host = "c.example"
+            search_url = "https://c.example/index.php?req={query}&res={limit}"
+            kind = "libgen_li_html"
+            priority = 3
+        "#,
+        )
+        .unwrap()
+    }
+
+    /// A minimal libgen.li results table with a single valid row.
+    const ONE_ROW_TABLE: &str = r#"<table id="tablelibgen"><tbody>
+        <tr>
+          <td><a href="edition.php?id=1">Steve Jobs</a></td>
+          <td>Walter Isaacson</td><td>Simon &amp; Schuster</td><td>2011</td>
+          <td>English</td><td>656</td><td>10 MB</td><td>epub</td>
+          <td><a href="/ads.php?md5=1df204c78842ffe549166ffcb984babc">mirror</a></td>
+        </tr>
+        </tbody></table>"#;
+
+    fn steve_jobs_input() -> BookInput {
+        BookInput {
+            title: "Steve Jobs".into(),
+            authors: vec!["Walter Isaacson".into()],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn search_fails_over_past_error_and_empty_to_a_healthy_mirror() {
+        // a errors, b returns an empty table, c serves the real row.
+        let transport = MockTransport {
+            responses: vec![
+                ("a.example".into(), Err("connection refused".into())),
+                (
+                    "b.example".into(),
+                    Ok("<table id=\"tablelibgen\"><tbody></tbody></table>".into()),
+                ),
+                ("c.example".into(), Ok(ONE_ROW_TABLE.into())),
+            ],
+        };
+        let client = SearchClient::new(three_mirror_cfg(), Box::new(transport));
+        let obs = RecordingObserver::default();
+        let cands = client
+            .search_observed(&steve_jobs_input(), &obs)
+            .await
+            .unwrap();
+        assert_eq!(cands.len(), 1, "failover should reach the healthy mirror");
+        assert_eq!(cands[0].md5, "1df204c78842ffe549166ffcb984babc");
+
+        let events = obs.events.lock().unwrap().clone();
+        // First strategy: error on a, empty on b, hit on c (stops there).
+        assert_eq!(
+            events,
+            vec![
+                "query a.example",
+                "error a.example",
+                "query b.example",
+                "result b.example 0",
+                "query c.example",
+                "result c.example 1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn search_exhausts_all_mirrors_and_reports_each() {
+        // Every mirror errors or is empty for every strategy → no candidates.
+        let transport = MockTransport {
+            responses: vec![
+                ("a.example".into(), Err("timeout".into())),
+                (
+                    "b.example".into(),
+                    Ok("<table id=\"tablelibgen\"><tbody></tbody></table>".into()),
+                ),
+                ("c.example".into(), Err("503".into())),
+            ],
+        };
+        let client = SearchClient::new(three_mirror_cfg(), Box::new(transport));
+        let obs = RecordingObserver::default();
+        let cands = client
+            .search_observed(&steve_jobs_input(), &obs)
+            .await
+            .unwrap();
+        assert!(cands.is_empty(), "no mirror yielded candidates");
+
+        // Every mirror was queried (and reported) at least once.
+        let events = obs.events.lock().unwrap().clone();
+        for host in ["a.example", "b.example", "c.example"] {
+            assert!(
+                events.iter().any(|e| e.ends_with(host)),
+                "expected {host} to be reported in {events:?}"
+            );
+        }
     }
 }
 

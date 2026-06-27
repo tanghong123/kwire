@@ -58,7 +58,16 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     // Activity line: let the user know we're hitting the network.
     eprintln!("searching  {query}");
 
-    let mut candidates = client.search(&input).await.context("searching mirrors")?;
+    // Stream per-mirror activity (which mirror, its outcome) before the verdict,
+    // and remember which hosts were tried for a precise exhaustion message.
+    let observer = super::emitter::CliSearchObserver::new();
+    let mut candidates = client
+        .search_observed(&input, &observer)
+        .await
+        .context("searching mirrors")?;
+    // Whether the search itself found anything (before format/language filters):
+    // distinguishes a true mirror miss from "filters removed everything".
+    let found_any = !candidates.is_empty();
 
     // Optional format filter.
     if let Some(ref fmt_str) = args.format {
@@ -103,7 +112,18 @@ pub async fn run(args: SearchArgs) -> Result<()> {
     let showing = candidates.len();
 
     if candidates.is_empty() {
-        eprintln!("no candidates found for {query:?}");
+        if found_any {
+            // The mirrors returned candidates; the format/language filters removed
+            // them all.
+            eprintln!("no candidates matched your filters for {query:?}");
+        } else {
+            let tried = observer.tried_hosts();
+            if tried.is_empty() {
+                eprintln!("no candidates found for {query:?}");
+            } else {
+                eprintln!("no candidates on any mirror (tried: {})", tried.join(", "));
+            }
+        }
         return Ok(());
     }
 

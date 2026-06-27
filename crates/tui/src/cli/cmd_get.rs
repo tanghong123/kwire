@@ -82,13 +82,24 @@ pub async fn run(args: GetArgs) -> Result<()> {
         ..Default::default()
     };
 
+    // Stream per-mirror activity (which mirror, its outcome) before the verdict,
+    // and remember which hosts were tried for a precise exhaustion message.
+    let observer = super::emitter::CliSearchObserver::new();
     let mut candidates = search_client
-        .search(&input)
+        .search_observed(&input, &observer)
         .await
         .context("searching mirrors")?;
 
     if candidates.is_empty() {
-        eprintln!("no candidates found — try: kwire search \"{query}\"");
+        let tried = observer.tried_hosts();
+        if tried.is_empty() {
+            eprintln!("no candidates found — try: kwire search \"{query}\"");
+        } else {
+            eprintln!(
+                "no candidates on any mirror (tried: {}) — try: kwire search \"{query}\"",
+                tried.join(", ")
+            );
+        }
         return Ok(());
     }
 
