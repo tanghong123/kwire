@@ -637,6 +637,17 @@ pub struct AppState {
     /// resets offset + direction). Shared by the Detail variations table and the
     /// Picker candidate list — only one of those modals is open at a time.
     pub var_marquee_sel: usize,
+
+    // ── Marquee scroll state (list strip · ACTIVE list column · #15) ───────────
+    /// Column offset for the active list's title when it overflows its strip
+    /// column. Independent of the row/header marquees so the always-rendered
+    /// strip never fights the Detail/list-row animations.
+    pub list_marquee_offset: usize,
+    pub list_marquee_forward: bool,
+    pub list_marquee_pause: u8,
+    /// Active-list identity when the strip marquee was last reset (a change —
+    /// switching the active list — resets offset + direction).
+    pub list_marquee_sel: usize,
 }
 
 /// A single visible book row, carrying enough context to dispatch engine calls.
@@ -726,6 +737,10 @@ impl AppState {
             var_marquee_forward: true,
             var_marquee_pause: 0,
             var_marquee_sel: 0,
+            list_marquee_offset: 0,
+            list_marquee_forward: true,
+            list_marquee_pause: 0,
+            list_marquee_sel: 0,
         }
     }
 
@@ -809,6 +824,31 @@ impl AppState {
             self.var_marquee_forward = true;
             self.var_marquee_pause = 0;
             self.var_marquee_sel = new_sel;
+        }
+    }
+
+    /// Advance the active list's strip marquee by one tick (#15).
+    ///
+    /// Same ping-pong mechanics as the others over the dedicated `list_marquee_*`
+    /// state. `text_disp_w` is the active list label's display width and `col_w`
+    /// its strip-column width.
+    pub fn advance_list_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        step_marquee(
+            &mut self.list_marquee_offset,
+            &mut self.list_marquee_forward,
+            &mut self.list_marquee_pause,
+            text_disp_w,
+            col_w,
+        );
+    }
+
+    /// Reset the strip marquee when the active list changes (#15).
+    pub fn reset_list_marquee_if_changed(&mut self, new_sel: usize) {
+        if new_sel != self.list_marquee_sel {
+            self.list_marquee_offset = 0;
+            self.list_marquee_forward = true;
+            self.list_marquee_pause = 0;
+            self.list_marquee_sel = new_sel;
         }
     }
 

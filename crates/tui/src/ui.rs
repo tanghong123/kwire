@@ -401,85 +401,132 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
         return;
     }
 
-    // Compute "All" aggregate across every list.
+    let area_w = area.width as usize;
+
+    // The aggregate "All" stop — a fixed-width prefix (not a sized list column).
     let all_done: usize = app.all_lists.iter().map(|l| l.done).sum();
     let all_total: usize = app.all_lists.iter().map(|l| l.total).sum();
-
-    // Build each segment as (text, style).  Track the column offset of each
-    // list so we can compute a horizontal scroll that keeps the active list
-    // always fully visible.
-    struct Seg {
-        text: String,
-        style: ratatui::style::Style,
-    }
-    let mut segs: Vec<Seg> = Vec::new();
-
-    // The aggregate "All" stop. Highlighted (starred + title style) when it is
-    // the active selection — cycled onto via `[`/`]` like any real list.
     let prefix = if app.all_active {
         format!(" \u{2605} All {}/{}", all_done, all_total)
     } else {
         format!(" All {}/{}", all_done, all_total)
     };
-    let mut cumulative: usize = prefix.chars().count();
-    segs.push(Seg {
+    let prefix_style = if app.all_active {
+        style_title()
+    } else {
+        style_muted()
+    };
+    let prefix_w = crate::textfit::display_width(&prefix);
+
+    // ── Phase 1: per-list labels + natural widths (owned → releases the borrow). ─
+    struct Lbl {
+        text: String,
+        active: bool,
+    }
+    let labels: Vec<Lbl> = app
+        .all_lists
+        .iter()
+        .enumerate()
+        .map(|(i, list)| {
+            let active = !app.all_active && i == app.active_list_idx;
+            let text = if active {
+                format!("   \u{2605} {} {}/{}", list.title, list.done, list.total)
+            } else {
+                format!("   {} {}/{}", list.title, list.done, list.total)
+            };
+            Lbl { text, active }
+        })
+        .collect();
+    let natural_widths: Vec<usize> = labels
+        .iter()
+        .map(|l| crate::textfit::display_width(&l.text))
+        .collect();
+
+    // #15: per-list column widths (≤4 even split / >4 cap N/4, floor 30).
+    let col_widths = list_strip_layout(area_w, &natural_widths);
+    let total_natural: usize = natural_widths.iter().sum();
+    // Equal padded columns only in the ≤4 even-split (capped) case.
+    let even_mode = total_natural > area_w && labels.len() <= 4;
+
+    // ── Phase 2: advance only the ACTIVE list's in-column marquee. ────────────
+    let active_idx = if app.all_active {
+        None
+    } else {
+        Some(app.active_list_idx)
+    };
+    if let Some(ai) = active_idx {
+        app.reset_list_marquee_if_changed(ai);
+        app.advance_list_marquee(
+            natural_widths.get(ai).copied().unwrap_or(0),
+            col_widths.get(ai).copied().unwrap_or(0),
+        );
+    } else {
+        app.reset_list_marquee_if_changed(usize::MAX);
+        app.advance_list_marquee(0, 1); // "All" active → park
+    }
+    let marquee_off = app.list_marquee_offset;
+
+    // ── Phase 3: build per-column segments (clipped/marqueed) + column ranges. ─
+    struct Seg {
+        text: String,
+        width: usize,
+        style: ratatui::style::Style,
+    }
+    let mut segs: Vec<Seg> = vec![Seg {
         text: prefix,
-        style: if app.all_active {
+        width: prefix_w,
+        style: prefix_style,
+    }];
+    // [start, end) strip-column range of each list segment (for scroll + chips).
+    let mut list_col_ranges: Vec<(usize, usize)> = Vec::new();
+    let mut cumulative = prefix_w;
+    for (i, l) in labels.iter().enumerate() {
+        let col = col_widths[i];
+        // Active list marquees within its column; inactive lists ellipsize.
+        let mut text = if l.active {
+            crate::textfit::marquee_window(&l.text, col, marquee_off)
+        } else {
+            crate::textfit::ellipsize(&l.text, col)
+        };
+        // Even split → pad to an equal column; packed/natural stay tight.
+        if even_mode {
+            text = pad_cell(&text, col);
+        }
+        let style = if l.active {
             style_title()
         } else {
             style_muted()
-        },
-    });
-
-    // Store the [start, end) column range of each list segment (excluding
-    // the "All" prefix and trailing nav hint).
-    let mut list_col_ranges: Vec<(usize, usize)> = Vec::new();
-
-    for (i, list) in app.all_lists.iter().enumerate() {
-        let is_active = !app.all_active && i == app.active_list_idx;
-        let text = if is_active {
-            format!("   \u{2605} {} {}/{}", list.title, list.done, list.total)
-        } else {
-            format!("   {} {}/{}", list.title, list.done, list.total)
         };
         let start = cumulative;
-        let end = start + text.chars().count();
+        let end = start + col;
         list_col_ranges.push((start, end));
         cumulative = end;
-        let style = if is_active {
-            style_title()
-        } else {
-            style_muted()
-        };
-        segs.push(Seg { text, style });
+        segs.push(Seg {
+            text,
+            width: col,
+            style,
+        });
     }
 
     let nav = "   [ ]";
-    let nav_len = nav.chars().count();
-    let total_width = cumulative + nav_len;
+    let nav_w = crate::textfit::display_width(nav);
+    let total_width = cumulative + nav_w;
     segs.push(Seg {
         text: nav.into(),
+        width: nav_w,
         style: style_muted(),
     });
 
-    let area_w = area.width as usize;
-
-    // Compute scroll_x so the active list is fully visible.
-    let (active_start, active_end) = list_col_ranges
-        .get(app.active_list_idx)
-        .copied()
+    // Compute scroll_x so the active list column is fully visible.
+    let (active_start, active_end) = active_idx
+        .and_then(|ai| list_col_ranges.get(ai).copied())
         .unwrap_or((0, 0));
-
     let scroll_x: usize = if total_width <= area_w || app.all_active {
         0 // everything fits (or "All" is active, anchored at column 0) — no scroll
     } else {
-        // We want [scroll_x, scroll_x + area_w) to contain [active_start, active_end).
-        // Try scrolling just far enough to show the start of the active list.
         let want_start = active_start.saturating_sub(1);
-        // Clamp so we never show blank space at the right.
         let max_scroll = total_width.saturating_sub(area_w);
         let mut sx = want_start.min(max_scroll);
-        // Ensure the end of the active list is also visible (scroll right if needed).
         if sx + area_w < active_end {
             sx = active_end.saturating_sub(area_w).min(max_scroll);
         }
@@ -489,8 +536,7 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
     let has_left = scroll_x > 0;
     let has_right = scroll_x + area_w < total_width;
 
-    // Populate list_chips for mouse hit-testing: compute each list's on-screen
-    // column range after applying the scroll offset.
+    // Populate list_chips for mouse hit-testing at the scrolled positions.
     for (i, (start, end)) in list_col_ranges.iter().enumerate() {
         let screen_start = start.saturating_sub(scroll_x);
         let screen_end = end.saturating_sub(scroll_x).min(area_w);
@@ -507,42 +553,27 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
         }
     }
 
-    // Build visible spans by slicing each segment to the visible column window
-    // [scroll_x, scroll_x + area_w).
+    // Slice each segment to the visible column window [scroll_x, scroll_x+area_w),
+    // display-width aware (#14) so CJK list titles never split mid-glyph.
+    let win_start = scroll_x;
+    let win_end = scroll_x + area_w;
     let mut spans: Vec<Span> = Vec::new();
     let mut pos: usize = 0;
-
     for seg in &segs {
-        let seg_len = seg.text.chars().count();
-        let seg_end = pos + seg_len;
-
-        if seg_end <= scroll_x {
-            // Entirely before the visible window — skip.
-            pos = seg_end;
+        let s = pos;
+        let e = pos + seg.width;
+        pos = e;
+        if e <= win_start || s >= win_end {
             continue;
         }
-        if pos >= scroll_x + area_w {
-            // Entirely after the visible window — stop.
-            break;
+        let vis_start = s.max(win_start);
+        let vis_end = e.min(win_end);
+        let skip = vis_start - s;
+        let take = vis_end - vis_start;
+        let sliced = crate::textfit::marquee_window(&seg.text, take, skip);
+        if !sliced.is_empty() {
+            spans.push(Span::styled(sliced, seg.style));
         }
-
-        // Clip to the visible window.
-        let char_skip = scroll_x.saturating_sub(pos);
-        let chars_available = area_w.saturating_sub(pos.saturating_sub(scroll_x));
-        let visible_chars = seg_len.saturating_sub(char_skip).min(chars_available);
-        if visible_chars > 0 {
-            let visible: String = seg
-                .text
-                .chars()
-                .skip(char_skip)
-                .take(visible_chars)
-                .collect();
-            if !visible.is_empty() {
-                spans.push(Span::styled(visible, seg.style));
-            }
-        }
-
-        pos = seg_end;
     }
 
     frame.render_widget(
@@ -715,6 +746,31 @@ fn state_key_for_label(label: &str) -> &'static str {
     }
 }
 
+/// One pre-collected library table row (group divider or a body book/sub-row),
+/// built before the marquee `&mut` borrow and the final layout decision.
+enum BookItem {
+    /// A non-focusable group divider — name ellipsized (#12), `done/total` frac.
+    Group { name: String, frac: String },
+    /// A book primary row or an indented "↳ alt. copy" sub-row.
+    Body {
+        rref: RowRef,
+        seq_cell: Cell<'static>,
+        title: String,
+        author: String,
+        title_style: Style,
+        author_style: Style,
+        /// (text, style) for the rest fields: Fmt, Size, State.
+        rest: Vec<(String, Style)>,
+        base_style: Style,
+        /// Is this the focused (selected + List-focused, no modal) row? Only it
+        /// marquees; everyone else ellipsizes.
+        focused: bool,
+        /// Is this the selected row at all (regardless of pane focus)? Drives the
+        /// table scroll so the selection stays in view.
+        selected: bool,
+    },
+}
+
 fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
     // Clear previous book_rows.
     app.last_rects.book_rows.clear();
@@ -726,25 +782,31 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
         return;
     }
 
-    let mut rows: Vec<Row> = Vec::new();
-    // Visual row index within the table body (group headers + book rows), used
-    // both for mouse hit-test rects and to keep the selected book scrolled in.
-    let mut visual_row: u16 = 0;
+    // Fixed seq/accent column; everything else is the flexing 3-region content.
+    const SEQ_W: u16 = 4;
+    let content_w = (area.width as usize).saturating_sub(SEQ_W as usize);
+
+    // The focused row only marquees when the List pane owns focus and no modal
+    // covers the table (the table is drawn behind every modal each frame, so the
+    // book-row marquee must NOT advance `var_marquee_*` while Detail/Picker also
+    // animate it).
+    let marquee_active = app.modal.is_none() && app.focus == Focus::List;
+
+    // ── Phase 1: collect every row, the rest-field natural widths, and the
+    //    focused row's metrics — all under the shared `&app.flat` borrow. ──────
+    let mut items: Vec<BookItem> = Vec::new();
     let mut last_group: Option<usize> = None;
-    let mut selected_visual: usize = 0;
+    let mut rest_widths = [0usize; 3];
+    // Focused row's (title, author, rest strings) for the marquee math below.
+    let mut focused_meta: Option<(String, String, Vec<String>)> = None;
 
     for (i, fb) in app.flat.iter().enumerate() {
         let book = &fb.book;
-        // The book PRIMARY row is "the selected row" only when no variation
-        // sub-row of this book is focused (`selected_var` is None).
         let book_focused = i == app.selected && app.selected_var.is_none();
-        // Active selection only when the List pane has focus.
         let is_selected = book_focused && app.focus == Focus::List;
-        // Dim selection marker when List pane is inactive (any other pane focused).
         let is_inactive_selected = book_focused && app.focus != Focus::List;
 
-        // Emit a group-header row whenever the owning group changes (matches the
-        // wireframe's "LIFT-OFF  4/12" section bands).
+        // Emit a group-header divider whenever the owning group changes.
         if last_group != Some(fb.group_index) {
             last_group = Some(fb.group_index);
             let total = app
@@ -764,35 +826,17 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                         .unwrap_or(false)
                 })
                 .count();
-            rows.push(
-                Row::new([
-                    Cell::from(""),
-                    Cell::from(fb.group_name.clone()).style(style_header()),
-                    Cell::from(""),
-                    Cell::from(""),
-                    Cell::from(""),
-                    Cell::from(format!("{done}/{total}")).style(style_header()),
-                ])
-                .height(1)
-                .style(style_header()),
-            );
-            visual_row += 1;
+            items.push(BookItem::Group {
+                name: fb.group_name.clone(),
+                frac: format!("{done}/{total}"),
+            });
         }
 
-        if book_focused {
-            selected_visual = visual_row as usize;
-        }
-
-        // Armed (requested) variations in display order. With 2+ armed copies the
-        // book renders its PRIMARY copy here and one indented "↳ alt. copy"
-        // sub-row per additional armed copy (see the main-library mock). With 0–1
-        // armed it stays a single row (existing best-variation roll-up).
         let armed = armed_variations(book);
         let stacked = armed.len() >= 2;
 
-        // Determine the PRIMARY row's display cells.
-        let (display_fmt, display_size, display_state, display_progress) = if stacked {
-            // Primary = the first armed copy in display order (done-first).
+        // Determine the PRIMARY row's rest-field cells.
+        let (display_fmt, display_size, display_state, _progress) = if stacked {
             variation_display(armed[0], app.tick)
         } else if book.versions.is_empty() {
             let disc = match book.discovery.as_str() {
@@ -808,8 +852,6 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 0u32,
             )
         } else {
-            // Pick the "best" variation to display: prefer an active one,
-            // else the first done, else the first kept.
             let best = book
                 .versions
                 .iter()
@@ -833,34 +875,18 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             (best.fmt.clone(), size_label, state_label, best.progress)
         };
 
-        let bar = theme::progress_bar(display_progress, 10);
         let state_style = theme::style_for_state(state_key_for_label(&display_state));
-
-        let row_style = if is_selected {
+        let base_style = if is_selected {
             style_selected()
         } else {
             style_normal()
         };
-
-        // Left accent cell: ▌ in accent green on selected bg (active); dim ▌ (inactive); seq # otherwise.
-        let seq_cell = if is_selected {
-            Cell::from("\u{258c}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
-        } else if is_inactive_selected {
-            // Dimmed (muted-green) accent when the List pane is inactive — the
-            // selection stays visible rather than collapsing to a plain seq #.
-            Cell::from("\u{258c}").style(style_sel_accent_dim())
-        } else {
-            Cell::from(format!("{:>3}", book.seq)).style(Style::default().fg(C_FAINT))
-        };
-        // Title + author share ONE flexing cell so the author follows the title
-        // with a ~2-char gutter (no dead gap before a fixed author column).
-        // On the selected row the author is ENHANCED to a warm beige; otherwise
-        // it stays dim metadata.
         let title_style = if is_selected {
             style_selected()
         } else {
             style_title()
         };
+        // On the selected row the author is ENHANCED to warm beige; else dim.
         let author_style = if is_selected {
             Style::default()
                 .fg(C_WARM)
@@ -869,40 +895,51 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
         } else {
             Style::default().fg(C_MUTED)
         };
-        let title_author_cell = if book.author.is_empty() {
-            Cell::from(Line::from(Span::styled(book.title.clone(), title_style)))
+        let meta_style = if is_selected {
+            style_selected()
         } else {
-            Cell::from(Line::from(vec![
-                Span::styled(book.title.clone(), title_style),
-                Span::styled("  ", author_style),
-                Span::styled(book.author.clone(), author_style),
-            ]))
+            Style::default().fg(C_MUTED)
         };
 
-        let row = Row::new([
-            seq_cell,
-            title_author_cell,
-            Cell::from(display_fmt).style(if is_selected {
-                style_selected()
-            } else {
-                Style::default().fg(C_MUTED)
-            }),
-            Cell::from(display_size).style(if is_selected {
-                style_selected()
-            } else {
-                Style::default().fg(C_MUTED)
-            }),
-            Cell::from(display_state).style(state_style),
-            Cell::from(bar).style(state_style),
-        ])
-        .height(1)
-        .style(row_style);
-        rows.push(row);
+        // Left accent cell: ▌ accent (active), dim ▌ (inactive), else seq #.
+        let seq_cell = if is_selected {
+            Cell::from("\u{258c}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
+        } else if is_inactive_selected {
+            Cell::from("\u{258c}").style(style_sel_accent_dim())
+        } else {
+            Cell::from(format!("{:>3}", book.seq)).style(Style::default().fg(C_FAINT))
+        };
 
-        // Store book row rect: no border, no header — offset is just visual_row.
-        let row_rect = Rect::new(area.x, area.y + visual_row, area.width, 1);
-        app.last_rects.book_rows.push((row_rect, RowRef::Book(i)));
-        visual_row += 1;
+        let rest = vec![
+            (display_fmt, meta_style),
+            (display_size, meta_style),
+            (display_state, state_style),
+        ];
+        for (k, (s, _)) in rest.iter().enumerate() {
+            rest_widths[k] = rest_widths[k].max(crate::textfit::display_width(s));
+        }
+
+        let focused = is_selected && marquee_active;
+        if focused {
+            focused_meta = Some((
+                book.title.clone(),
+                book.author.clone(),
+                rest.iter().map(|(s, _)| s.clone()).collect(),
+            ));
+        }
+
+        items.push(BookItem::Body {
+            rref: RowRef::Book(i),
+            seq_cell,
+            title: book.title.clone(),
+            author: book.author.clone(),
+            title_style,
+            author_style,
+            rest,
+            base_style,
+            focused,
+            selected: book_focused,
+        });
 
         // ── Indented "↳ alt. copy" sub-rows for each ADDITIONAL armed copy ──
         if stacked {
@@ -911,20 +948,14 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                     i == app.selected && app.selected_var.as_deref() == Some(v.md5.as_str());
                 let sub_selected = var_focused && app.focus == Focus::List;
                 let sub_inactive = var_focused && app.focus != Focus::List;
-                if var_focused {
-                    selected_visual = visual_row as usize;
-                }
 
-                let (vfmt, vsize, vstate, vprog) = variation_display(v, app.tick);
-                let vbar = theme::progress_bar(vprog, 10);
+                let (vfmt, vsize, vstate, _vprog) = variation_display(v, app.tick);
                 let vstate_style = theme::style_for_state(state_key_for_label(&vstate));
-                let vrow_style = if sub_selected {
+                let vbase_style = if sub_selected {
                     style_selected()
                 } else {
                     style_normal()
                 };
-
-                // Accent / blank seq column (sub-rows have no number).
                 let vseq_cell = if sub_selected {
                     Cell::from("\u{258c}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
                 } else if sub_inactive {
@@ -932,41 +963,151 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 } else {
                     Cell::from("").style(Style::default().fg(C_FAINT))
                 };
+                let vmeta_style = if sub_selected {
+                    style_selected()
+                } else {
+                    Style::default().fg(C_MUTED)
+                };
+                let vtitle_style = vmeta_style;
 
-                // Indented label: "  ↳ alt. copy · <host>".
                 let host = v.host.as_deref().unwrap_or("\u{2014}");
-                let label_style = if sub_selected {
-                    style_selected()
-                } else {
-                    Style::default().fg(C_MUTED)
-                };
-                let label_cell = Cell::from(Line::from(Span::styled(
-                    format!("  \u{21b3} alt. copy \u{00b7} {host}"),
-                    label_style,
-                )));
+                let label = format!("  \u{21b3} alt. copy \u{00b7} {host}");
 
-                let cell_style = if sub_selected {
-                    style_selected()
-                } else {
-                    Style::default().fg(C_MUTED)
-                };
-                let vrow = Row::new([
-                    vseq_cell,
-                    label_cell,
-                    Cell::from(vfmt).style(cell_style),
-                    Cell::from(vsize).style(cell_style),
-                    Cell::from(vstate).style(vstate_style),
-                    Cell::from(vbar).style(vstate_style),
-                ])
-                .height(1)
-                .style(vrow_style);
-                rows.push(vrow);
+                let vrest = vec![
+                    (vfmt, vmeta_style),
+                    (vsize, vmeta_style),
+                    (vstate, vstate_style),
+                ];
+                for (k, (s, _)) in vrest.iter().enumerate() {
+                    rest_widths[k] = rest_widths[k].max(crate::textfit::display_width(s));
+                }
 
-                let vrect = Rect::new(area.x, area.y + visual_row, area.width, 1);
-                app.last_rects
-                    .book_rows
-                    .push((vrect, RowRef::Variation(i, v.md5.clone())));
-                visual_row += 1;
+                let vfocused = sub_selected && marquee_active;
+                if vfocused {
+                    focused_meta = Some((
+                        label.clone(),
+                        String::new(),
+                        vrest.iter().map(|(s, _)| s.clone()).collect(),
+                    ));
+                }
+
+                items.push(BookItem::Body {
+                    rref: RowRef::Variation(i, v.md5.clone()),
+                    seq_cell: vseq_cell,
+                    title: label,
+                    author: String::new(),
+                    title_style: vtitle_style,
+                    author_style: vmeta_style,
+                    rest: vrest,
+                    base_style: vbase_style,
+                    focused: vfocused,
+                    selected: var_focused,
+                });
+            }
+        }
+    }
+
+    // ── Phase 2: decide the 3-region split, then advance the focused marquee. ──
+    let layout = book_row_layout(content_w, &rest_widths);
+
+    if marquee_active {
+        // Identity = selected book + (disambiguated) focused sub-row, so the
+        // marquee resets when you move between rows.
+        let sel_id = app
+            .selected
+            .wrapping_mul(97)
+            .wrapping_add(if app.selected_var.is_some() {
+                app.detail_variation_index(app.selected) + 1
+            } else {
+                0
+            });
+        app.reset_var_marquee_if_changed(sel_id);
+        if let Some((t, a, rest_strs)) = &focused_meta {
+            match &layout {
+                BookRowLayout::Fixed {
+                    title_w, author_w, ..
+                } => {
+                    let ta_w = *title_w + BOOK_SEP + *author_w;
+                    let text_w = crate::textfit::display_width(t)
+                        + if a.is_empty() {
+                            0
+                        } else {
+                            2 + crate::textfit::display_width(a)
+                        };
+                    app.advance_var_marquee(text_w, ta_w);
+                }
+                BookRowLayout::Packed { width } => {
+                    let mut packed = combine_title_author(t, a);
+                    for s in rest_strs {
+                        if !s.is_empty() {
+                            packed.push_str(", ");
+                            packed.push_str(s);
+                        }
+                    }
+                    app.advance_var_marquee(crate::textfit::display_width(&packed), *width);
+                }
+            }
+        } else {
+            app.advance_var_marquee(0, 1); // no focused row → park at zero
+        }
+    }
+    let marquee_off = app.var_marquee_offset;
+
+    // ── Phase 3: build the table rows + hit-test rects (visual_row = item idx). ─
+    let mut rows: Vec<Row> = Vec::new();
+    let mut selected_visual: usize = 0;
+    for (idx, item) in items.iter().enumerate() {
+        match item {
+            BookItem::Group { name, frac } => {
+                let frac_w = crate::textfit::display_width(frac);
+                let name_w = content_w.saturating_sub(frac_w + 1);
+                let line = Line::from(vec![
+                    Span::styled(
+                        pad_cell(&crate::textfit::ellipsize(name, name_w), name_w),
+                        style_header(),
+                    ),
+                    Span::styled(" ", style_header()),
+                    Span::styled(frac.clone(), style_header()),
+                ]);
+                rows.push(
+                    Row::new([Cell::from(""), Cell::from(line)])
+                        .height(1)
+                        .style(style_header()),
+                );
+            }
+            BookItem::Body {
+                rref,
+                seq_cell,
+                title,
+                author,
+                title_style,
+                author_style,
+                rest,
+                base_style,
+                focused,
+                selected,
+            } => {
+                if *selected {
+                    selected_visual = idx;
+                }
+                let line = book_row_line(
+                    &layout,
+                    title,
+                    author,
+                    *title_style,
+                    *author_style,
+                    rest,
+                    *focused,
+                    marquee_off,
+                    *base_style,
+                );
+                rows.push(
+                    Row::new([seq_cell.clone(), Cell::from(line)])
+                        .height(1)
+                        .style(*base_style),
+                );
+                let rect = Rect::new(area.x, area.y + idx as u16, area.width, 1);
+                app.last_rects.book_rows.push((rect, rref.clone()));
             }
         }
     }
@@ -976,18 +1117,9 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
         table_state.select(Some(selected_visual));
     }
 
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(4),  // #
-            Constraint::Min(34),    // Title + author (flexes wide)
-            Constraint::Length(5),  // Fmt
-            Constraint::Length(8),  // Size
-            Constraint::Length(14), // State
-            Constraint::Length(12), // Progress bar
-        ],
-    )
-    .row_highlight_style(Style::default().bg(C_SELECTED));
+    let table = Table::new(rows, [Constraint::Length(SEQ_W), Constraint::Min(0)])
+        .column_spacing(0)
+        .row_highlight_style(Style::default().bg(C_SELECTED));
 
     frame.render_stateful_widget(table, area, &mut table_state);
 }
@@ -3268,6 +3400,107 @@ pub(crate) fn flex_row_layout(row_w: usize, rest_field_widths: &[usize]) -> Flex
     }
 }
 
+// ---------------------------------------------------------------------------
+// Book list row — three never-starved regions (#4)
+// ---------------------------------------------------------------------------
+//
+// Unlike the Detail variations row (#1, which merges title+author), the library
+// list reserves a SEPARATE author region so you can scan authors. After the
+// fixed seq/accent column the content splits into:
+//   [ Title 60% ][SEP][ Author 10% + slack ][SEP][ rest ≤30% ]
+// The rest fields (Fmt, Size, State) take their NATURAL width capped at 30%; the
+// 30% the rest leaves unused is the *slack* that flows to the author (author =
+// 10% + slack). The title stays at 60%. When the rest fields can't fit the 30%
+// cap (narrow terminals) the whole line packs into one comma string (Packed).
+
+/// Gutter between the title/author regions and before the rest block.
+const BOOK_SEP: usize = 2;
+/// Gap between adjacent rest fields (Fmt · Size · State).
+const BOOK_GAP: usize = 1;
+/// Never enter Fixed mode unless the title region keeps at least this width.
+const BOOK_MIN_TITLE: usize = 8;
+
+/// Layout of one library book row (#4), computed from the content width (the
+/// row width minus the fixed seq/accent column) and the rest fields' natural
+/// widths.
+///
+/// `Fixed` (situation a) — the rest fields fit the 30% cap: title 60%, author
+/// 10% + slack, rest at natural fixed widths. `Packed` (situation b) — the rest
+/// fields would overflow 30% (or no title room is left): everything joins one
+/// comma string spanning the whole content width.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BookRowLayout {
+    Fixed {
+        title_w: usize,
+        author_w: usize,
+        rest_widths: Vec<usize>,
+    },
+    Packed {
+        width: usize,
+    },
+}
+
+/// Decide the three-region split for a book row `content_w` columns wide (i.e.
+/// the row width already minus the seq/accent column) whose rest fields have the
+/// given natural widths.
+///
+/// The 30% cap and the 10%/60% reservations are computed here; the unused part
+/// of the 30% (`slack = rest_cap − rest_natural`) is added to the author region,
+/// so the **author always keeps a visible slice** while the title holds 60%.
+pub(crate) fn book_row_layout(content_w: usize, rest_field_widths: &[usize]) -> BookRowLayout {
+    let n = rest_field_widths.len();
+    let gaps = n.saturating_sub(1) * BOOK_GAP;
+    let rest_natural = rest_field_widths.iter().sum::<usize>() + gaps;
+    let rest_cap = content_w * 30 / 100;
+    let author_base = content_w * 10 / 100;
+    if rest_natural <= rest_cap {
+        // Slack (the 30% the rest fields didn't use) flows to the author.
+        let slack = rest_cap - rest_natural;
+        let author_w = author_base + slack;
+        // Title gets whatever's left after author, the rest block and the two
+        // inter-region gutters — i.e. ~60% (the two separators are overhead).
+        let used = author_w + rest_natural + 2 * BOOK_SEP;
+        if content_w >= used + BOOK_MIN_TITLE {
+            return BookRowLayout::Fixed {
+                title_w: content_w - used,
+                author_w,
+                rest_widths: rest_field_widths.to_vec(),
+            };
+        }
+    }
+    BookRowLayout::Packed { width: content_w }
+}
+
+/// Per-list column widths for the top reading-list strip (#15).
+///
+/// `strip_w` is the whole strip width (N); `natural_widths` each list's natural
+/// label width. Returns one width per list.
+/// - All lists fit at natural width within the strip → natural widths (no cap).
+/// - Otherwise per-list base = `max(30, strip_w / min(#lists, 4))`:
+///   - **≤4 lists** → every list gets that base (EVEN equal columns; floor 30 so
+///     the strip overflows/scrolls when `strip_w/#lists < 30`).
+///   - **>4 lists** → each list capped at the base (`min(natural, base)`), packed
+///     tight; the strip overflows and scrolls horizontally.
+pub(crate) fn list_strip_layout(strip_w: usize, natural_widths: &[usize]) -> Vec<usize> {
+    let n = natural_widths.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let total_natural: usize = natural_widths.iter().sum();
+    if total_natural <= strip_w {
+        // Everything fits at natural width — no capping.
+        return natural_widths.to_vec();
+    }
+    let base = (strip_w / n.min(4)).max(30);
+    if n <= 4 {
+        // Even split: each list owns an equal column of width `base`.
+        vec![base; n]
+    } else {
+        // Cap each at `base` (≤ a quarter of the strip), packed tight.
+        natural_widths.iter().map(|&w| w.min(base)).collect()
+    }
+}
+
 /// "Title · Author" combined into one string (author omitted when empty).
 fn combine_title_author(title: &str, author: &str) -> String {
     if author.is_empty() {
@@ -3394,6 +3627,86 @@ fn render_flex_row(
         }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)).style(base_style), rect);
+}
+
+/// Build the content `Line` for one library book row (#4 three regions), to be
+/// placed in the single flex cell after the seq/accent column.
+///
+/// `Fixed`: `[title][gutter][author][gutter][rest fixed]` — focused marquees
+/// title+author together (rest stays put), unfocused ellipsizes each region
+/// independently so the author is never dropped. `Packed`: one comma line over
+/// the whole width — focused marquees, unfocused ellipsizes.
+#[allow(clippy::too_many_arguments)]
+fn book_row_line(
+    layout: &BookRowLayout,
+    title: &str,
+    author: &str,
+    title_style: Style,
+    author_style: Style,
+    rest: &[(String, Style)],
+    focused: bool,
+    marquee_offset: usize,
+    base_style: Style,
+) -> Line<'static> {
+    let mut spans: Vec<Span> = Vec::new();
+    match layout {
+        BookRowLayout::Fixed {
+            title_w,
+            author_w,
+            rest_widths,
+        } => {
+            let ta_w = *title_w + BOOK_SEP + *author_w;
+            if focused {
+                // One marquee window across the title→author boundary.
+                let line = marquee_title_author(
+                    title,
+                    author,
+                    title_style,
+                    author_style,
+                    marquee_offset,
+                    ta_w,
+                );
+                let used = line_disp_width(&line);
+                spans.extend(line.spans);
+                if used < ta_w {
+                    spans.push(Span::styled(" ".repeat(ta_w - used), base_style));
+                }
+            } else {
+                // Each region ellipsizes on its own — author keeps its slice.
+                spans.push(Span::styled(
+                    pad_cell(&crate::textfit::ellipsize(title, *title_w), *title_w),
+                    title_style,
+                ));
+                spans.push(Span::styled(" ".repeat(BOOK_SEP), base_style));
+                spans.push(Span::styled(
+                    pad_cell(&crate::textfit::ellipsize(author, *author_w), *author_w),
+                    author_style,
+                ));
+            }
+            // Gutter, then the fixed rest fields.
+            spans.push(Span::styled(" ".repeat(BOOK_SEP), base_style));
+            for (i, ((s, st), &w)) in rest.iter().zip(rest_widths).enumerate() {
+                if i > 0 {
+                    spans.push(Span::styled(" ".repeat(BOOK_GAP), base_style));
+                }
+                spans.push(Span::styled(pad_cell(s, w), *st));
+            }
+        }
+        BookRowLayout::Packed { width } => {
+            let mut packed = combine_title_author(title, author);
+            for (s, _) in rest {
+                if !s.is_empty() {
+                    packed.push_str(", ");
+                    packed.push_str(s);
+                }
+            }
+            spans.push(Span::styled(
+                flex_text(&packed, *width, marquee_offset, focused),
+                title_style,
+            ));
+        }
+    }
+    Line::from(spans)
 }
 
 /// True when `tok` should render as a hotkey KEY (green) in a hint row.

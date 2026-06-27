@@ -5182,6 +5182,140 @@ mod tests {
         assert!(un.ends_with('\u{2026}'), "unfocused must ellipsize");
     }
 
+    // -----------------------------------------------------------------------
+    // #4 — Book list row: three never-starved regions (title / author / rest)
+    // -----------------------------------------------------------------------
+
+    /// Situation (a): rest fields fit the 30% cap → Fixed. Title holds ~60%,
+    /// the rest fields keep their natural width, and the author keeps a slice.
+    #[test]
+    fn book_row_layout_fixed_author_keeps_a_slice() {
+        // content_w=100, rest=[5,8,14] → rest_natural = 27 + 2 gaps = 29; cap = 30.
+        // slack = 1 → author_w = 10 + 1 = 11; title_w = 100 - (11 + 29 + 2*SEP) = 56.
+        let layout = ui::book_row_layout(100, &[5, 8, 14]);
+        assert_eq!(
+            layout,
+            ui::BookRowLayout::Fixed {
+                title_w: 56,
+                author_w: 11,
+                rest_widths: vec![5, 8, 14],
+            }
+        );
+    }
+
+    /// The slack the rest fields leave unused flows to the AUTHOR, not the title
+    /// (title stays at ~60%).
+    #[test]
+    fn book_row_layout_slack_flows_to_author() {
+        // content_w=100, rest=[1,1,1] → rest_natural = 3 + 2 = 5; cap = 30.
+        // slack = 25 → author_w = 10 + 25 = 35; title_w stays 56 (~60%).
+        let layout = ui::book_row_layout(100, &[1, 1, 1]);
+        match layout {
+            ui::BookRowLayout::Fixed {
+                title_w, author_w, ..
+            } => {
+                assert_eq!(author_w, 35, "all the rest-field slack must go to author");
+                assert_eq!(title_w, 56, "title stays ~60% (slack does NOT inflate it)");
+            }
+            other => panic!("expected Fixed, got {other:?}"),
+        }
+    }
+
+    /// Situation (b): rest fields can't fit the 30% cap → the whole line packs.
+    #[test]
+    fn book_row_layout_packed_when_rest_exceeds_cap() {
+        // content_w=40, rest=[5,8,14] → rest_natural = 29; cap = 12. 29 > 12 → Packed.
+        assert_eq!(
+            ui::book_row_layout(40, &[5, 8, 14]),
+            ui::BookRowLayout::Packed { width: 40 }
+        );
+    }
+
+    /// Packed also when the rest fits the cap but no sane title width is left.
+    #[test]
+    fn book_row_layout_packed_when_title_starved() {
+        // content_w=17, rest=[1,1,1] → rest_natural = 5; cap = 5 (5 ≤ 5).
+        // author_w = 1; used = 1 + 5 + 4 = 10; 17 < 10 + MIN_TITLE(8) = 18 → Packed.
+        assert_eq!(
+            ui::book_row_layout(17, &[1, 1, 1]),
+            ui::BookRowLayout::Packed { width: 17 }
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #15 — List strip responsive width formula
+    // -----------------------------------------------------------------------
+
+    /// All lists fit at natural width → shown at natural width, no capping.
+    #[test]
+    fn list_strip_layout_natural_when_all_fit() {
+        assert_eq!(ui::list_strip_layout(100, &[20, 20, 20]), vec![20, 20, 20]);
+    }
+
+    /// ≤4 lists that don't fit → divided EVENLY (each = N / #lists).
+    #[test]
+    fn list_strip_layout_le4_divides_evenly() {
+        // strip=100, n=3 → base = max(30, 100/3=33) = 33 → three equal columns.
+        assert_eq!(ui::list_strip_layout(100, &[50, 60, 70]), vec![33, 33, 33]);
+    }
+
+    /// ≤4 lists with N/#lists < 30 → floor 30 (strip overflows / scrolls).
+    #[test]
+    fn list_strip_layout_le4_floors_at_30() {
+        // strip=80, n=4 → 80/4 = 20 < 30 → each gets 30 (overflow).
+        assert_eq!(
+            ui::list_strip_layout(80, &[50, 60, 70, 80]),
+            vec![30, 30, 30, 30]
+        );
+    }
+
+    /// >4 lists → each capped at N/4 (floor 30), packed tight; a short list
+    /// keeps its natural width.
+    #[test]
+    fn list_strip_layout_gt4_caps_at_quarter() {
+        // strip=100, n=5 → cap = max(30, 100/4=25) = 30. Long lists → 30, packed;
+        // the 10-wide list stays 10 (no padding to the cap).
+        assert_eq!(
+            ui::list_strip_layout(100, &[10, 50, 50, 50, 50]),
+            vec![10, 30, 30, 30, 30]
+        );
+    }
+
+    /// The list-chip click rects track the new column positions: chips are
+    /// ordered, non-overlapping, and inside the strip area after layout.
+    #[test]
+    fn list_strip_chip_rects_track_columns() {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        for i in 0..6 {
+            app.all_lists.push(crate::app::ListSummary {
+                id: format!("L{i}"),
+                title: format!("Reading List Number {i}"),
+                done: i,
+                total: 10,
+            });
+        }
+        app.active_list_idx = 2;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+
+        let chips = &app.last_rects.list_chips;
+        assert!(!chips.is_empty(), "chips must be populated");
+        // Ordered, non-overlapping, within the 100-col strip.
+        let mut prev_end = 0u16;
+        for (rect, idx) in chips {
+            assert!(rect.x >= prev_end, "chip {idx} overlaps the previous one");
+            assert!(rect.x + rect.width <= 100, "chip {idx} runs past the strip");
+            prev_end = rect.x + rect.width;
+        }
+        // The active list (index 2) must have a visible chip.
+        assert!(
+            chips.iter().any(|(_, i)| *i == 2),
+            "active list chip must be visible"
+        );
+    }
+
     /// The picker border title is ellipsized so the " — choose a copy " suffix is
     /// never clipped, and short titles pass through whole (#11).
     #[test]
