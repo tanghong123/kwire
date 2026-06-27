@@ -69,8 +69,10 @@ pub fn settings_field_kind(idx: usize) -> SettingsFieldKind {
         1 => SettingsFieldKind::Language,
         2 | 3 => SettingsFieldKind::F32,
         4 | 8 => SettingsFieldKind::Usize,
-        5 | 6 => SettingsFieldKind::Text,
-        7 | 10 => SettingsFieldKind::Bool,
+        // 5 = naming template (per-list), 7 = download folder (global) — both Text.
+        5 | 7 => SettingsFieldKind::Text,
+        // 6 = sub-grouping (per-list), 10 = hedged (global) — both Bool.
+        6 | 10 => SettingsFieldKind::Bool,
         9 => SettingsFieldKind::U32,
         _ => SettingsFieldKind::ReadOnly,
     }
@@ -173,19 +175,21 @@ impl SettingsDraft {
             2 => format!("{:.2}", self.auto_threshold),
             3 => format!("{:.2}", self.near_threshold),
             4 => self.keep_top.to_string(),
-            5 => {
-                if self.out_dir.is_empty() {
-                    "~/Books/Kwire (default)".into()
-                } else {
-                    self.out_dir.clone()
-                }
-            }
-            6 => self.naming_template.clone(),
-            7 => {
+            // 5/6 are per-list (naming, sub-grouping); 7 is the GLOBAL download
+            // folder — grouped with the other app-wide settings (task 8).
+            5 => self.naming_template.clone(),
+            6 => {
                 if self.seq_per_group {
                     "on".into()
                 } else {
                     "off".into()
+                }
+            }
+            7 => {
+                if self.out_dir.is_empty() {
+                    "~/Books/Kwire (default)".into()
+                } else {
+                    self.out_dir.clone()
                 }
             }
             8 => self.max_concurrent.to_string(),
@@ -2921,7 +2925,7 @@ impl AppState {
             return;
         };
         match idx {
-            7 => d.seq_per_group = !d.seq_per_group,
+            6 => d.seq_per_group = !d.seq_per_group,
             10 => d.hedge_enabled = !d.hedge_enabled,
             _ => {}
         }
@@ -2958,7 +2962,7 @@ impl AppState {
                 d.editor = SettingsEditor::Editing(buf);
             }
             SettingsFieldKind::Bool => match idx {
-                7 => d.seq_per_group = !d.seq_per_group,
+                6 => d.seq_per_group = !d.seq_per_group,
                 10 => d.hedge_enabled = !d.hedge_enabled,
                 _ => {}
             },
@@ -2988,12 +2992,12 @@ impl AppState {
                     d.keep_top = n.max(1);
                 }
             }
-            5 => d.out_dir = v.to_string(),
-            6 => {
+            5 => {
                 if !v.is_empty() {
                     d.naming_template = v.to_string();
                 }
             }
+            7 => d.out_dir = v.to_string(),
             8 => {
                 if let Ok(n) = v.parse::<usize>() {
                     d.max_concurrent = n.max(1);

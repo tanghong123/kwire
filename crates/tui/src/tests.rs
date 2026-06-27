@@ -3159,9 +3159,11 @@ mod tests {
         assert_eq!(settings_field_kind(2), SettingsFieldKind::F32);
         assert_eq!(settings_field_kind(3), SettingsFieldKind::F32);
         assert_eq!(settings_field_kind(4), SettingsFieldKind::Usize);
+        // Task 8: 5 = naming template (per-list Text), 6 = sub-grouping
+        // (per-list Bool), 7 = download folder (global Text).
         assert_eq!(settings_field_kind(5), SettingsFieldKind::Text);
-        assert_eq!(settings_field_kind(6), SettingsFieldKind::Text);
-        assert_eq!(settings_field_kind(7), SettingsFieldKind::Bool);
+        assert_eq!(settings_field_kind(6), SettingsFieldKind::Bool);
+        assert_eq!(settings_field_kind(7), SettingsFieldKind::Text);
         assert_eq!(settings_field_kind(8), SettingsFieldKind::Usize);
         assert_eq!(settings_field_kind(9), SettingsFieldKind::U32);
         assert_eq!(settings_field_kind(10), SettingsFieldKind::Bool);
@@ -3171,6 +3173,47 @@ mod tests {
     fn settings_field_count_constant_is_11() {
         // All indices 0-10 are editable; 11+ are display-only.
         assert_eq!(SETTINGS_FIELD_COUNT, 11);
+    }
+
+    /// Task 8: settings render in two labeled groups — PER-LIST (formats,
+    /// thresholds, naming, sub-grouping) then GLOBAL (download folder,
+    /// concurrency, mirrors). The download folder is GLOBAL (app-wide), so it
+    /// sits under GLOBAL, AFTER the per-list naming template.
+    #[test]
+    fn settings_render_two_groups_folder_under_global() {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.open_settings(&Default::default());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+
+        let buf = terminal.backend().buffer().clone();
+        let w = buf.area.width as usize;
+        let rows: Vec<String> = buf
+            .content()
+            .chunks(w)
+            .map(|r| r.iter().map(|c| c.symbol().to_string()).collect())
+            .collect();
+        let row_of = |needle: &str| {
+            rows.iter()
+                .position(|r| r.contains(needle))
+                .unwrap_or_else(|| panic!("row containing {needle:?} must render"))
+        };
+        let per_list = row_of("PER-LIST");
+        let naming = row_of("Naming template");
+        let global = row_of("GLOBAL");
+        let folder = row_of("Download folder");
+        let mirrors = row_of("Search mirrors");
+        // Per-list group header precedes its per-list fields.
+        assert!(per_list < naming, "PER-LIST header before naming template");
+        // Naming (per-list) precedes the GLOBAL header; folder is below it.
+        assert!(naming < global, "per-list fields before the GLOBAL header");
+        assert!(
+            global < folder,
+            "download folder is GLOBAL → under the GLOBAL header"
+        );
+        assert!(folder < mirrors, "mirrors stay in the GLOBAL group");
     }
 
     // ── #2: modal width formula ─────────────────────────────────────────────
@@ -3339,10 +3382,10 @@ mod tests {
 
     #[test]
     fn space_toggles_bool_field_sub_grouping() {
-        // Field 7 = "Sub-grouping" (seq_per_group bool).
+        // Field 6 = "Sub-grouping" (seq_per_group bool) after the task-8 reorg.
         let mut app = AppState::new();
         open_settings_with_draft(&mut app);
-        app.settings_selected = 7;
+        app.settings_selected = 6;
 
         let before = app.settings_draft.as_ref().unwrap().seq_per_group;
         app.on_input(key(KeyCode::Char(' ')));
@@ -3369,7 +3412,7 @@ mod tests {
     fn double_space_toggle_restores_original_bool() {
         let mut app = AppState::new();
         open_settings_with_draft(&mut app);
-        app.settings_selected = 7;
+        app.settings_selected = 6;
         let original = app.settings_draft.as_ref().unwrap().seq_per_group;
         app.on_input(key(KeyCode::Char(' ')));
         app.on_input(key(KeyCode::Char(' ')));
@@ -3512,10 +3555,10 @@ mod tests {
 
     #[test]
     fn text_field_enter_enters_edit_mode() {
-        // Field 6 = "Naming template" (Text).
+        // Field 5 = "Naming template" (Text) after the task-8 reorg.
         let mut app = AppState::new();
         open_settings_with_draft(&mut app);
-        app.settings_selected = 6;
+        app.settings_selected = 5;
         app.on_input(key(KeyCode::Enter));
         assert!(
             matches!(
@@ -5460,9 +5503,9 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();
         app.set_view(fixture_vm());
-        // Open settings, navigate to a Bool field (idx 7 = Sub-grouping).
+        // Open settings, navigate to a Bool field (idx 6 = Sub-grouping).
         app.open_settings(&Default::default());
-        app.settings_selected = 7; // Bool field
+        app.settings_selected = 6; // Bool field
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let buf = buffer_string(&terminal);
         assert!(

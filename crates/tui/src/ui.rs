@@ -3004,19 +3004,25 @@ fn render_settings_modal(frame: &mut Frame, app: &mut AppState) {
         row
     };
 
+    // Two top-level groups (task 8): everything under PER-LIST is genuinely
+    // per-list (mirrors the `ListSettings` fields the draft reads from the active
+    // list); everything under GLOBAL is app-wide (`AppConfig`/`AppSettings`:
+    // download folder, concurrency, attempts, hedging, mirrors). The download
+    // FOLDER is app-wide, so it lives under GLOBAL — not with the per-list naming
+    // template, where it used to be mis-grouped. make_field's running index must
+    // match the value index, so the per-list fields keep 0–6 and the global
+    // fields take 7–10.
     let rows: Vec<SettingsRow> = vec![
-        SettingsRow::SectionHeader("FORMATS"),
+        SettingsRow::SectionHeader("PER-LIST (this reading list)"),
         make_field("Preferred formats", field_value(0)),
         make_field("Language", field_value(1)),
-        SettingsRow::SectionHeader("MATCHING"),
         make_field("Auto-download at \u{2265}", field_value(2)),
         make_field("Treat as not-found below", field_value(3)),
         make_field("Keep top copies", field_value(4)),
-        SettingsRow::SectionHeader("FILES"),
-        make_field("Download folder", field_value(5)),
-        make_field("Naming template", field_value(6)),
-        make_field("Sub-grouping", field_value(7)),
-        SettingsRow::SectionHeader("DOWNLOADS & MIRRORS"),
+        make_field("Naming template", field_value(5)),
+        make_field("Sub-grouping", field_value(6)),
+        SettingsRow::SectionHeader("GLOBAL (all lists)"),
+        make_field("Download folder", field_value(7)),
         make_field("Max concurrent", field_value(8)),
         make_field("Per-host attempts", field_value(9)),
         make_field("Hedged", field_value(10)),
@@ -3024,7 +3030,7 @@ fn render_settings_modal(frame: &mut Frame, app: &mut AppState) {
         // We stop calling make_field here to keep them outside the navigation range.
         SettingsRow::SectionHeader(""),
     ];
-    // Append the display-only mirror rows as part of DOWNLOADS & MIRRORS.
+    // Append the display-only mirror rows as part of the GLOBAL group.
     // (We use a plain SettingsRow::Field with index = usize::MAX so they never
     // match `settings_selected`.) Their long host lists flow through the shared
     // `settings_value_display` helper below, so they follow the cross-cutting
