@@ -393,6 +393,60 @@ pub fn backfill_input_from_selected(req: &mut BookRequest) -> bool {
     apply_backfill(req, &source)
 }
 
+/// Confidence at/above which a free-form "title author" query is auto-parsed
+/// into a structured title + author from its top match (task 10). Below this the
+/// free-form string is kept verbatim (no forced split).
+pub const FREEFORM_SPLIT_THRESHOLD: f32 = 0.85;
+
+/// Auto-parse + auto-correct a FREE-FORM book request from its top match.
+///
+/// A free-form add (e.g. "steve jobs, walter isaacson") carries the whole string
+/// in `input.title` with `freeform = true`. When discovery returns a
+/// high-confidence top match (score ≥ [`FREEFORM_SPLIT_THRESHOLD`]), adopt that
+/// copy's CANONICAL title + author — which both SPLITS the query into the two
+/// fields and AUTO-CORRECTS their case / canonical form — and clears the
+/// `freeform` flag so future re-queries match structured. The corrected author
+/// is recorded in `backfilled` (it came from a copy, not the user). Below the
+/// threshold this is a no-op: the free-form string is kept as-is.
+///
+/// Returns `true` if it changed `req`. Call right after `req.selected` is set on
+/// a match (the candidates are already ranked, so `candidates[0]` is the top).
+pub fn auto_split_freeform_match(req: &mut BookRequest) -> bool {
+    if !req.input.freeform {
+        return false;
+    }
+    let top = match req.candidates.first() {
+        Some(c) => c,
+        None => return false,
+    };
+    if top.score < FREEFORM_SPLIT_THRESHOLD || top.title.trim().is_empty() {
+        return false;
+    }
+    let title = top.title.clone();
+    let authors = top.authors.clone();
+    let mut changed = false;
+    if req.input.title != title {
+        req.input.title = title;
+        changed = true;
+    }
+    if !authors.is_empty() && req.input.authors != authors {
+        req.input.authors = authors;
+        changed = true;
+    }
+    // The author came from the matched copy (not the user) — record it so the
+    // normal back-fill rules keep treating it as re-derivable.
+    if !req.input.authors.is_empty() && !req.backfilled.iter().any(|b| b == "authors") {
+        req.backfilled.push("authors".to_string());
+        changed = true;
+    }
+    // Now structured: re-queries should score title-vs-title / author-vs-author.
+    if req.input.freeform {
+        req.input.freeform = false;
+        changed = true;
+    }
+    changed
+}
+
 /// Shared field-by-field back-fill from an explicit `source` candidate (used by
 /// both [`backfill_input`] and [`backfill_input_from_selected`]). See
 /// [`backfill_input`] for the per-field ownership rules.
@@ -987,6 +1041,65 @@ mod tests {
         // No `selected` → no source → no change.
         assert!(!backfill_input_from_selected(&mut req));
         assert!(req.input.authors.is_empty());
+    }
+
+    #[test]
+    fn freeform_high_confidence_splits_and_corrects() {
+        // Task 10: a free-form "steve jobs, walter isaacson" with a ≥0.85 top
+        // match auto-splits into title "Steve Jobs" / author "Walter Isaacson"
+        // (canonical case), drops the freeform flag, and records the author.
+        let mut req = BookRequest::new(BookInput {
+            title: "steve jobs, walter isaacson".into(),
+            freeform: true,
+            ..Default::default()
+        });
+        let mut c = meta_cand("m1", &["Walter Isaacson"], Some(2011), None, None, None);
+        c.title = "Steve Jobs".into();
+        c.score = 0.92;
+        req.candidates = vec![c];
+
+        assert!(auto_split_freeform_match(&mut req));
+        assert_eq!(req.input.title, "Steve Jobs");
+        assert_eq!(req.input.authors, vec!["Walter Isaacson".to_string()]);
+        assert!(!req.input.freeform, "split clears the freeform flag");
+        assert!(req.backfilled.iter().any(|b| b == "authors"));
+    }
+
+    #[test]
+    fn freeform_low_confidence_kept_verbatim() {
+        // Below 0.85 the free-form string is left untouched (no forced split).
+        let mut req = BookRequest::new(BookInput {
+            title: "steve jobs, walter isaacson".into(),
+            freeform: true,
+            ..Default::default()
+        });
+        let mut c = meta_cand("m1", &["Walter Isaacson"], Some(2011), None, None, None);
+        c.title = "Steve Jobs".into();
+        c.score = 0.70; // below threshold
+        req.candidates = vec![c];
+
+        assert!(!auto_split_freeform_match(&mut req));
+        assert_eq!(req.input.title, "steve jobs, walter isaacson");
+        assert!(req.input.authors.is_empty());
+        assert!(
+            req.input.freeform,
+            "low-confidence keeps freeform input as-is"
+        );
+    }
+
+    #[test]
+    fn freeform_split_noop_for_structured_input() {
+        // A structured (non-freeform) request is never auto-split.
+        let mut req = BookRequest::new(BookInput {
+            title: "Steve Jobs".into(),
+            ..Default::default()
+        });
+        let mut c = meta_cand("m1", &["Walter Isaacson"], None, None, None, None);
+        c.title = "Different".into();
+        c.score = 0.99;
+        req.candidates = vec![c];
+        assert!(!auto_split_freeform_match(&mut req));
+        assert_eq!(req.input.title, "Steve Jobs");
     }
 
     #[test]

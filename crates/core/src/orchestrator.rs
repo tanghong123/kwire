@@ -460,7 +460,10 @@ impl Orchestrator {
             if let Some(best) = req.candidates.first_mut() {
                 request_job(best);
             }
-            // Auto-match backfills the chosen copy's metadata (author/year) into
+            // A high-confidence free-form match (≥0.85) is auto-parsed into a
+            // structured title + author and case-corrected (task 10) before…
+            crate::model::auto_split_freeform_match(&mut req);
+            // …auto-match backfills the chosen copy's metadata (author/year) into
             // the book's empty fields right away (desktop parity).
             crate::model::backfill_input_from_selected(&mut req);
         }
@@ -546,7 +549,10 @@ impl Orchestrator {
             if let Some(best) = req.candidates.first_mut() {
                 request_job(best);
             }
-            // Auto-match backfills the chosen copy's metadata (author/year) into
+            // A high-confidence free-form match (≥0.85) is auto-parsed into a
+            // structured title + author and case-corrected (task 10) before…
+            crate::model::auto_split_freeform_match(&mut req);
+            // …auto-match backfills the chosen copy's metadata (author/year) into
             // the book's empty fields right away (desktop parity).
             crate::model::backfill_input_from_selected(&mut req);
         }
@@ -990,7 +996,10 @@ impl Orchestrator {
                 if let Some(best) = req.candidates.first_mut() {
                     request_job(best);
                 }
-                // Auto-match backfills the chosen copy's metadata (desktop parity).
+                // A high-confidence free-form match (≥0.85) auto-splits into a
+                // structured title + author and case-corrects (task 10), then
+                // auto-match backfills the chosen copy's metadata (desktop parity).
+                crate::model::auto_split_freeform_match(&mut req);
                 crate::model::backfill_input_from_selected(&mut req);
             }
 
