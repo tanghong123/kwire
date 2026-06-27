@@ -323,27 +323,20 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     let hint_area = centered_rect(hint_row_w.min(area.width), 4, parts[8]);
     frame.render_widget(Paragraph::new(hint_lines), hint_area);
 
-    // 6. Bordered command-input box at the bottom
-    let (cmd_content, show_cursor) = if let Some(ref buf) = app.command_buf {
-        (format!(":{}", buf), true)
+    // 6. Bordered command-input box at the bottom. The input scrolls to keep the
+    //    cursor visible (#3) — same mechanism as the main command row. The box
+    //    has a 1-col border on each side, so the inner field is width − 2.
+    let cmd_line: Line = if let Some(ref buf) = app.command_buf {
+        command_input_line(buf, outer[1].width.saturating_sub(2))
     } else if let Some(ref msg) = app.status_msg {
-        (msg.clone(), false)
+        Line::from(Span::styled(msg.clone(), style_hint()))
     } else {
-        (String::new(), false)
-    };
-
-    let cmd_spans = if show_cursor {
-        vec![
-            Span::styled(&cmd_content, style_hint()),
-            Span::styled("\u{2588}", Style::default().fg(C_TEXT)), // block cursor
-        ]
-    } else {
-        vec![Span::styled(&cmd_content, style_hint())]
+        Line::default()
     };
 
     let cmd_border_style = style_dim();
     frame.render_widget(
-        Paragraph::new(Line::from(cmd_spans))
+        Paragraph::new(cmd_line)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -1494,15 +1487,52 @@ fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
 
 fn render_command_line(frame: &mut Frame, app: &AppState, area: Rect) {
     let content = if let Some(ref buf) = app.command_buf {
-        Line::from(vec![
-            Span::styled(":", style_hint()),
-            Span::styled(buf.as_str(), style_hint()),
-            Span::styled("\u{2588}", Style::default().fg(C_TEXT)), // block cursor
-        ])
+        command_input_line(buf, area.width)
     } else {
         Line::default()
     };
     frame.render_widget(Paragraph::new(content).style(style_hint()), area);
+}
+
+/// Build the scrolling `:` command-line input line for an `inner_w`-wide field.
+///
+/// Shared by the main command row ([`render_command_line`]) and the empty-screen
+/// import box ([`render_empty`]) so both inputs scroll identically (#3). The `:`
+/// prefix is pinned; the buffer + trailing block cursor scroll-to-cursor via
+/// [`crate::textfit::scroll_to_cursor`] so the cursor never falls off the right
+/// edge. One column is reserved on each side of the buffer region for the
+/// `‹`/`›` edge indicators (shown only when text is hidden that way).
+pub(crate) fn command_input_line(buf: &str, inner_w: u16) -> Line<'static> {
+    // The block cursor sits one cell past the buffer (end-of-line insertion).
+    let content = format!("{buf}\u{2588}");
+    let cursor_col = crate::textfit::display_width(&content).saturating_sub(1);
+    // Reserve: 1 col for the pinned ":" + 1 col each side for the ‹/› markers.
+    let window = (inner_w as usize).saturating_sub(3).max(1);
+    let cv = crate::textfit::scroll_to_cursor(&content, cursor_col, window);
+    let left = if cv.clipped_left { "\u{2039}" } else { " " };
+    let right = if cv.clipped_right { "\u{203a}" } else { " " };
+    // Peel the trailing block cursor off the visible slice so it keeps its own
+    // bright style (the cursor is always the last visible glyph here).
+    let mut visible = cv.visible;
+    let cursor_span = if visible.ends_with('\u{2588}') {
+        visible.pop();
+        Some(Span::styled(
+            "\u{2588}".to_string(),
+            Style::default().fg(C_TEXT),
+        ))
+    } else {
+        None
+    };
+    let mut spans = vec![
+        Span::styled(":", style_hint()),
+        Span::styled(left, style_dim()),
+        Span::styled(visible, style_hint()),
+    ];
+    if let Some(c) = cursor_span {
+        spans.push(c);
+    }
+    spans.push(Span::styled(right, style_dim()));
+    Line::from(spans)
 }
 
 // ---------------------------------------------------------------------------
@@ -3341,6 +3371,68 @@ fn render_confirm_book_remove_modal(frame: &mut Frame, app: &AppState, book_flat
 // Wildmenu — Tab-completion strip shown above the command line
 // ---------------------------------------------------------------------------
 
+/// Split a `:import` path completion into `(parent, name, is_dir)`.
+///
+/// The candidate is the full typed path (e.g. `~/docs/deep/file.md` or a
+/// directory `~/docs/sub/`). Directory candidates end in `/`. `parent` is the
+/// portion before the final component (without its trailing slash), `name` the
+/// final component, and `is_dir` whether the candidate is a directory.
+fn split_import_candidate(cand: &str) -> (&str, &str, bool) {
+    let is_dir = cand.ends_with('/');
+    let core = cand.strip_suffix('/').unwrap_or(cand);
+    match core.rfind('/') {
+        Some(i) => (&core[..i], &core[i + 1..], is_dir),
+        None => ("", core, is_dir),
+    }
+}
+
+/// Last `max` display columns of `s` (whole glyphs only, never split).
+fn last_n_cols(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut start = chars.len();
+    let mut cols = 0;
+    for i in (0..chars.len()).rev() {
+        let w = crate::textfit::display_width(&chars[i].to_string());
+        if cols + w > max {
+            break;
+        }
+        cols += w;
+        start = i;
+    }
+    chars[start..].iter().collect()
+}
+
+/// DISPLAYED label for a `:import` path completion (#3).
+///
+/// - Full `<parent>/<name>` when it fits in ~25 display columns.
+/// - Otherwise `…<parent-last-10>/<name>`, the parent capped to its last 10
+///   display columns with a leading `…`; a parent ≤10 cols is shown whole.
+/// - Directory candidates keep a trailing `/`.
+///
+/// Only the *display* changes — the value inserted into the buffer stays the
+/// full path.
+pub(crate) fn format_import_candidate_label(parent: &str, name: &str, is_dir: bool) -> String {
+    let slash = if is_dir { "/" } else { "" };
+    let full = if parent.is_empty() {
+        format!("{name}{slash}")
+    } else {
+        format!("{parent}/{name}{slash}")
+    };
+    if crate::textfit::display_width(&full) <= 25 {
+        return full;
+    }
+    if parent.is_empty() {
+        // Nothing to shorten — only a (long) name.
+        return full;
+    }
+    let parent_disp = if crate::textfit::display_width(parent) <= 10 {
+        parent.to_string()
+    } else {
+        format!("\u{2026}{}", last_n_cols(parent, 10))
+    };
+    format!("{parent_disp}/{name}{slash}")
+}
+
 /// Render the Tab-completion wildmenu into `area`.
 ///
 /// The currently highlighted candidate is drawn reversed (dark bg, accent fg);
@@ -3348,6 +3440,13 @@ fn render_confirm_book_remove_modal(frame: &mut Frame, app: &AppState, book_flat
 /// a dedicated layout row (main render, #71) or a manually computed rect
 /// (empty screen).
 fn render_wildmenu(frame: &mut Frame, app: &AppState, area: Rect) {
+    // `:import <path>` candidates carry a full (possibly long) path; the wildmenu
+    // shows a shortened label (#3) while the buffer keeps the full value.
+    let is_import = app
+        .command_buf
+        .as_deref()
+        .map(|b| b.trim_start().starts_with("import "))
+        .unwrap_or(false);
     let mut spans: Vec<Span> = Vec::new();
     for (i, cand) in app.completion_candidates.iter().enumerate() {
         let is_active = i == app.completion_index;
@@ -3359,7 +3458,13 @@ fn render_wildmenu(frame: &mut Frame, app: &AppState, area: Rect) {
         } else {
             Style::default().fg(C_TEXT).bg(C_PANEL)
         };
-        spans.push(Span::styled(format!(" {} ", cand), style));
+        let label = if is_import {
+            let (parent, name, is_dir) = split_import_candidate(cand);
+            format_import_candidate_label(parent, name, is_dir)
+        } else {
+            cand.clone()
+        };
+        spans.push(Span::styled(format!(" {} ", label), style));
         if i + 1 < app.completion_candidates.len() {
             // Thin separator between candidates.
             spans.push(Span::styled("  ", Style::default().fg(C_FAINT).bg(C_PANEL)));

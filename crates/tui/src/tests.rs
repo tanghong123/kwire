@@ -5237,6 +5237,99 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // #3 — Command line + :import input scroll-to-cursor
+    // -----------------------------------------------------------------------
+
+    /// Concatenate a rendered `Line`'s span texts back into a plain string.
+    fn line_text(line: &ratatui::text::Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// A short command buffer fits: no edge indicators, the `:` prefix and the
+    /// block cursor are both visible, nothing is clipped.
+    #[test]
+    fn command_line_short_buffer_no_indicators() {
+        let line = ui::command_input_line("import a.md", 80);
+        let text = line_text(&line);
+        assert!(text.starts_with(':'), "colon pinned: {text:?}");
+        assert!(text.contains('\u{2588}'), "block cursor visible");
+        assert!(!text.contains('\u{2039}'), "nothing clipped left");
+        assert!(!text.contains('\u{203a}'), "nothing clipped right");
+    }
+
+    /// A long buffer scrolls (scroll_to_cursor) so the cursor stays visible at
+    /// the end: the `‹` left indicator shows, the block cursor is the last glyph,
+    /// no `›`, and the line never exceeds the field width.
+    #[test]
+    fn command_line_long_buffer_scrolls_to_cursor() {
+        let buf = "import /Users/someone/very/deep/nested/path/file.md";
+        let line = ui::command_input_line(buf, 24);
+        let text = line_text(&line);
+        assert!(
+            text.contains('\u{2039}'),
+            "long buffer clips left: {text:?}"
+        );
+        assert!(!text.contains('\u{203a}'), "cursor at end → no right clip");
+        assert!(text.contains('\u{2588}'), "cursor stays visible");
+        assert!(
+            text.trim_end().ends_with('\u{2588}'),
+            "block cursor is the last visible glyph: {text:?}"
+        );
+        assert!(
+            crate::textfit::display_width(&text) <= 24,
+            "never exceeds field width: {text:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // #3 — :import path-completion wildmenu label formatting
+    // -----------------------------------------------------------------------
+
+    /// Short full paths are shown verbatim; directories keep a trailing `/`.
+    #[test]
+    fn import_label_full_when_short() {
+        assert_eq!(
+            ui::format_import_candidate_label("~/docs", "a.md", false),
+            "~/docs/a.md"
+        );
+        assert_eq!(
+            ui::format_import_candidate_label("~/docs", "sub", true),
+            "~/docs/sub/"
+        );
+        // No parent (current dir) → just the name.
+        assert_eq!(ui::format_import_candidate_label("", "a.md", false), "a.md");
+    }
+
+    /// A long path shortens the parent to its last 10 chars with a leading `…`,
+    /// keeping the name (and any trailing `/`) intact.
+    #[test]
+    fn import_label_long_parent_shortened() {
+        let label = ui::format_import_candidate_label(
+            "/Users/someone/very/deep/nested/path",
+            "file.md",
+            false,
+        );
+        assert_eq!(label, "\u{2026}ested/path/file.md");
+        // Directory variant keeps the trailing slash.
+        let dir =
+            ui::format_import_candidate_label("/Users/someone/very/deep/nested/path", "sub", true);
+        assert_eq!(dir, "\u{2026}ested/path/sub/");
+    }
+
+    /// A parent ≤10 chars is shown whole (no `…`) even when the full label is
+    /// long because of a long name.
+    #[test]
+    fn import_label_short_parent_shown_whole() {
+        let label =
+            ui::format_import_candidate_label("/short", "a-really-quite-long-filename.md", false);
+        assert!(
+            label.starts_with("/short/"),
+            "parent ≤10 stays whole, no ellipsis: {label:?}"
+        );
+        assert!(!label.starts_with('\u{2026}'), "no leading ellipsis");
+    }
+
+    // -----------------------------------------------------------------------
     // #4 — Book list row: three never-starved regions (title / author / rest)
     // -----------------------------------------------------------------------
 
