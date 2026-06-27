@@ -39,7 +39,10 @@ use crate::theme::{
     C_SOFTER, C_TEXT, C_WARM,
 };
 
-const ACTIVITY_EXPANDED_H: u16 = 5;
+/// Docked Activity pane height when expanded (1 header + content rows). Capped
+/// at runtime to a third of the screen so it never starves the book table on a
+/// short terminal; collapses to a single header line (`ACTIVITY_COLLAPSED_H`).
+const ACTIVITY_EXPANDED_H: u16 = 9;
 const ACTIVITY_COLLAPSED_H: u16 = 1;
 
 /// Single entry point: render the full UI from `app` into `frame`.
@@ -59,7 +62,11 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
     }
 
     let activity_h = if app.activity_expanded {
-        ACTIVITY_EXPANDED_H
+        // Grow the pane, but never let it dominate a short terminal — keep room
+        // for the book table by capping at a third of the screen (with a small
+        // floor so it stays usable). Overflow scrolls within the pane.
+        let cap = (frame.area().height / 3).max(ACTIVITY_COLLAPSED_H + 2);
+        ACTIVITY_EXPANDED_H.min(cap)
     } else {
         ACTIVITY_COLLAPSED_H
     };
@@ -1435,14 +1442,12 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
     } else {
         "\u{25b8}"
     };
-    let toggle_hint = if app.focus == Focus::Activity {
-        if app.activity_expanded {
-            "space collapse"
-        } else {
-            "space expand"
-        }
+    // `space` toggles collapse/expand from anywhere in the main view, so the
+    // hint is shown regardless of which pane is focused.
+    let toggle_hint = if app.activity_expanded {
+        "space collapse"
     } else {
-        "tab to focus"
+        "space expand"
     };
     // The stats that follow the green "ACTIVITY" word.
     let header_stats = if app.activity_expanded {
@@ -3519,6 +3524,7 @@ pub(crate) fn help_page_rows(page: HelpPage) -> (Vec<HelpRow>, Vec<HelpRow>) {
                     "\u{23ce}",
                     "open book (picker if needs-selection, else detail)",
                 ),
+                Key("space", "collapse / expand Activity"),
             ],
             vec![
                 Head("ACT ON BOOK  (any pane)"),

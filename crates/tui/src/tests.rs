@@ -2490,12 +2490,13 @@ mod tests {
 
     #[test]
     fn activity_overflow_shows_below_indicator() {
-        // N = 5, capacity = 3 → OVERFLOW: "▾ N more" indicator appears.
+        // 20 books (one host group + 20 lines) >> pane capacity → OVERFLOW: the
+        // "▾ N more" indicator appears.
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();
         app.set_view(fixture_vm());
-        app.flat = (0..5)
+        app.flat = (0..20)
             .map(|i| make_downloading_flat_book(&format!("Book {}", i), 0, i))
             .collect();
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
@@ -2508,15 +2509,15 @@ mod tests {
 
     #[test]
     fn activity_overflow_scrolled_shows_above_indicator() {
-        // Scrolled down: "▴ N above" indicator appears.
+        // Scrolled down past the top: "▴ N above" indicator appears.
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();
         app.set_view(fixture_vm());
-        app.flat = (0..5)
+        app.flat = (0..20)
             .map(|i| make_downloading_flat_book(&format!("Book {}", i), 0, i))
             .collect();
-        app.activity_selected = 2; // scrolled past beginning
+        app.activity_selected = 18; // scrolled well past the beginning
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let content = buffer_string(&terminal);
         assert!(
@@ -6199,6 +6200,63 @@ mod tests {
         );
     }
 
+    /// `space` toggles the Activity pane from LIST focus too — you don't have to
+    /// Tab into the pane first.
+    #[test]
+    fn space_toggles_activity_from_list_focus() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::List;
+        assert!(app.activity_expanded, "starts expanded");
+
+        app.on_input(key(KeyCode::Char(' ')));
+        assert!(
+            !app.activity_expanded,
+            "space must collapse the pane while focus is on the list"
+        );
+
+        app.on_input(key(KeyCode::Char(' ')));
+        assert!(
+            app.activity_expanded,
+            "space must re-expand the pane while focus is on the list"
+        );
+    }
+
+    /// The docked Activity pane is taller when expanded, collapses to a single
+    /// line, and never dominates a short terminal (capped at a third of screen).
+    #[test]
+    fn activity_pane_height_expands_collapses_and_is_screen_capped() {
+        // Tall terminal: expanded pane shows several rows (1 header + content).
+        let mut tall = Terminal::new(TestBackend::new(80, 40)).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        assert!(app.activity_expanded, "starts expanded");
+
+        tall.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert_eq!(
+            app.last_rects.activity.height, 9,
+            "expanded pane is the full height on a tall terminal"
+        );
+
+        // Collapsed: the whole pane shrinks to one line (just the header).
+        app.activity_expanded = false;
+        tall.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert_eq!(
+            app.last_rects.activity.height, 1,
+            "collapsed pane is a single line"
+        );
+
+        // Short terminal: expanded pane is capped so the book table keeps room.
+        app.activity_expanded = true;
+        let mut short = Terminal::new(TestBackend::new(80, 18)).unwrap();
+        short.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert!(
+            app.last_rects.activity.height < 9 && app.last_rects.activity.height >= 3,
+            "expanded pane is capped to ~1/3 of a short screen, got {}",
+            app.last_rects.activity.height
+        );
+    }
+
     // -----------------------------------------------------------------------
     // #62 — Marquee scroll (Detail modal · Title·Author ping-pong)
     // -----------------------------------------------------------------------
@@ -6982,7 +7040,9 @@ mod tests {
         app.command_buf = Some(String::new());
         app.completion_candidates = vec!["import".into(), "settings".into(), "add".into()];
         app.completion_index = 0;
-        // activity_expanded = true by default (5 rows).
+        // activity_expanded = true by default (9 rows on a 38-row terminal; the
+        // bottom rows are anchored to the screen bottom and the book table
+        // absorbs the difference, so the wildmenu/rule positions are unchanged).
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
 
         let buf = terminal.backend().buffer();
@@ -6994,12 +7054,11 @@ mod tests {
                 .collect()
         };
 
-        // Layout (38 rows, activity=5, cmd+wildmenu+rule+hint=4):
-        // Fixed bottom: rule(1)+wildmenu(1)+cmd(1)+rule(1)+hint(1) = 5
-        // Fixed top: list(1)+filter(1)+rule(1) = 3
-        // activity: 5, rule: 1 → 3+book_h+1+5+1 = 10+book_h
-        // book_h = 38 - (1+1+1+1+5+1+1+1+1+1) = 38 - 14 = 24
-        // Row 33 = rule (before wildmenu), Row 34 = wildmenu
+        // Layout (38 rows, activity=9): the book table (Min(8)) absorbs the
+        // activity height, so the bottom block stays anchored to the screen
+        // bottom regardless of activity size:
+        // book_h = 38 - (1+1+1+1+9+1+1+1+1+1) = 38 - 18 = 20 → table rows 3..22
+        // rule(23) activity(24..32) → Row 33 = rule (before wildmenu), Row 34 = wildmenu
         let rule_row = get_row(33);
         let wildmenu_row = get_row(34);
 
