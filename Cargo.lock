@@ -2580,6 +2580,7 @@ dependencies = [
  "crossterm",
  "directories",
  "futures",
+ "libc",
  "libgen-core",
  "libgen-engine",
  "ratatui",

@@ -27,6 +27,9 @@ futures = { workspace = true }
 # Path resolution
 directories = "5"
 
+# Single-instance advisory file lock (flock(2)) on the data dir.
+libc = "0.2"
+
 # Error handling / logging
 anyhow = { workspace = true }
 tracing = { workspace = true }

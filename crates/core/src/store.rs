@@ -101,6 +101,13 @@ impl Store {
             .context("setting WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")
             .context("enabling foreign keys")?;
+        // A short busy timeout so a writer that finds the DB momentarily
+        // write-locked by another connection (e.g. a second `kwire` instance, or
+        // the engine writing concurrently) WAITS for the lock to clear instead of
+        // failing immediately with SQLITE_BUSY. Without this, two processes on the
+        // same data dir race and one dies on its next write.
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .context("setting busy_timeout")?;
         let mut store = Store { conn };
         store.migrate()?;
         Ok(store)
@@ -1427,5 +1434,42 @@ mod tests {
             .record_site_outcome("   ", SiteRole::Search, true, Some(10))
             .unwrap();
         assert!(store.site_quality(SiteRole::Search).unwrap().is_empty());
+    }
+
+    /// Two connections to the SAME on-disk DB. While connection A holds the
+    /// write lock (open `BEGIN IMMEDIATE` transaction), connection B's write
+    /// must WAIT for the lock to clear (thanks to the busy_timeout set in
+    /// `init`) and then succeed — rather than failing immediately with
+    /// SQLITE_BUSY. We assert B both succeeded AND visibly waited.
+    #[test]
+    fn busy_timeout_makes_second_writer_wait_instead_of_erroring() {
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("busy.sqlite3");
+
+        let a = Store::open(&path).unwrap();
+        let b = Store::open(&path).unwrap();
+
+        // A grabs the write lock and holds it for ~150 ms on another thread.
+        a.conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            a.conn.execute_batch("COMMIT;").unwrap();
+        });
+
+        // B asks for the write lock; with busy_timeout it blocks until A commits
+        // (~150 ms later) and then succeeds.
+        let start = Instant::now();
+        b.conn
+            .execute_batch("BEGIN IMMEDIATE; COMMIT;")
+            .expect("second writer should wait for the lock, not error with SQLITE_BUSY");
+        assert!(
+            start.elapsed() >= Duration::from_millis(100),
+            "expected B to wait for A's lock (busy_timeout), elapsed = {:?}",
+            start.elapsed()
+        );
+
+        holder.join().unwrap();
     }
 }

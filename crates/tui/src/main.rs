@@ -89,13 +89,96 @@ fn setup_logging() -> Result<WorkerGuard> {
     let file_appender = tracing_appender::rolling::never(state_dir, "tui.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
+    // ROOT CAUSE of the empty `tui.log`: `EnvFilter::from_default_env()` with no
+    // `RUST_LOG` set produces a filter with NO directives, whose default level is
+    // OFF — so every `info!`/`warn!`/`error!` was silently dropped and the file
+    // stayed 0 bytes. Default to `info` when `RUST_LOG` is unset (still
+    // overridable via the env var) so meaningful events actually land in the log.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
     fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_writer(non_blocking)
         .with_ansi(false)
         .init();
 
     Ok(guard)
+}
+
+/// Install a panic hook that records the panic message + location to the log
+/// BEFORE the rest of the panic machinery runs, so an unexpected exit (e.g. the
+/// SQLite WAL-contention crash) leaves a diagnosable trail in `tui.log`. Chains
+/// to the previously-installed hook so terminal teardown / default output still
+/// happen.
+fn install_panic_logging() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown location>".to_string());
+        tracing::error!(panic.location = %location, "PANIC: {msg}");
+        prev(info);
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// Single-instance lock
+// ---------------------------------------------------------------------------
+
+/// Holds an exclusive advisory `flock(2)` on `<data_dir>/kwire.lock` for the
+/// whole process lifetime. The lock is released automatically when the file
+/// descriptor closes — i.e. when this value is dropped or the process exits
+/// (even on crash), which is exactly the behaviour we want for an
+/// "is another instance running?" guard.
+struct InstanceLock {
+    // Kept alive solely so the fd — and thus the flock — outlives `main`.
+    _file: std::fs::File,
+}
+
+/// Outcome of trying to acquire the single-instance lock.
+enum LockOutcome {
+    /// We hold the lock; keep the guard alive for the process lifetime.
+    Acquired(InstanceLock),
+    /// Another live instance already holds it; we must refuse to start.
+    AlreadyRunning,
+}
+
+/// Try to take the exclusive single-instance lock on `<data_dir>/kwire.lock`.
+///
+/// Uses a non-blocking `flock(LOCK_EX | LOCK_NB)`; a held lock returns
+/// `AlreadyRunning` rather than blocking. Real I/O failures (can't open the
+/// lock file, unexpected errno) propagate as `Err`.
+fn acquire_instance_lock(data_dir: &std::path::Path) -> Result<LockOutcome> {
+    use std::os::unix::io::AsRawFd;
+
+    let lock_path = data_dir.join("kwire.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("opening lock file {}", lock_path.display()))?;
+
+    // SAFETY: `file` owns a valid fd for the duration of this call (and beyond,
+    // since we move it into `InstanceLock` on success).
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        return Ok(LockOutcome::Acquired(InstanceLock { _file: file }));
+    }
+
+    let err = io::Error::last_os_error();
+    match err.raw_os_error() {
+        // Lock is held by another instance.
+        Some(libc::EWOULDBLOCK) => Ok(LockOutcome::AlreadyRunning),
+        _ => Err(err).with_context(|| format!("locking {}", lock_path.display())),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -165,24 +248,49 @@ async fn main() -> Result<()> {
         guard
     });
 
+    // Log panics (message + location) before anything else runs on a panic, so an
+    // unexpected exit leaves a trail in tui.log. (TerminalGuard's hook, installed
+    // later, chains on top of this one.)
+    install_panic_logging();
+
     info!("libgen-tui starting");
 
-    // (2) Terminal setup.
+    // (2) Resolve the TUI's OWN XDG data dir (independent of the desktop app) and
+    // acquire a single-instance advisory lock BEFORE touching the terminal or the
+    // DB. Two instances on the same data dir contend on SQLite's WAL write lock
+    // and one would crash, so refuse to start a second instance up front.
+    let dirs = ProjectDirs::from("", "", "kwire-tui").context("cannot determine XDG data dir")?;
+    let data_dir = dirs.data_dir().to_path_buf();
+    std::fs::create_dir_all(&data_dir)
+        .with_context(|| format!("creating data dir {}", data_dir.display()))?;
+
+    let _instance_lock = match acquire_instance_lock(&data_dir)? {
+        LockOutcome::Acquired(lock) => lock,
+        LockOutcome::AlreadyRunning => {
+            let lock_path = data_dir.join("kwire.lock");
+            tracing::warn!(
+                lock = %lock_path.display(),
+                "refusing to start: another instance already holds the lock"
+            );
+            eprintln!(
+                "Kwire is already running (another instance holds {}). Close it first.",
+                lock_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // (3) Terminal setup.
     enable_raw_mode().context("enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture).context("enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("create terminal")?;
 
-    // (3) Install teardown guard (also sets panic hook).
+    // (4) Install teardown guard (also sets panic hook).
     let _guard = TerminalGuard::install();
 
-    // (4) Build engine config (TUI uses its OWN XDG data dir so it's independent of the desktop app).
-    let dirs = ProjectDirs::from("", "", "kwire-tui").context("cannot determine XDG data dir")?;
-    let data_dir = dirs.data_dir().to_path_buf();
-    std::fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating data dir {}", data_dir.display()))?;
-
+    // (5) Build engine config (TUI uses its OWN XDG data dir, resolved above).
     // Build TUI-specific config with its own DB.
     let mut cfg = Config::from_env();
     cfg.db_path = data_dir.join("library.sqlite3");
