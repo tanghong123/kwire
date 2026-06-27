@@ -19,11 +19,39 @@ This is the default for #1, #2, #4, #5, #6, #9, #12 and anywhere else text clips
 | 3 | High | Command line / :import input — no horiz scroll, cursor goes off-screen | ✅ see #3 |
 | 4 | High | Book list — title/author/rest 3-region responsive layout | ✅ see #4 |
 | 5 | Med | Detail per-variation Title·Author clipped | ✅ covered by #1 |
-| 6 | Med | Detail breadcrumb subtitle (group/subgroup) clipped | ✅ ellipsize `…`, NO marquee — path not critical |
+| 6 | Med | Detail breadcrumb subtitle (group/subgroup) clipped | ⚠️ DECIDED (ellipsize, no marquee) but NOT IMPLEMENTED — missed in the group split; verification found it still hard-clips at ui.rs:2266-2273. FIX after parity: route through textfit::ellipsize. |
 | 7 | Med | Bottom hint bar cut at width 80 | ✅ WRAP to a 2nd line (don't drop/ellipsize hints) |
 
 > SIDE TASK (flagged at #7): `?` Help audit DONE. It surfaces ~21 of ~74 total bindings/commands (~30%). MISSING: all header list-ops (r/p/s/D), all detail actions (S/m/s/e/x/d/Tab), all settings keys (r/o/c), picker `v`, activity `space`, Shift-J/K paging, `:` completion/history, + 11 hidden `:` commands. STALE: `[ ]` label omits "All"; `d` labeled "book detail" but = download-variation inside Detail. The full keymap ~DOUBLES the content → does NOT fit one 80×24 screen in the current fixed 2-column design.
-> → **SEPARATE DESIGN TASK: redesign the Help (scrolling / context-sensitive pages / grouped paging) so it can cover everything.** Deferred until after the clipping decisions.
+> → **SEPARATE DESIGN TASK: redesign the Help.** Deferred until after the clipping decisions. DESIGN AGREED — see "Help redesign" below.
+
+## CLI `kwire get` download-output fixes (queued — do after the message-parity agent, in cli/emitter.rs)
+From live output:
+1. **Chronicle events overrun the progress line instead of overriding it.** Events ("EPUB serving from cdn3…", "EPUB completed on libgen.vg") print appended to the END of the in-place `\r` progress line, so the bar's leftover chars precede the event text (`░░░░░░░░░░EPUB serving from…`). Fix: before printing a chronicle event, `\r` + clear-to-end-of-line to wipe the progress bar, print the event on its own line, then resume the progress bar on a fresh line.
+2. **Progress bar is a fixed short length — make it span the full terminal width** (minus the `⬇ pct speed eta ` prefix + any suffix). Use the terminal width.
+3. **Saved file has the wrong extension `.bin`.** `saved ./3a70…3b0.bin` — should be the REAL format extension (`.epub`). The candidate's format is known (EPUB in the output) — use it.
+4. **Filename is the raw md5, not a proper name.** Should follow the naming convention the desktop/TUI use (`Author - Title - <md5:6>.ext` / the configured template) — REUSE the shared filename-builder in core (model/download), not `<md5>.bin`. Save location (cwd `./`) is probably fine for the CLI; just fix the name + extension. (#3 and #4 live in cli/cmd_get.rs.)
+
+## Page/section label (cross-cutting — CLI + TUI + desktop; NOT a bug, just a label)
+`pagecount.rs` counts EPUB **spine SECTIONS** (`<itemref>`), not reader pages (EPUB is reflowable — no fixed pages; the count is only a near-empty-stub proxy). PDFs get a real page count (lopdf). So relabel: EPUB → "N sections", PDF → "N pages". User hit this: CLI said "64 pages" but the reader showed 300. Apply wherever the count is shown (CLI `✓ md5 verified · N pages`, the TUI low-pages badge/"Needs you", the desktop low-pages warning).
+
+**IMPORTANT consequence — low-page FALSE POSITIVE.** The "too short" flag (`LOW_PAGE_THRESHOLD` ~10) is applied to the epub SECTION count just like PDF pages → a GOOD epub with few sections (monolithic XHTML = 1 section; 5 chapters = 5) could be wrongly flagged as a stub and moved to Needs you / re-recommended. User: don't mis-flag a good epub. DECIDED — option B with SEPARATE per-format thresholds: PDF flag = real page count (lopdf) vs a PDF page threshold; EPUB flag = TOTAL READABLE TEXT LENGTH across spine docs (strip tags, sum words/chars) vs a separate EPUB text-length threshold — NOT the section count. The section count stays DISPLAY-ONLY ("N sections"). Implement in pagecount.rs (add an epub text-length fn + two thresholds) + the low-page callers (orchestrator low-page review, TUI badge/"Needs you", desktop warning), folded with the page/section relabel.
+
+## Deferred follow-up tasks (after the clipping fixes)
+1. **TUI message parity — ENGLISH only.** The TUI currently renders raw `ui_msg` tokens / accidentally-English; make it show the SAME English strings the desktop does. Plan: a SHARED English message catalog as the single source (e.g. `messages.toml`, key→template); a TUI Rust `t(token)->String` decoder (split the packed token at `\u{1f}`, look up the template, interpolate `k=v` args); point the desktop at the same catalog so they can't drift; and persist the TOKEN (not resolved English) in the DB, resolving at display — which also fixes the known i18n persistence bug. ENGLISH now; the catalog structure permits adding locales later but NO Chinese work up front.
+2. **Re-check clipping AFTER message parity.** The parity task replaces short hardcoded labels ("Cannot"/"Check") with longer catalog strings ("Cannot download"/"Check download") and may swap other TUI strings for wider desktop ones — longer text can REINTRODUCE clipping, especially the even-spread filter chips (#15-adjacent), plus status labels and hints. The ellipsize/marquee infra degrades gracefully, but do a targeted re-clip pass on the filter chips + any newly-widened labels (fit at 80? need abbreviation/ellipsis?).
+3. **Help redesign** — see below.
+Suggested order: clipping verification (running) → TUI message parity → re-check clipping → Help redesign.
+
+## Help redesign (DESIGNED — implement after the clipping fixes)
+Context-sensitive PAGED Help. Replaces the fixed 2-column all-at-once modal (showed ~21 of ~74 bindings).
+- `?` opens on the CURRENT context (auto): shows GLOBAL keys + the focused context's keys (~10–15 keys), NOT all 74.
+- PAGE through contexts with `← →`: a tab row at top — Global · List · Header · Activity · Detail · Picker · Settings · Cmds (current highlighted).
+- Per page: clean 2-column `key | description`, grouped by sub-category (NAVIGATE / ACT ON …), display-width aware (textfit), footer `← → other panels · : command · esc close`.
+- `:` commands = a small "Cmds" page (the 5 survivors: settings/import/add/start-all/pause-all).
+- NO "show everything" / `a` expand mode (dropped — too cute for now).
+- The rebuild also FIXES the audit's stale/missing entries: add header list-ops (r/p/s/D), all detail actions (S/m/s/e/x/d/Tab), settings r/o/c, picker v, activity space, Shift-J/K paging, `:` completion/history; `[ ]` label includes "All"; `d` shown per-context (book-detail in List, download-variation in Detail).
+- DESCRIPTION ACCURACY (not just which keys): scrutinize EACH key/command's DESCRIPTION against its actual handler in the reducer and write it from CURRENT behavior, per context — never carry over stale copy. E.g. `← →` is no longer only filter-chip nav — verify what it actually does in each context. Read the code, don't assume.
 | 8 | Med | Detail context hint footer cut at width 80 | ✅ WRAP to 2nd line (same as #7; apply to ALL footer hint rows) |
 | 9 | Med | Activity pane transfer-leg title vs fmt/%/bar | ✅ pin status (fmt·%·bar·eta) fixed/right-aligned; title flexes (marquee focused, `…` else) |
 | 10 | Med | Detail title marquee uses char-count not display width | ✅ use DISPLAY WIDTH (unicode-width) for ALL layout/scroll math; settled w/ #14 |
