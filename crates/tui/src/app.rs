@@ -372,6 +372,21 @@ impl StatusFilter {
         crate::i18n::tr(self.label_key())
     }
 
+    /// TUI-only space-saving abbreviation of [`label`], used as a fallback when
+    /// the full localized chip labels overflow a narrow row. These are *not*
+    /// part of the shared i18n catalog — they exist purely so the filter row
+    /// stays clip-free at ~80 columns.
+    pub fn label_short(self) -> &'static str {
+        match self {
+            StatusFilter::All => "All",
+            StatusFilter::NeedsYou => "Needs U",
+            StatusFilter::Check => "Check DL",
+            StatusFilter::Cannot => "Can't DL",
+            StatusFilter::InProgress => "In prog",
+            StatusFilter::Done => "Done",
+        }
+    }
+
     /// Cycle through filters in order (right arrow).
     pub fn next(self) -> StatusFilter {
         match self {

@@ -597,18 +597,13 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
 // 1  Status-filter row
 // ---------------------------------------------------------------------------
 
-fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
-    let counts = app.status_counts();
-    let active_filter = app.filter;
-    let header_focused = app.focus == Focus::Header;
+/// A single filter chip ready to render: which filter it selects, its display
+/// text (`" {label} {count} "`), and the text's display width.
+type ChipCell = (StatusFilter, String, u16);
 
-    // Clear filter_chips so we can rebuild.
-    app.last_rects.filter_chips.clear();
-
-    // Build chips and track their rects for mouse hit-testing.
-    // When the Header pane is active, prepend a bright ▌ accent as a pane indicator.
-    // We approximate chip positions based on cumulative text width.
-    let chip_data: Vec<(StatusFilter, String)> = [
+/// The six status filters paired with the live counts that label each chip.
+fn filter_chip_specs(counts: &crate::app::StatusCounts) -> [(StatusFilter, usize); 6] {
+    [
         (StatusFilter::All, counts.total),
         (StatusFilter::NeedsYou, counts.needs_you),
         (StatusFilter::Check, counts.check),
@@ -616,9 +611,102 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
         (StatusFilter::InProgress, counts.in_progress),
         (StatusFilter::Done, counts.done),
     ]
-    .into_iter()
-    .map(|(filter, count)| (filter, format!(" {} {} ", filter.label(), count)))
-    .collect();
+}
+
+/// Choose the label set (full vs abbreviated) that fits `area_width` columns and
+/// return the rendered chip cells plus whether the abbreviated set was used.
+///
+/// Responsive labels (option A): prefer the catalog's full labels ("Cannot
+/// download", "Check download", "In progress"); if the row would overflow the
+/// inner width — the sum of the `" {label} {count} "` widths plus the `n + 1`
+/// even-spread gaps (one before each chip + a trailing margin) — fall back to
+/// the TUI-only `label_short()` abbreviations, which pack to ~72 cols and fit 80.
+fn filter_chip_cells(area_width: u16, specs: &[(StatusFilter, usize)]) -> (Vec<ChipCell>, bool) {
+    let n = specs.len() as u16;
+    let usable = area_width.saturating_sub(1); // minus the pane-accent column
+    let n_slots = n + 1;
+
+    let build = |short: bool| -> Vec<ChipCell> {
+        specs
+            .iter()
+            .map(|(filter, count)| {
+                let text = if short {
+                    format!(" {} {} ", filter.label_short(), count)
+                } else {
+                    format!(" {} {} ", filter.label(), count)
+                };
+                let w = crate::textfit::display_width(&text) as u16;
+                (*filter, text, w)
+            })
+            .collect()
+    };
+
+    let full = build(false);
+    let sum_full: u16 = full.iter().map(|(_, _, w)| *w).sum();
+    if usable >= sum_full + n_slots {
+        (full, false)
+    } else {
+        (build(true), true)
+    }
+}
+
+/// Lay out `cells` within `area`. When the chips fit, spread them evenly across
+/// the row (`n + 1` equal gaps, remainder handed out one-per-slot from the
+/// left); otherwise fall back to a left-packed layout (chip + 2-col separator)
+/// so hit-rects never overlap. Returns the click rects, the leading gap to
+/// render before each chip, and `spread` (false ⇒ the left-packed fallback).
+fn filter_chip_layout(
+    area: Rect,
+    cells: &[ChipCell],
+) -> (Vec<(Rect, StatusFilter)>, Vec<u16>, bool) {
+    let n = cells.len() as u16;
+    let n_slots = n + 1;
+    let usable = area.width.saturating_sub(1); // minus the pane-accent column
+    let sum_chips: u16 = cells.iter().map(|(_, _, w)| *w).sum();
+
+    let mut rects = Vec::with_capacity(cells.len());
+    let mut gaps = Vec::with_capacity(cells.len());
+    let mut x = area.x + 1; // +1 for the pane-accent char
+
+    if usable >= sum_chips + n_slots {
+        let total_gap = usable - sum_chips;
+        let base = total_gap / n_slots;
+        let mut rem = total_gap % n_slots;
+        for (filter, _, w) in cells {
+            let mut gap = base;
+            if rem > 0 {
+                gap += 1;
+                rem -= 1;
+            }
+            gaps.push(gap);
+            x += gap;
+            rects.push((Rect::new(x, area.y, *w, 1), *filter));
+            x += *w;
+        }
+        (rects, gaps, true)
+    } else {
+        for (filter, _, w) in cells {
+            gaps.push(0);
+            rects.push((Rect::new(x, area.y, *w, 1), *filter));
+            x += *w + 2; // +2 for the separator
+        }
+        (rects, gaps, false)
+    }
+}
+
+fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
+    let counts = app.status_counts();
+    let active_filter = app.filter;
+    let header_focused = app.focus == Focus::Header;
+
+    // Build the chips with whichever label set fits, then lay them out. The
+    // rects we store match the rendered text regardless of label set, so clicks
+    // keep selecting the right filter.
+    let specs = filter_chip_specs(&counts);
+    let (cells, _short) = filter_chip_cells(area.width, &specs);
+    let (rects, gaps, spread) = filter_chip_layout(area, &cells);
+
+    app.last_rects.filter_chips = rects;
 
     // Pane accent: ▌ when Header is active, space otherwise.
     let pane_accent = if header_focused {
@@ -627,7 +715,9 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
         Span::styled(" ", style_dim())
     };
 
-    // Style helper for a single chip's label.
+    // Style helper for a single chip's label. The idle color keys off the
+    // StatusFilter (via its stable `label_key`), not the displayed text, so the
+    // chip family color is identical for the full and abbreviated label sets.
     let chip_style = |filter: &StatusFilter| -> Style {
         if *filter == active_filter {
             // Active/selected chip: always bright + underlined (cursor here).
@@ -640,57 +730,20 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
         }
     };
 
-    // Distribute the chips evenly across the row instead of left-packing them.
-    // The pane accent occupies the first column, leaving `usable` columns for
-    // the chips and the gaps between/around them. We spread the leftover space
-    // as `n + 1` equal gaps (one before each chip + one trailing margin), so the
-    // chips fan out across the full width. The trailing gap is implicit (the
-    // background to the right of the last chip), so we only render the n leading
-    // gaps. Any remainder columns are handed out one-per-slot from the left.
-    let n = chip_data.len() as u16;
-    let sum_chips: u16 = chip_data.iter().map(|(_, l)| l.len() as u16).sum();
-    let usable = area.width.saturating_sub(1); // minus the pane-accent column
-    let n_slots = n + 1; // leading gaps (n) + one trailing margin
-
-    let mut x_offset = area.x + 1; // +1 for pane accent char
     let mut spans: Vec<Span> = vec![pane_accent];
-
-    if usable >= sum_chips + n_slots {
-        // Enough room to spread evenly.
-        let total_gap = usable - sum_chips;
-        let base = total_gap / n_slots;
-        let mut rem = total_gap % n_slots;
-        for (filter, label) in &chip_data {
-            // Leading gap before this chip (distribute remainder from the left).
-            let mut gap = base;
-            if rem > 0 {
-                gap += 1;
-                rem -= 1;
-            }
+    if spread {
+        for ((filter, label, _), gap) in cells.iter().zip(&gaps) {
             spans.push(Span::styled(
-                " ".repeat(gap as usize),
+                " ".repeat(*gap as usize),
                 Style::default().fg(C_FAINT),
             ));
-            x_offset += gap;
-
-            let chip_width = label.len() as u16;
-            // Store chip rect (at its spread position) for mouse hit-testing.
-            app.last_rects
-                .filter_chips
-                .push((Rect::new(x_offset, area.y, chip_width, 1), *filter));
-            x_offset += chip_width;
             spans.push(Span::styled(label.clone(), chip_style(filter)));
         }
     } else {
-        // Narrow row: fall back to the original left-packed layout so chips
-        // never overlap (they may run off the edge / be truncated by the
+        // Very narrow row: even the abbreviated set overflows. Left-pack so the
+        // chips never overlap (they may run off the edge / be truncated by the
         // Paragraph, which is preferable to overlapping hit-rects).
-        for (filter, label) in &chip_data {
-            let chip_width = label.len() as u16;
-            app.last_rects
-                .filter_chips
-                .push((Rect::new(x_offset, area.y, chip_width, 1), *filter));
-            x_offset += chip_width + 2; // +2 for the separator
+        for (filter, label, _) in &cells {
             spans.push(Span::styled(label.clone(), chip_style(filter)));
             spans.push(Span::styled("  ", Style::default().fg(C_FAINT)));
         }
@@ -700,6 +753,134 @@ fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
         Paragraph::new(Line::from(spans)).style(style_normal()),
         area,
     );
+}
+
+#[cfg(test)]
+mod filter_chip_tests {
+    use super::*;
+
+    /// Representative non-zero counts; the exact values don't affect the label
+    /// set, only the chip widths (which stay 1-digit here).
+    fn specs() -> [(StatusFilter, usize); 6] {
+        [
+            (StatusFilter::All, 6),
+            (StatusFilter::NeedsYou, 1),
+            (StatusFilter::Check, 2),
+            (StatusFilter::Cannot, 3),
+            (StatusFilter::InProgress, 4),
+            (StatusFilter::Done, 5),
+        ]
+    }
+
+    /// Which filter's hit-rect covers column `x` (mimics a mouse click).
+    fn filter_at(rects: &[(Rect, StatusFilter)], x: u16) -> Option<StatusFilter> {
+        rects
+            .iter()
+            .find(|(r, _)| x >= r.x && x < r.x + r.width)
+            .map(|(_, f)| *f)
+    }
+
+    #[test]
+    fn label_short_values_are_exactly_as_specified() {
+        assert_eq!(StatusFilter::All.label_short(), "All");
+        assert_eq!(StatusFilter::NeedsYou.label_short(), "Needs U");
+        assert_eq!(StatusFilter::Check.label_short(), "Check DL");
+        assert_eq!(StatusFilter::Cannot.label_short(), "Can't DL");
+        assert_eq!(StatusFilter::InProgress.label_short(), "In prog");
+        assert_eq!(StatusFilter::Done.label_short(), "Done");
+    }
+
+    #[test]
+    fn wide_row_uses_full_labels() {
+        let specs = specs();
+        // 132 and 100 both clear the full-label fit threshold.
+        for width in [100u16, 132] {
+            let (cells, short) = filter_chip_cells(width, &specs);
+            assert!(!short, "width {width} should keep full labels");
+            let cannot = cells
+                .iter()
+                .find(|(f, ..)| *f == StatusFilter::Cannot)
+                .unwrap();
+            assert!(cannot.1.contains("Cannot download"), "got {:?}", cannot.1);
+            let check = cells
+                .iter()
+                .find(|(f, ..)| *f == StatusFilter::Check)
+                .unwrap();
+            assert!(check.1.contains("Check download"), "got {:?}", check.1);
+            let active = cells
+                .iter()
+                .find(|(f, ..)| *f == StatusFilter::InProgress)
+                .unwrap();
+            assert!(active.1.contains("In progress"), "got {:?}", active.1);
+        }
+    }
+
+    #[test]
+    fn narrow_row_uses_short_labels() {
+        let specs = specs();
+        // At 80 the full labels overflow → abbreviated set.
+        let (cells, short) = filter_chip_cells(80, &specs);
+        assert!(short, "width 80 should fall back to short labels");
+        let cannot = cells
+            .iter()
+            .find(|(f, ..)| *f == StatusFilter::Cannot)
+            .unwrap();
+        assert!(cannot.1.contains("Can't DL"), "got {:?}", cannot.1);
+        let check = cells
+            .iter()
+            .find(|(f, ..)| *f == StatusFilter::Check)
+            .unwrap();
+        assert!(check.1.contains("Check DL"), "got {:?}", check.1);
+        let needs = cells
+            .iter()
+            .find(|(f, ..)| *f == StatusFilter::NeedsYou)
+            .unwrap();
+        assert!(needs.1.contains("Needs U"), "got {:?}", needs.1);
+
+        // The abbreviated row fits 80 with an even spread (not the left-packed
+        // fallback) and never clips: last chip ends within the row.
+        let area = Rect::new(0, 0, 80, 1);
+        let (rects, _, spread) = filter_chip_layout(area, &cells);
+        assert!(spread, "abbreviated set should still even-spread at 80");
+        let last = rects.last().unwrap().0;
+        assert!(last.x + last.width <= 80, "row clipped at 80");
+    }
+
+    #[test]
+    fn chip_rects_map_to_correct_filter_for_both_label_sets() {
+        let specs = specs();
+        // Full label set (wide row).
+        let (cells_full, short_full) = filter_chip_cells(132, &specs);
+        assert!(!short_full);
+        let area_full = Rect::new(0, 0, 132, 1);
+        let (rects_full, _, _) = filter_chip_layout(area_full, &cells_full);
+        for target in [StatusFilter::Cannot, StatusFilter::Done] {
+            let r = rects_full.iter().find(|(_, f)| *f == target).unwrap().0;
+            // A click anywhere inside the chip resolves to that filter.
+            assert_eq!(filter_at(&rects_full, r.x), Some(target));
+            assert_eq!(filter_at(&rects_full, r.x + r.width / 2), Some(target));
+            assert_eq!(filter_at(&rects_full, r.x + r.width - 1), Some(target));
+        }
+
+        // Abbreviated label set (narrow row) — rects still map correctly.
+        let (cells_short, short_short) = filter_chip_cells(80, &specs);
+        assert!(short_short);
+        let area_short = Rect::new(0, 0, 80, 1);
+        let (rects_short, _, _) = filter_chip_layout(area_short, &cells_short);
+        for target in [StatusFilter::Cannot, StatusFilter::Done] {
+            let r = rects_short.iter().find(|(_, f)| *f == target).unwrap().0;
+            assert_eq!(filter_at(&rects_short, r.x + r.width / 2), Some(target));
+        }
+        // No two rects overlap (clicks are unambiguous).
+        for i in 0..rects_short.len() {
+            for j in (i + 1)..rects_short.len() {
+                let a = rects_short[i].0;
+                let b = rects_short[j].0;
+                let disjoint = a.x + a.width <= b.x || b.x + b.width <= a.x;
+                assert!(disjoint, "overlapping chip rects: {a:?} vs {b:?}");
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
