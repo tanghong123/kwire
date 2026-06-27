@@ -2644,8 +2644,8 @@ mod tests {
             "the alt-copy sub-row must show the live download host: {list_buf:?}"
         );
         assert!(
-            list_buf.contains("dling"),
-            "the downloading alt copy must read 'dling', not 'queued': {list_buf:?}"
+            list_buf.contains("dling 12%"),
+            "the downloading alt copy must read 'dling 12%' (inline progress), not 'queued': {list_buf:?}"
         );
 
         // Activity pane in isolation: the copy appears ONCE (host group), with no
@@ -6889,14 +6889,14 @@ mod tests {
             &"b".repeat(32),
         )];
 
-        // List render: the primary row's state cell must read "dling". (The
-        // Activity pane separately shows the live "50%" progress — that's the
-        // progress display, not the state label, so we don't assert against it.)
+        // List render: the primary row's state cell reads the short "dling"
+        // label with the live "%" appended inline (so a download's progress is
+        // visible in the list, mirroring the Activity pane).
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let list_buf = buffer_string(&terminal);
         assert!(
-            list_buf.contains("dling"),
-            "list must show the short 'dling' label: {list_buf}"
+            list_buf.contains("dling 50%"),
+            "list state cell must read 'dling 50%' (short label + inline %): {list_buf}"
         );
 
         // Detail render: identical short label, and the old "downloading 50%"

@@ -930,6 +930,20 @@ fn state_label(state: &str) -> &str {
     }
 }
 
+/// State cell text for a LIST row (primary or "↳ alt. copy"): the short
+/// `state_label`, with the live `%` appended while a copy is actively
+/// downloading so progress is visible inline — mirrors the Activity pane and
+/// makes a downloading alt copy legible without expanding detail. Non-download
+/// states render exactly as `state_label`.
+fn list_state_cell(state: &str, progress: u32) -> String {
+    let label = state_label(state);
+    if state == "downloading" {
+        format!("{label} {progress}%")
+    } else {
+        label.to_string()
+    }
+}
+
 /// Per-variation display cells for a SINGLE armed copy (used for the primary
 /// row of a stacked book and for each "↳ alt. copy" sub-row). Returns
 /// `(fmt, size, state_label, progress)`. Color is applied by the caller via
@@ -1040,8 +1054,14 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
         // Determine the PRIMARY row's rest-field cells. `state_key` is the RAW
         // state used to color the cell via `theme::style_for_state`.
         let (display_fmt, display_size, display_state, _progress, state_key) = if stacked {
-            let (f, s, st, p) = variation_display(armed[0]);
-            (f, s, st, p, armed[0].state.clone())
+            let (f, s, _st, p) = variation_display(armed[0]);
+            (
+                f,
+                s,
+                list_state_cell(&armed[0].state, p),
+                p,
+                armed[0].state.clone(),
+            )
         } else if book.versions.is_empty() {
             // No version yet — show the book-level discovery state. The style
             // key mirrors the discovery semantics: choose = needs-you,
@@ -1075,7 +1095,7 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             (
                 best.fmt.clone(),
                 size_label,
-                state_label(&best.state).to_string(),
+                list_state_cell(&best.state, best.progress),
                 best.progress,
                 best.state.clone(),
             )
@@ -1155,7 +1175,8 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 let sub_selected = var_focused && app.focus == Focus::List;
                 let sub_inactive = var_focused && app.focus != Focus::List;
 
-                let (vfmt, vsize, vstate, _vprog) = variation_display(v);
+                let (vfmt, vsize, _vstate, vprog) = variation_display(v);
+                let vstate = list_state_cell(&v.state, vprog);
                 let vstate_style = theme::style_for_state(&v.state);
                 let vbase_style = if sub_selected {
                     style_selected()
