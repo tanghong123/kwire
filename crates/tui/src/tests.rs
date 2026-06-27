@@ -3004,6 +3004,62 @@ mod tests {
         );
     }
 
+    // ── Task 3: wildmenu (:import) horizontal scroll math ───────────────────
+    #[test]
+    fn wildmenu_scroll_fits_no_offset() {
+        // Three 5-col cells + 2×2 separators = 19 cols; window 40 → no scroll.
+        let (off, l, r) = ui::wildmenu_scroll(&[5, 5, 5], 2, 1, 40);
+        assert_eq!(off, 0);
+        assert!(!l && !r, "fits → no overflow indicators");
+    }
+
+    #[test]
+    fn wildmenu_scroll_active_first_pins_left() {
+        // Many wide cells; active at the head must stay flush left.
+        let widths = vec![10usize; 8]; // total 10*8 + 2*7 = 94
+        let (off, l, r) = ui::wildmenu_scroll(&widths, 2, 0, 20);
+        assert_eq!(off, 0);
+        assert!(!l, "active at head → nothing hidden left");
+        assert!(r, "tail hidden right");
+    }
+
+    #[test]
+    fn wildmenu_scroll_active_tail_keeps_active_visible() {
+        let widths = vec![10usize; 8]; // total 94
+        let active = 7;
+        let window = 20;
+        let (off, l, r) = ui::wildmenu_scroll(&widths, 2, active, window);
+        let active_start = 7 * (10 + 2);
+        let active_end = active_start + 10;
+        assert!(
+            off <= active_start,
+            "never scroll past the active left edge"
+        );
+        assert!(
+            active_end <= off + window,
+            "active right edge stays in the window"
+        );
+        assert!(l, "head hidden left when scrolled to the tail");
+        assert!(!r, "nothing hidden right at the end");
+    }
+
+    #[test]
+    fn wildmenu_scroll_tab_cycle_keeps_active_in_view() {
+        // Drive Tab-cycling: every active index keeps its cell fully visible.
+        let widths = vec![9usize; 10];
+        let sep = 2;
+        let window = 24;
+        for active in 0..widths.len() {
+            let (off, _l, _r) = ui::wildmenu_scroll(&widths, sep, active, window);
+            let start: usize = widths[..active].iter().sum::<usize>() + sep * active;
+            let end = start + widths[active];
+            assert!(
+                off <= start && end <= off + window,
+                "active {active} not fully visible: off={off}"
+            );
+        }
+    }
+
     // ── TOGGLE field (space) ────────────────────────────────────────────────
 
     #[test]

@@ -4018,12 +4018,53 @@ pub(crate) fn format_import_candidate_label(parent: &str, name: &str, is_dir: bo
     format!("{parent_disp}/{name}{slash}")
 }
 
+/// Width of the separator drawn between adjacent wildmenu candidates.
+const WILDMENU_SEP_W: usize = 2;
+
+/// Horizontal scroll for the wildmenu candidate strip (#3).
+///
+/// Given the display width of every candidate CELL (label plus its framing
+/// spaces), the separator width between cells, the highlighted candidate index
+/// and the visible `window_cols`, return `(offset_cols, clipped_left,
+/// clipped_right)`: how many display columns to scroll the strip left so the
+/// ACTIVE candidate stays visible, plus whether any candidate is hidden past
+/// each edge (drives the `‹`/`›` indicators).
+///
+/// The whole strip is shown unscrolled when it fits. Otherwise the offset keeps
+/// the active candidate's right edge inside the window, but never scrolls past
+/// the candidate's left edge — so a candidate narrower than the window is shown
+/// in full; one wider than the window is pinned to its left edge.
+pub(crate) fn wildmenu_scroll(
+    cell_widths: &[usize],
+    sep_w: usize,
+    active: usize,
+    window_cols: usize,
+) -> (usize, bool, bool) {
+    let n = cell_widths.len();
+    if n == 0 || window_cols == 0 {
+        return (0, false, false);
+    }
+    let total: usize = cell_widths.iter().sum::<usize>() + sep_w * n.saturating_sub(1);
+    if total <= window_cols {
+        return (0, false, false);
+    }
+    let active = active.min(n - 1);
+    let active_start: usize = cell_widths[..active].iter().sum::<usize>() + sep_w * active;
+    let active_end = active_start + cell_widths[active];
+    // Min offset to bring the active cell's right edge into view; never go past
+    // its left edge (so the cell shows in full when it fits the window).
+    let want = active_end.saturating_sub(window_cols);
+    let offset = want.min(active_start).min(total - window_cols);
+    (offset, offset > 0, offset + window_cols < total)
+}
+
 /// Render the Tab-completion wildmenu into `area`.
 ///
 /// The currently highlighted candidate is drawn reversed (dark bg, accent fg);
-/// others are dim.  The caller is responsible for allocating `area` — either
-/// a dedicated layout row (main render, #71) or a manually computed rect
-/// (empty screen).
+/// others are dim.  When the strip overflows, it scrolls horizontally so the
+/// active candidate stays visible, with `‹`/`›` overflow indicators (#3). The
+/// caller is responsible for allocating `area` — either a dedicated layout row
+/// (main render, #71) or a manually computed rect (empty screen).
 fn render_wildmenu(frame: &mut Frame, app: &AppState, area: Rect) {
     // `:import <path>` candidates carry a full (possibly long) path; the wildmenu
     // shows a shortened label (#3) while the buffer keeps the full value.
@@ -4032,16 +4073,23 @@ fn render_wildmenu(frame: &mut Frame, app: &AppState, area: Rect) {
         .as_deref()
         .map(|b| b.trim_start().starts_with("import "))
         .unwrap_or(false);
-    let mut spans: Vec<Span> = Vec::new();
+
+    // Flatten the whole strip into styled chars so it can be windowed across
+    // candidate/separator boundaries without splitting a wide glyph. Track each
+    // candidate CELL width to compute the scroll offset.
+    let dim = Style::default().fg(C_TEXT).bg(C_PANEL);
+    let sep_style = Style::default().fg(C_FAINT).bg(C_PANEL);
+    let active_style = Style::default()
+        .fg(C_BG)
+        .bg(C_DONE)
+        .add_modifier(Modifier::BOLD);
+    let mut chars: Vec<(char, Style)> = Vec::new();
+    let mut cell_widths: Vec<usize> = Vec::with_capacity(app.completion_candidates.len());
     for (i, cand) in app.completion_candidates.iter().enumerate() {
-        let is_active = i == app.completion_index;
-        let style = if is_active {
-            Style::default()
-                .fg(C_BG)
-                .bg(C_DONE)
-                .add_modifier(Modifier::BOLD)
+        let style = if i == app.completion_index {
+            active_style
         } else {
-            Style::default().fg(C_TEXT).bg(C_PANEL)
+            dim
         };
         let label = if is_import {
             let (parent, name, is_dir) = split_import_candidate(cand);
@@ -4049,17 +4097,71 @@ fn render_wildmenu(frame: &mut Frame, app: &AppState, area: Rect) {
         } else {
             cand.clone()
         };
-        spans.push(Span::styled(format!(" {} ", label), style));
+        let cell = format!(" {} ", label);
+        cell_widths.push(crate::textfit::display_width(&cell));
+        chars.extend(cell.chars().map(|c| (c, style)));
         if i + 1 < app.completion_candidates.len() {
-            // Thin separator between candidates.
-            spans.push(Span::styled("  ", Style::default().fg(C_FAINT).bg(C_PANEL)));
+            for c in "  ".chars() {
+                chars.push((c, sep_style));
+            }
         }
     }
 
+    let window = area.width as usize;
+    let total: usize =
+        cell_widths.iter().sum::<usize>() + WILDMENU_SEP_W * cell_widths.len().saturating_sub(1);
+
+    let line = if total <= window || window == 0 {
+        // Fits — render the whole strip as-is.
+        Line::from(coalesce_styled(&chars))
+    } else {
+        // Overflow: reserve one column on each side for the `‹`/`›` indicators,
+        // scroll so the active candidate stays visible.
+        let inner = window.saturating_sub(2);
+        let (offset, clipped_left, clipped_right) =
+            wildmenu_scroll(&cell_widths, WILDMENU_SEP_W, app.completion_index, inner);
+        let combined: String = chars.iter().map(|(c, _)| *c).collect();
+        let range = crate::textfit::marquee_char_range(&combined, inner, offset);
+        let mut spans: Vec<Span> = Vec::new();
+        spans.push(Span::styled(
+            if clipped_left { "\u{2039}" } else { " " }.to_string(),
+            sep_style,
+        ));
+        spans.extend(coalesce_styled(&chars[range]));
+        spans.push(Span::styled(
+            if clipped_right { "\u{203a}" } else { " " }.to_string(),
+            sep_style,
+        ));
+        Line::from(spans)
+    };
+
     frame.render_widget(
-        Paragraph::new(Line::from(spans)).style(Style::default().bg(C_PANEL)),
+        Paragraph::new(line).style(Style::default().bg(C_PANEL)),
         area,
     );
+}
+
+/// Coalesce a windowed `(char, Style)` slice into the minimum run of spans
+/// (consecutive same-style chars merge into one span).
+fn coalesce_styled(windowed: &[(char, Style)]) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_style: Option<Style> = None;
+    for (c, st) in windowed {
+        if cur_style == Some(*st) {
+            cur.push(*c);
+        } else {
+            if let Some(s) = cur_style {
+                spans.push(Span::styled(std::mem::take(&mut cur), s));
+            }
+            cur.push(*c);
+            cur_style = Some(*st);
+        }
+    }
+    if let Some(s) = cur_style {
+        spans.push(Span::styled(cur, s));
+    }
+    spans
 }
 
 /// Build a "Title  Author" header line, windowed by a ping-pong marquee
