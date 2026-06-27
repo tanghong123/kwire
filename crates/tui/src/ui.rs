@@ -400,6 +400,11 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
 
     let area_w = area.width as usize;
 
+    // The list strip shows a focus indicator (highlighted active cell) only when
+    // the Header is focused AND the list-strip sub-row is the active Header row.
+    let strip_focused =
+        app.focus == Focus::Header && app.header_row == crate::app::HeaderRow::ListStrip;
+
     // The aggregate "All" stop — a fixed-width prefix (not a sized list column).
     let all_done: usize = app.all_lists.iter().map(|l| l.done).sum();
     let all_total: usize = app.all_lists.iter().map(|l| l.total).sum();
@@ -408,7 +413,9 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
     } else {
         format!(" All {}/{}", all_done, all_total)
     };
-    let prefix_style = if app.all_active {
+    let prefix_style = if app.all_active && strip_focused {
+        style_selected()
+    } else if app.all_active {
         style_title()
     } else {
         style_muted()
@@ -489,7 +496,11 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
         if even_mode {
             text = pad_cell(&text, col);
         }
-        let style = if l.active {
+        let style = if l.active && strip_focused {
+            // Focused list strip: the active cell gets a highlighted background,
+            // consistent with the other panes' focus styling.
+            style_selected()
+        } else if l.active {
             style_title()
         } else {
             style_muted()
@@ -697,7 +708,10 @@ fn filter_chip_layout(
 fn render_filter_row(frame: &mut Frame, app: &mut AppState, area: Rect) {
     let counts = app.status_counts();
     let active_filter = app.filter;
-    let header_focused = app.focus == Focus::Header;
+    // The filter row shows its pane accent only when the Header is focused AND
+    // the filter-chips sub-row (not the list strip) is the active Header row.
+    let header_focused =
+        app.focus == Focus::Header && app.header_row == crate::app::HeaderRow::FilterChips;
 
     // Build the chips with whichever label set fits, then lay them out. The
     // rects we store match the rendered text regardless of label set, so clicks
@@ -4082,12 +4096,30 @@ pub(crate) fn flex_row_layout(row_w: usize, rest_field_widths: &[usize]) -> Flex
 // 10% + slack). The title stays at 60%. When the rest fields can't fit the 30%
 // cap (narrow terminals) the whole line packs into one comma string (Packed).
 
-/// Gutter between the title/author regions and before the rest block.
+/// Gutter between the title and author regions.
 const BOOK_SEP: usize = 2;
-/// Gap between adjacent rest fields (Fmt · Size · State).
-const BOOK_GAP: usize = 1;
 /// Never enter Fixed mode unless the title region keeps at least this width.
 const BOOK_MIN_TITLE: usize = 8;
+/// The author region never shrinks below this (keeps a visible author slice).
+const BOOK_MIN_AUTHOR: usize = 6;
+
+/// Inter-column gap between the right-anchored metadata columns
+/// (Fmt · Size · State), scaled by the content width: a 1-space tight floor at
+/// ~80 cols, 2 at moderate widths, up to 4 at large widths. The extra wide-width
+/// room is spent on these gaps (plus the mid gap) so the metadata looks evenly
+/// spaced rather than bunched. `content_w` is the row width minus the seq column
+/// (so 80/100/132/160-col terminals map to 76/96/128/156).
+pub(crate) fn book_meta_gap(content_w: usize) -> usize {
+    if content_w >= 144 {
+        4
+    } else if content_w >= 112 {
+        3
+    } else if content_w >= 88 {
+        2
+    } else {
+        1
+    }
+}
 
 /// Layout of one library book row (#4), computed from the content width (the
 /// row width minus the fixed seq/accent column) and the rest fields' natural
@@ -4102,6 +4134,11 @@ pub(crate) enum BookRowLayout {
     Fixed {
         title_w: usize,
         author_w: usize,
+        /// Flexible gutter between the left content (title+author) and the
+        /// right-anchored metadata block. Scales with width.
+        mid_gap: usize,
+        /// Inter-column gap between the metadata columns (scales 1→4).
+        col_gap: usize,
         rest_widths: Vec<usize>,
     },
     Packed {
@@ -4118,26 +4155,30 @@ pub(crate) enum BookRowLayout {
 /// so the **author always keeps a visible slice** while the title holds 60%.
 pub(crate) fn book_row_layout(content_w: usize, rest_field_widths: &[usize]) -> BookRowLayout {
     let n = rest_field_widths.len();
-    let gaps = n.saturating_sub(1) * BOOK_GAP;
-    let rest_natural = rest_field_widths.iter().sum::<usize>() + gaps;
-    let rest_cap = content_w * 30 / 100;
-    let author_base = content_w * 10 / 100;
-    if rest_natural <= rest_cap {
-        // Slack (the 30% the rest fields didn't use) flows to the author.
-        let slack = rest_cap - rest_natural;
-        let author_w = author_base + slack;
-        // Title gets whatever's left after author, the rest block and the two
-        // inter-region gutters — i.e. ~60% (the two separators are overhead).
-        let used = author_w + rest_natural + 2 * BOOK_SEP;
-        if content_w >= used + BOOK_MIN_TITLE {
-            return BookRowLayout::Fixed {
-                title_w: content_w - used,
-                author_w,
-                rest_widths: rest_field_widths.to_vec(),
-            };
+    // Right-anchored metadata block: fixed per-column widths (so the columns line
+    // up vertically down the list) joined by the width-scaled inter-column gap.
+    let col_gap = book_meta_gap(content_w);
+    let rest_block = rest_field_widths.iter().sum::<usize>() + n.saturating_sub(1) * col_gap;
+    // Author keeps a modest #4 slice (~10%, floored so it stays visible).
+    let author_w = (content_w * 10 / 100).max(BOOK_MIN_AUTHOR);
+    // Mid gutter between the left content and the right-anchored metadata; it
+    // scales with width too so wide rows breathe instead of bunching.
+    let mid_gap = BOOK_SEP + col_gap;
+    // The title gets the bulk: it flexes to absorb the remaining width, which
+    // keeps the metadata block flush against the right edge (right-anchored)
+    // without leaving a single huge hole floating it far to the right.
+    let fixed = author_w + BOOK_SEP + mid_gap + rest_block;
+    if content_w >= fixed + BOOK_MIN_TITLE {
+        BookRowLayout::Fixed {
+            title_w: content_w - fixed,
+            author_w,
+            mid_gap,
+            col_gap,
+            rest_widths: rest_field_widths.to_vec(),
         }
+    } else {
+        BookRowLayout::Packed { width: content_w }
     }
-    BookRowLayout::Packed { width: content_w }
 }
 
 /// Per-list column widths for the top reading-list strip (#15).
@@ -4322,6 +4363,8 @@ fn book_row_line(
         BookRowLayout::Fixed {
             title_w,
             author_w,
+            mid_gap,
+            col_gap,
             rest_widths,
         } => {
             let ta_w = *title_w + BOOK_SEP + *author_w;
@@ -4352,11 +4395,12 @@ fn book_row_line(
                     author_style,
                 ));
             }
-            // Gutter, then the fixed rest fields.
-            spans.push(Span::styled(" ".repeat(BOOK_SEP), base_style));
+            // Flexible mid gutter, then the right-anchored metadata columns
+            // (aligned fixed widths, joined by the width-scaled inter-column gap).
+            spans.push(Span::styled(" ".repeat(*mid_gap), base_style));
             for (i, ((s, st), &w)) in rest.iter().zip(rest_widths).enumerate() {
                 if i > 0 {
-                    spans.push(Span::styled(" ".repeat(BOOK_GAP), base_style));
+                    spans.push(Span::styled(" ".repeat(*col_gap), base_style));
                 }
                 spans.push(Span::styled(pad_cell(s, w), *st));
             }

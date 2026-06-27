@@ -265,6 +265,18 @@ pub enum Focus {
     Activity,
 }
 
+/// Which of the Header pane's two rows currently has the keyboard sub-focus.
+/// Only meaningful while [`Focus::Header`] is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HeaderRow {
+    /// The reading-list strip (top row): `←/→` switch the active reading list.
+    ListStrip,
+    /// The status-filter chips (lower row): `←/→` switch the status filter.
+    /// Default sub-row — `↑` from the book-list top lands here.
+    #[default]
+    FilterChips,
+}
+
 // ---------------------------------------------------------------------------
 // Help pages (context-paged Help redesign)
 // ---------------------------------------------------------------------------
@@ -705,6 +717,11 @@ pub struct AppState {
     /// The `[`/`]` cycle steps onto this as one extra stop before the first list.
     pub all_active: bool,
 
+    /// Which Header sub-row (list strip / filter chips) is focused. Only used
+    /// while `focus == Focus::Header`; `↑/↓` walk between the two rows and the
+    /// book list, `←/→` act on whichever row is focused.
+    pub header_row: HeaderRow,
+
     /// Origin map for the aggregate "All" view: index = aggregate group index,
     /// value = (owning list id, original group index within that list). Lets
     /// actions taken in All view route to the OWNING list's orchestrator. Empty
@@ -849,6 +866,7 @@ impl AppState {
             all_lists: Vec::new(),
             active_list_idx: 0,
             all_active: false,
+            header_row: HeaderRow::FilterChips,
             aggregate_origins: Vec::new(),
             marquee_offset: 0,
             marquee_forward: true,
@@ -1207,12 +1225,9 @@ impl AppState {
                                     }
                                 }
                                 Focus::Activity => self.scroll_activity(1),
-                                // arrow-cross: ↓ from Header (filter chips) → top of List.
-                                Focus::Header => {
-                                    self.focus = Focus::List;
-                                    self.selected = 0;
-                                    self.selected_var = None;
-                                }
+                                // Header two-row walk: list strip → filter chips
+                                // → top of book list.
+                                Focus::Header => self.header_down(),
                             }
                         }
                         Intent::Redraw
@@ -1229,12 +1244,8 @@ impl AppState {
                                 }
                             }
                             Focus::Activity => self.scroll_activity(1),
-                            // arrow-cross: j from Header (filter chips) → top of List.
-                            Focus::Header => {
-                                self.focus = Focus::List;
-                                self.selected = 0;
-                                self.selected_var = None;
-                            }
+                            // Header two-row walk (vim): strip → chips → list.
+                            Focus::Header => self.header_down(),
                         }
                         Intent::Redraw
                     }
@@ -1253,9 +1264,11 @@ impl AppState {
                         } else {
                             match self.focus {
                                 Focus::List => {
-                                    // arrow-cross: ↑ at top of List → Header (filter chips).
+                                    // arrow-cross: ↑ at top of List → Header
+                                    // (lands on the filter chips sub-row).
                                     if self.at_first_row() {
                                         self.focus = Focus::Header;
+                                        self.header_row = HeaderRow::FilterChips;
                                     } else {
                                         self.move_selection_up();
                                     }
@@ -1268,13 +1281,9 @@ impl AppState {
                                         self.scroll_activity_up();
                                     }
                                 }
-                                // arrow-cross: ↑ from Header lands on the TOP book
-                                // row (mirrors ↓-from-Header), never mid-list.
-                                Focus::Header => {
-                                    self.focus = Focus::List;
-                                    self.selected = 0;
-                                    self.selected_var = None;
-                                }
+                                // Header two-row walk: filter chips → list strip
+                                // → STOP (top of everything).
+                                Focus::Header => self.header_up(),
                             }
                         }
                         Intent::Redraw
@@ -1282,9 +1291,11 @@ impl AppState {
                     KeyCode::Char('k') => {
                         match self.focus {
                             Focus::List => {
-                                // arrow-cross: k at top of List → Header (filter chips).
+                                // arrow-cross: k at top of List → Header
+                                // (lands on the filter chips sub-row).
                                 if self.at_first_row() {
                                     self.focus = Focus::Header;
+                                    self.header_row = HeaderRow::FilterChips;
                                 } else {
                                     self.move_selection_up();
                                 }
@@ -1297,12 +1308,8 @@ impl AppState {
                                     self.scroll_activity_up();
                                 }
                             }
-                            // arrow-cross: k from Header lands on the TOP book row.
-                            Focus::Header => {
-                                self.focus = Focus::List;
-                                self.selected = 0;
-                                self.selected_var = None;
-                            }
+                            // Header two-row walk (vim): chips → strip → STOP.
+                            Focus::Header => self.header_up(),
                         }
                         Intent::Redraw
                     }
@@ -1506,65 +1513,33 @@ impl AppState {
                     // changes focus. The rotation includes the aggregate "All"
                     // stop as one extra position before the first real list:
                     //   All → list0 → list1 → … → All  (and back with `[`).
-                    KeyCode::Char('[') => {
-                        let n = self.all_lists.len();
-                        if n >= 1 {
-                            if self.all_active {
-                                // All → last real list.
-                                self.all_active = false;
-                                self.active_list_idx = n - 1;
-                                let id = self.all_lists[n - 1].id.clone();
-                                return Intent::SwitchList { id };
-                            } else if self.active_list_idx == 0 {
-                                // First list → All.
-                                self.all_active = true;
-                                return Intent::SwitchList {
-                                    id: ALL_LIST_ID.to_string(),
-                                };
-                            } else {
-                                self.active_list_idx -= 1;
-                                let id = self.all_lists[self.active_list_idx].id.clone();
-                                return Intent::SwitchList { id };
-                            }
-                        }
-                        Intent::Redraw
-                    }
-                    KeyCode::Char(']') => {
-                        let n = self.all_lists.len();
-                        if n >= 1 {
-                            if self.all_active {
-                                // All → first real list.
-                                self.all_active = false;
-                                self.active_list_idx = 0;
-                                let id = self.all_lists[0].id.clone();
-                                return Intent::SwitchList { id };
-                            } else if self.active_list_idx + 1 >= n {
-                                // Last list → All.
-                                self.all_active = true;
-                                return Intent::SwitchList {
-                                    id: ALL_LIST_ID.to_string(),
-                                };
-                            } else {
-                                self.active_list_idx += 1;
-                                let id = self.all_lists[self.active_list_idx].id.clone();
-                                return Intent::SwitchList { id };
-                            }
-                        }
-                        Intent::Redraw
-                    }
-                    // `←/→` — filter chips, ONLY when Header pane is active.
-                    // No-op when List or Activity is focused.
+                    KeyCode::Char('[') => self.cycle_list_prev(),
+                    KeyCode::Char(']') => self.cycle_list_next(),
+                    // `←/→` — act on the FOCUSED Header sub-row: on the filter
+                    // chips → prev/next status filter; on the list strip →
+                    // prev/next reading list (same switch as `[`/`]`). No-op when
+                    // List or Activity is focused.
                     KeyCode::Left => {
                         if self.focus == Focus::Header {
-                            self.filter = self.filter.prev();
-                            self.rebuild_flat();
+                            match self.header_row {
+                                HeaderRow::FilterChips => {
+                                    self.filter = self.filter.prev();
+                                    self.rebuild_flat();
+                                }
+                                HeaderRow::ListStrip => return self.cycle_list_prev(),
+                            }
                         }
                         Intent::Redraw
                     }
                     KeyCode::Right => {
                         if self.focus == Focus::Header {
-                            self.filter = self.filter.next();
-                            self.rebuild_flat();
+                            match self.header_row {
+                                HeaderRow::FilterChips => {
+                                    self.filter = self.filter.next();
+                                    self.rebuild_flat();
+                                }
+                                HeaderRow::ListStrip => return self.cycle_list_next(),
+                            }
                         }
                         Intent::Redraw
                     }
@@ -1643,27 +1618,13 @@ impl AppState {
                     MouseEventKind::ScrollDown => {
                         // Follow cursor position, not keyboard focus.
                         if point_in_rect(col, row, self.last_rects.activity) {
+                            // Wheel SCROLLS the pane (selection moves ±1, list
+                            // follows); it does NOT hover-jump to the cursor row.
                             self.focus = Focus::Activity;
                             self.scroll_activity(1);
-                            // Hover-to-select: keep the row under the cursor selected.
-                            let activity_rows = self.last_rects.activity_rows.clone();
-                            for (rect, leg_idx) in &activity_rows {
-                                if point_in_rect(col, row, *rect) {
-                                    self.activity_selected = *leg_idx;
-                                    break;
-                                }
-                            }
                         } else if point_in_rect(col, row, self.last_rects.book_table) {
                             self.focus = Focus::List;
                             self.move_selection(1);
-                            // Hover-to-select: prefer the row under the cursor.
-                            let book_rows = self.last_rects.book_rows.clone();
-                            for (rect, rref) in &book_rows {
-                                if point_in_rect(col, row, *rect) {
-                                    self.set_focus_row(rref);
-                                    break;
-                                }
-                            }
                         } else {
                             // Fallback to focus-based (header / unknown area).
                             match self.focus {
@@ -1676,25 +1637,12 @@ impl AppState {
                     }
                     MouseEventKind::ScrollUp => {
                         if point_in_rect(col, row, self.last_rects.activity) {
+                            // Wheel SCROLLS the pane; no hover-jump to the cursor.
                             self.focus = Focus::Activity;
                             self.scroll_activity_up();
-                            let activity_rows = self.last_rects.activity_rows.clone();
-                            for (rect, leg_idx) in &activity_rows {
-                                if point_in_rect(col, row, *rect) {
-                                    self.activity_selected = *leg_idx;
-                                    break;
-                                }
-                            }
                         } else if point_in_rect(col, row, self.last_rects.book_table) {
                             self.focus = Focus::List;
                             self.move_selection_up();
-                            let book_rows = self.last_rects.book_rows.clone();
-                            for (rect, rref) in &book_rows {
-                                if point_in_rect(col, row, *rect) {
-                                    self.set_focus_row(rref);
-                                    break;
-                                }
-                            }
                         } else {
                             match self.focus {
                                 Focus::List => self.move_selection_up(),
@@ -1728,6 +1676,7 @@ impl AppState {
                                 self.active_list_idx = *list_idx;
                                 self.all_active = false;
                                 self.focus = Focus::Header;
+                                self.header_row = HeaderRow::ListStrip;
                                 return Intent::SwitchList { id };
                             }
                         }
@@ -1737,6 +1686,8 @@ impl AppState {
                         for (rect, filter) in &filter_chips {
                             if point_in_rect(col, row, *rect) {
                                 self.filter = *filter;
+                                self.focus = Focus::Header;
+                                self.header_row = HeaderRow::FilterChips;
                                 self.rebuild_flat();
                                 return Intent::Redraw;
                             }
@@ -3128,6 +3079,85 @@ impl AppState {
             .unwrap_or(false);
         if !still_valid {
             self.selected_var = None;
+        }
+    }
+
+    /// Switch to the PREVIOUS reading list in the global rotation (the `[`
+    /// direction). The rotation includes the aggregate "All" stop as one extra
+    /// position before the first real list: All → list0 → … → All. Returns the
+    /// resulting [`Intent`] (a `SwitchList`, or `Redraw` when no lists exist).
+    /// Shared by the `[` shortcut and `←` on the focused list strip.
+    pub fn cycle_list_prev(&mut self) -> Intent {
+        let n = self.all_lists.len();
+        if n == 0 {
+            return Intent::Redraw;
+        }
+        if self.all_active {
+            self.all_active = false;
+            self.active_list_idx = n - 1;
+            Intent::SwitchList {
+                id: self.all_lists[n - 1].id.clone(),
+            }
+        } else if self.active_list_idx == 0 {
+            self.all_active = true;
+            Intent::SwitchList {
+                id: ALL_LIST_ID.to_string(),
+            }
+        } else {
+            self.active_list_idx -= 1;
+            Intent::SwitchList {
+                id: self.all_lists[self.active_list_idx].id.clone(),
+            }
+        }
+    }
+
+    /// Switch to the NEXT reading list in the global rotation (the `]`
+    /// direction). Mirrors [`cycle_list_prev`]. Shared by `]` and `→` on the
+    /// focused list strip.
+    pub fn cycle_list_next(&mut self) -> Intent {
+        let n = self.all_lists.len();
+        if n == 0 {
+            return Intent::Redraw;
+        }
+        if self.all_active {
+            self.all_active = false;
+            self.active_list_idx = 0;
+            Intent::SwitchList {
+                id: self.all_lists[0].id.clone(),
+            }
+        } else if self.active_list_idx + 1 >= n {
+            self.all_active = true;
+            Intent::SwitchList {
+                id: ALL_LIST_ID.to_string(),
+            }
+        } else {
+            self.active_list_idx += 1;
+            Intent::SwitchList {
+                id: self.all_lists[self.active_list_idx].id.clone(),
+            }
+        }
+    }
+
+    /// `↑` within the Header pane: filter chips → list strip → STOP. From the
+    /// chips the focus climbs to the list strip; from the list strip it is the
+    /// top of everything, so this is a no-op (focus stays put).
+    fn header_up(&mut self) {
+        match self.header_row {
+            HeaderRow::FilterChips => self.header_row = HeaderRow::ListStrip,
+            HeaderRow::ListStrip => {} // top of everything — STOP.
+        }
+    }
+
+    /// `↓` within the Header pane: list strip → filter chips → top of the book
+    /// list. From the chips the focus drops into the List pane at its first row.
+    fn header_down(&mut self) {
+        match self.header_row {
+            HeaderRow::ListStrip => self.header_row = HeaderRow::FilterChips,
+            HeaderRow::FilterChips => {
+                self.focus = Focus::List;
+                self.selected = 0;
+                self.selected_var = None;
+            }
         }
     }
 

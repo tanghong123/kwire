@@ -17,8 +17,8 @@ mod tests {
 
     use crate::app::{
         build_format_editor_rows, settings_field_kind, ActiveTransfer, AppState, FlatBook, Focus,
-        HelpPage, Modal, RowRef, SettingsDraft, SettingsEditor, SettingsFieldKind, StatusFilter,
-        FORMAT_EDITOR_FORMATS, SETTINGS_FIELD_COUNT,
+        HeaderRow, HelpPage, Modal, RowRef, SettingsDraft, SettingsEditor, SettingsFieldKind,
+        StatusFilter, FORMAT_EDITOR_FORMATS, SETTINGS_FIELD_COUNT,
     };
     use crate::intent::Intent;
     use crate::ui;
@@ -593,6 +593,11 @@ mod tests {
             Focus::Header,
             "↑ at list top must focus Header (filter chips)"
         );
+        assert_eq!(
+            app.header_row,
+            HeaderRow::FilterChips,
+            "↑ from the book-list top lands on the filter chips sub-row"
+        );
         assert_eq!(app.selected, 0, "selection stays at the first book");
     }
 
@@ -630,29 +635,145 @@ mod tests {
         assert_eq!(app.selected, 0);
     }
 
-    /// `↑` from the Header lands on the TOP book row (mirrors ↓-from-Header),
-    /// even when the list cursor was previously mid-list.
+    /// Header two-row walk: `↑` from the filter chips climbs to the LIST STRIP
+    /// (superseding the old ↑-from-Header→top-book stopgap), and `↑` from the
+    /// list strip STOPS (top of everything).
     #[test]
-    fn up_from_header_selects_top() {
+    fn header_up_walks_chips_to_strip_then_stops() {
         let mut app = AppState::new();
         app.set_view(fixture_vm());
         app.focus = Focus::Header;
-        app.selected = 1; // cursor parked mid-list
+        app.header_row = HeaderRow::FilterChips;
+        app.selected = 1; // cursor parked mid-list — must NOT change.
+
+        // chips → list strip (focus stays Header, book list untouched).
         app.on_input(key(KeyCode::Up));
-        assert_eq!(app.focus, Focus::List, "↑ from Header focuses List");
-        assert_eq!(app.selected, 0, "↑ from Header lands on the first book");
+        assert_eq!(app.focus, Focus::Header, "↑ from chips stays in Header");
+        assert_eq!(
+            app.header_row,
+            HeaderRow::ListStrip,
+            "↑ from filter chips climbs to the list strip"
+        );
+        assert_eq!(app.selected, 1, "↑ from chips must NOT touch the book list");
+
+        // list strip → STOP (no-op: stays on the list strip).
+        app.on_input(key(KeyCode::Up));
+        assert_eq!(app.focus, Focus::Header, "↑ from list strip stops (Header)");
+        assert_eq!(
+            app.header_row,
+            HeaderRow::ListStrip,
+            "↑ from the list strip is the top of everything — STOP"
+        );
     }
 
-    /// `k` from the Header also lands on the top book row.
+    /// `k` mirrors `↑` for the Header two-row walk.
     #[test]
-    fn k_from_header_selects_top() {
+    fn header_k_walks_chips_to_strip_then_stops() {
         let mut app = AppState::new();
         app.set_view(fixture_vm());
         app.focus = Focus::Header;
-        app.selected = 1;
+        app.header_row = HeaderRow::FilterChips;
         app.on_input(key(KeyCode::Char('k')));
-        assert_eq!(app.focus, Focus::List);
-        assert_eq!(app.selected, 0, "k from Header lands on the first book");
+        assert_eq!(
+            app.header_row,
+            HeaderRow::ListStrip,
+            "k: chips → list strip"
+        );
+        app.on_input(key(KeyCode::Char('k')));
+        assert_eq!(
+            app.header_row,
+            HeaderRow::ListStrip,
+            "k from the list strip stops"
+        );
+    }
+
+    /// Header two-row walk down: `↓` from the list strip drops to the filter
+    /// chips; `↓` from the chips drops into the top of the book list.
+    #[test]
+    fn header_down_walks_strip_to_chips_to_list() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::Header;
+        app.header_row = HeaderRow::ListStrip;
+        app.selected = 1;
+
+        // list strip → filter chips.
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(app.focus, Focus::Header, "↓ from strip stays in Header");
+        assert_eq!(
+            app.header_row,
+            HeaderRow::FilterChips,
+            "↓ from the list strip drops to the filter chips"
+        );
+
+        // filter chips → top of book list.
+        app.on_input(key(KeyCode::Down));
+        assert_eq!(app.focus, Focus::List, "↓ from chips focuses the book list");
+        assert_eq!(app.selected, 0, "↓ from chips lands on the first book");
+    }
+
+    /// `←/→` on the FOCUSED Header list strip switch the reading list (same as
+    /// `[`/`]`); on the filter chips they switch the status filter.
+    #[test]
+    fn header_left_right_acts_on_focused_row() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.all_lists = vec![
+            crate::app::ListSummary {
+                id: "L1".into(),
+                title: "List 1".into(),
+                done: 0,
+                total: 1,
+            },
+            crate::app::ListSummary {
+                id: "L2".into(),
+                title: "List 2".into(),
+                done: 0,
+                total: 1,
+            },
+        ];
+        app.active_list_idx = 0;
+        app.focus = Focus::Header;
+
+        // On the FILTER CHIPS row → switches the status filter.
+        app.header_row = HeaderRow::FilterChips;
+        app.on_input(key(KeyCode::Right));
+        assert_eq!(
+            app.filter,
+            StatusFilter::NeedsYou,
+            "→ on the filter chips advances the status filter"
+        );
+        assert_eq!(
+            app.active_list_idx, 0,
+            "filter-row → must NOT switch the list"
+        );
+
+        // On the LIST STRIP row → switches the reading list (like `]`).
+        app.header_row = HeaderRow::ListStrip;
+        let prev_filter = app.filter;
+        let intent = app.on_input(key(KeyCode::Right));
+        assert!(
+            matches!(intent, Intent::SwitchList { ref id } if id == "L2"),
+            "→ on the list strip switches to the next list, got {:?}",
+            intent
+        );
+        assert_eq!(
+            app.active_list_idx, 1,
+            "list-strip → advances the active list"
+        );
+        assert_eq!(
+            app.filter, prev_filter,
+            "list-strip → must NOT touch the filter"
+        );
+
+        // `←` on the list strip goes back (like `[`).
+        let intent = app.on_input(key(KeyCode::Left));
+        assert!(
+            matches!(intent, Intent::SwitchList { ref id } if id == "L1"),
+            "← on the list strip switches to the previous list, got {:?}",
+            intent
+        );
+        assert_eq!(app.active_list_idx, 0);
     }
 
     /// Detail modal: `d` on a focused variation emits a Select (download) intent.
@@ -5189,9 +5310,10 @@ mod tests {
         );
     }
 
-    /// Scroll wheel over the book table → scrolls + hover-selects, focuses List.
+    /// Scroll wheel over the book table SCROLLS the list (selection moves ±1,
+    /// list follows) and does NOT hover-jump to the row under the cursor.
     #[test]
-    fn mouse_wheel_over_book_table_scrolls_and_hover_selects() {
+    fn mouse_wheel_over_book_table_scrolls_not_hover() {
         let mut app = AppState::new();
         app.set_view(fixture_vm()); // 2 books
         assert_eq!(app.selected, 0);
@@ -5204,7 +5326,9 @@ mod tests {
             (ratatui::layout::Rect::new(0, 5, 80, 1), RowRef::Book(1)),
         ];
 
-        // Scroll down with cursor over the book table.
+        // Scroll down with the cursor parked over book 0's row (row 4) — i.e. the
+        // currently selected row. The wheel must SCROLL (selected 0 → 1), not
+        // jump-to-cursor (which would keep selected at 0).
         let intent = app.on_input(mouse_scroll_down(10, 4));
         assert_eq!(intent, Intent::Redraw);
         assert_eq!(
@@ -5212,11 +5336,16 @@ mod tests {
             Focus::List,
             "wheel over book table must focus List"
         );
-        // move_selection(1) moves selected from 0 → 1; hover-to-select on row 4 → flat 0.
-        // The hover-to-select clamps back to flat 0 because cursor is on row 4.
+        assert_eq!(
+            app.selected, 1,
+            "wheel SCROLLS the list (move_selection +1), never hover-jumps to the cursor row"
+        );
+
+        // Scroll back up: selection returns to 0 (scroll, not hover).
+        app.on_input(mouse_scroll_up(10, 5));
         assert_eq!(
             app.selected, 0,
-            "hover-to-select: cursor still over book 0 → selected stays at 0"
+            "wheel up SCROLLS the list back, ignoring the cursor's row"
         );
     }
 
@@ -5622,59 +5751,110 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // #4 — Book list row: three never-starved regions (title / author / rest)
+    // #4 — Book list row: right-anchored, aligned metadata (option A)
     // -----------------------------------------------------------------------
 
-    /// Situation (a): rest fields fit the 30% cap → Fixed. Title holds ~60%,
-    /// the rest fields keep their natural width, and the author keeps a slice.
+    /// Fixed mode: title gets the bulk, the author keeps a slice, and the
+    /// metadata is right-anchored with a width-scaled inter-column gap.
     #[test]
-    fn book_row_layout_fixed_author_keeps_a_slice() {
-        // content_w=100, rest=[5,8,14] → rest_natural = 27 + 2 gaps = 29; cap = 30.
-        // slack = 1 → author_w = 10 + 1 = 11; title_w = 100 - (11 + 29 + 2*SEP) = 56.
+    fn book_row_layout_fixed_right_anchored() {
+        // content_w=100 → col_gap=2; rest_block = 27 + 2*2 = 31; author = 10;
+        // mid_gap = 2 + 2 = 4; fixed = 10 + SEP(2) + 4 + 31 = 47; title = 53.
         let layout = ui::book_row_layout(100, &[5, 8, 14]);
         assert_eq!(
             layout,
             ui::BookRowLayout::Fixed {
-                title_w: 56,
-                author_w: 11,
+                title_w: 53,
+                author_w: 10,
+                mid_gap: 4,
+                col_gap: 2,
                 rest_widths: vec![5, 8, 14],
             }
         );
     }
 
-    /// The slack the rest fields leave unused flows to the AUTHOR, not the title
-    /// (title stays at ~60%).
+    /// Right-anchor alignment: the whole row sums back to `content_w`, so the
+    /// metadata block ends flush against the right edge (and the per-column
+    /// widths are fixed, so the columns line up vertically down the list).
     #[test]
-    fn book_row_layout_slack_flows_to_author() {
-        // content_w=100, rest=[1,1,1] → rest_natural = 3 + 2 = 5; cap = 30.
-        // slack = 25 → author_w = 10 + 25 = 35; title_w stays 56 (~60%).
-        let layout = ui::book_row_layout(100, &[1, 1, 1]);
-        match layout {
+    fn book_row_layout_metadata_is_flush_right() {
+        for content_w in [76usize, 96, 128, 156] {
+            let rest = [4usize, 6, 8];
+            match ui::book_row_layout(content_w, &rest) {
+                ui::BookRowLayout::Fixed {
+                    title_w,
+                    author_w,
+                    mid_gap,
+                    col_gap,
+                    rest_widths,
+                } => {
+                    let rest_block: usize =
+                        rest_widths.iter().sum::<usize>() + (rest_widths.len() - 1) * col_gap;
+                    // title + SEP(2) + author + mid_gap + rest_block == content_w
+                    assert_eq!(
+                        title_w + 2 + author_w + mid_gap + rest_block,
+                        content_w,
+                        "metadata must be flush-right at content_w={content_w}"
+                    );
+                    // The metadata columns keep their natural width (aligned).
+                    assert_eq!(rest_widths, rest.to_vec());
+                }
+                other => panic!("expected Fixed at {content_w}, got {other:?}"),
+            }
+        }
+    }
+
+    /// The inter-column metadata gap scales with width: 1 (tight floor) at
+    /// 80-col, 2 at moderate widths, up to 4 at large widths.
+    #[test]
+    fn book_row_layout_gap_scales_1_2_4_by_width() {
+        let col_gap_at = |content_w: usize| match ui::book_row_layout(content_w, &[3, 3, 3]) {
+            ui::BookRowLayout::Fixed { col_gap, .. } => col_gap,
+            other => panic!("expected Fixed at {content_w}, got {other:?}"),
+        };
+        // content_w = area.width - SEQ(4): 80→76, 100→96, 132→128, 160→156.
+        assert_eq!(col_gap_at(76), 1, "80-col → 1-space tight floor");
+        assert_eq!(col_gap_at(96), 2, "100-col → 2-space gaps");
+        assert_eq!(col_gap_at(128), 3, "132-col → 3-space gaps");
+        assert_eq!(col_gap_at(156), 4, "160-col → 4-space gaps");
+        // The dedicated gap helper agrees.
+        assert_eq!(ui::book_meta_gap(76), 1);
+        assert_eq!(ui::book_meta_gap(156), 4);
+    }
+
+    /// The title gets the BULK: it absorbs the wide-width room (it is far wider
+    /// than the author), keeping the metadata flush-right without a giant hole.
+    #[test]
+    fn book_row_layout_title_gets_the_bulk() {
+        match ui::book_row_layout(156, &[4, 6, 8]) {
             ui::BookRowLayout::Fixed {
                 title_w, author_w, ..
             } => {
-                assert_eq!(author_w, 35, "all the rest-field slack must go to author");
-                assert_eq!(title_w, 56, "title stays ~60% (slack does NOT inflate it)");
+                assert!(
+                    title_w > author_w * 3,
+                    "title ({title_w}) must dwarf the author ({author_w})"
+                );
             }
             other => panic!("expected Fixed, got {other:?}"),
         }
     }
 
-    /// Situation (b): rest fields can't fit the 30% cap → the whole line packs.
+    /// Rest fields too wide for any sane title → the whole line packs.
     #[test]
     fn book_row_layout_packed_when_rest_exceeds_cap() {
-        // content_w=40, rest=[5,8,14] → rest_natural = 29; cap = 12. 29 > 12 → Packed.
+        // content_w=40, rest=[5,8,14]: col_gap=1 → rest_block=29; author=6; mid=3;
+        // fixed=6+2+3+29=40; 40 < 40 + MIN_TITLE(8) → Packed.
         assert_eq!(
             ui::book_row_layout(40, &[5, 8, 14]),
             ui::BookRowLayout::Packed { width: 40 }
         );
     }
 
-    /// Packed also when the rest fits the cap but no sane title width is left.
+    /// Packed also when no sane title width is left.
     #[test]
     fn book_row_layout_packed_when_title_starved() {
-        // content_w=17, rest=[1,1,1] → rest_natural = 5; cap = 5 (5 ≤ 5).
-        // author_w = 1; used = 1 + 5 + 4 = 10; 17 < 10 + MIN_TITLE(8) = 18 → Packed.
+        // content_w=17, rest=[1,1,1]: col_gap=1 → rest_block=5; author=6; mid=3;
+        // fixed=6+2+3+5=16; 17 < 16 + MIN_TITLE(8) = 24 → Packed.
         assert_eq!(
             ui::book_row_layout(17, &[1, 1, 1]),
             ui::BookRowLayout::Packed { width: 17 }
