@@ -360,6 +360,7 @@ pub enum StatusFilter {
     NeedsYou,   // discovery == needs_selection
     Check,      // review flag set
     Cannot,     // discovery == not_found  OR  state == failed/cancelled
+    Queued,     // a queued/Pending variation AND no downloading (active) one
     InProgress, // any variation state == downloading
     Done,       // acquisition.done >= 1 && active == 0
 }
@@ -372,6 +373,7 @@ impl StatusFilter {
             StatusFilter::NeedsYou => "filter.needs",
             StatusFilter::Check => "filter.review",
             StatusFilter::Cannot => "filter.cantdl",
+            StatusFilter::Queued => "filter.queued",
             StatusFilter::InProgress => "filter.active",
             StatusFilter::Done => "filter.done",
         }
@@ -394,6 +396,7 @@ impl StatusFilter {
             StatusFilter::NeedsYou => "Needs U",
             StatusFilter::Check => "Check DL",
             StatusFilter::Cannot => "Can't DL",
+            StatusFilter::Queued => "Queued",
             StatusFilter::InProgress => "In prog",
             StatusFilter::Done => "Done",
         }
@@ -405,7 +408,8 @@ impl StatusFilter {
             StatusFilter::All => StatusFilter::NeedsYou,
             StatusFilter::NeedsYou => StatusFilter::Check,
             StatusFilter::Check => StatusFilter::Cannot,
-            StatusFilter::Cannot => StatusFilter::InProgress,
+            StatusFilter::Cannot => StatusFilter::Queued,
+            StatusFilter::Queued => StatusFilter::InProgress,
             StatusFilter::InProgress => StatusFilter::Done,
             StatusFilter::Done => StatusFilter::All,
         }
@@ -418,7 +422,8 @@ impl StatusFilter {
             StatusFilter::NeedsYou => StatusFilter::All,
             StatusFilter::Check => StatusFilter::NeedsYou,
             StatusFilter::Cannot => StatusFilter::Check,
-            StatusFilter::InProgress => StatusFilter::Cannot,
+            StatusFilter::Queued => StatusFilter::Cannot,
+            StatusFilter::InProgress => StatusFilter::Queued,
             StatusFilter::Done => StatusFilter::InProgress,
         }
     }
@@ -1368,11 +1373,16 @@ impl AppState {
                         Intent::Redraw
                     }
                     KeyCode::Char('5') => {
-                        self.filter = StatusFilter::InProgress;
+                        self.filter = StatusFilter::Queued;
                         self.rebuild_flat();
                         Intent::Redraw
                     }
                     KeyCode::Char('6') => {
+                        self.filter = StatusFilter::InProgress;
+                        self.rebuild_flat();
+                        Intent::Redraw
+                    }
+                    KeyCode::Char('7') => {
                         self.filter = StatusFilter::Done;
                         self.rebuild_flat();
                         Intent::Redraw
@@ -3640,6 +3650,10 @@ impl AppState {
                         .iter()
                         .any(|v| v.state == "failed" || v.state == "cancelled")
             }
+            StatusFilter::Queued => {
+                book.versions.iter().any(|v| v.state == "queued")
+                    && !book.versions.iter().any(|v| v.state == "downloading")
+            }
             StatusFilter::InProgress => book.versions.iter().any(|v| v.state == "downloading"),
             StatusFilter::Done => book
                 .acquisition
@@ -3677,6 +3691,10 @@ impl AppState {
                 if in_progress {
                     c.in_progress += 1;
                 }
+                // Queued: a Pending/queued variation with no active download.
+                if book.versions.iter().any(|v| v.state == "queued") && !in_progress {
+                    c.queued += 1;
+                }
                 let done = book
                     .acquisition
                     .as_ref()
@@ -3704,6 +3722,7 @@ pub struct StatusCounts {
     pub needs_you: usize,
     pub check: usize,
     pub cannot: usize,
+    pub queued: usize,
     pub in_progress: usize,
     pub done: usize,
 }

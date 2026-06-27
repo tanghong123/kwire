@@ -1415,7 +1415,11 @@ mod tests {
         let mut app = AppState::new();
         app.set_view(fixture_vm());
         app.on_input(key(KeyCode::Char('5')));
+        assert_eq!(app.filter, StatusFilter::Queued);
+        app.on_input(key(KeyCode::Char('6')));
         assert_eq!(app.filter, StatusFilter::InProgress);
+        app.on_input(key(KeyCode::Char('7')));
+        assert_eq!(app.filter, StatusFilter::Done);
         app.on_input(key(KeyCode::Char('1')));
         assert_eq!(app.filter, StatusFilter::All);
     }
@@ -1841,6 +1845,127 @@ mod tests {
         assert_eq!(counts.total, 2);
         assert_eq!(counts.needs_you, 0);
         assert_eq!(counts.done, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 7 — Queued filter chip
+    // -----------------------------------------------------------------------
+
+    /// Build a ViewBook with one variation per given state string.
+    fn book_with_version_states(states: &[&str]) -> libgen_engine::ViewBook {
+        let mut b = flat_book_with_state(states.first().copied().unwrap_or("queued")).book;
+        b.versions = states
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let mut v = flat_book_with_state(s).book.versions.remove(0);
+                v.md5 = format!("{:0>32}", i);
+                v.state = (*s).to_string();
+                v
+            })
+            .collect();
+        b
+    }
+
+    fn vm_with_books(books: Vec<libgen_engine::ViewBook>) -> libgen_engine::ViewModel {
+        let mut vm = fixture_vm();
+        vm.groups = vec![libgen_engine::ViewGroup {
+            name: "G".into(),
+            books,
+            collapsed: false,
+        }];
+        vm
+    }
+
+    /// The Queued count matches books with a queued/Pending variation AND no
+    /// active (downloading) variation — a queued+downloading book is NOT queued.
+    #[test]
+    fn status_counts_queued_excludes_active() {
+        let mut app = AppState::new();
+        app.set_view(vm_with_books(vec![
+            book_with_version_states(&["queued"]), // queued ✓
+            book_with_version_states(&["queued", "downloading"]), // active → not queued
+            book_with_version_states(&["done"]),   // done → not queued
+        ]));
+        let c = app.status_counts();
+        assert_eq!(c.queued, 1, "only the queued-no-active book counts");
+        assert_eq!(
+            c.in_progress, 1,
+            "the queued+downloading book is in progress"
+        );
+    }
+
+    /// The Queued filter predicate (via rebuild_flat) keeps exactly the
+    /// queued-no-active books.
+    #[test]
+    fn queued_filter_predicate_selects_pending_only() {
+        let mut app = AppState::new();
+        app.filter = StatusFilter::Queued;
+        app.set_view(vm_with_books(vec![
+            book_with_version_states(&["queued"]),
+            book_with_version_states(&["queued", "downloading"]),
+            book_with_version_states(&["done"]),
+        ]));
+        assert_eq!(app.flat.len(), 1, "only the pure-queued book passes");
+        assert!(app.flat[0]
+            .book
+            .versions
+            .iter()
+            .any(|v| v.state == "queued"));
+        assert!(!app.flat[0]
+            .book
+            .versions
+            .iter()
+            .any(|v| v.state == "downloading"));
+    }
+
+    /// The Queued chip has its own distinct colour.
+    #[test]
+    fn queued_chip_color_is_distinct() {
+        use crate::theme::filter_chip_color;
+        let q = filter_chip_color("filter.queued");
+        for other in [
+            "filter.all",
+            "filter.needs",
+            "filter.review",
+            "filter.cantdl",
+            "filter.active",
+            "filter.done",
+        ] {
+            assert_ne!(
+                q,
+                filter_chip_color(other),
+                "Queued colour must differ from {other}"
+            );
+        }
+    }
+
+    /// All seven chips still fit within an 80-column row (no overflow / overlap).
+    #[test]
+    fn filter_chips_fit_at_80_cols() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let chips = app.last_rects.filter_chips.clone();
+        assert_eq!(chips.len(), 7, "seven chips render");
+        let mut prev_end = 0u16;
+        for (rect, _) in &chips {
+            assert!(
+                rect.x >= prev_end,
+                "chips must not overlap (x={}, prev_end={})",
+                rect.x,
+                prev_end
+            );
+            assert!(
+                rect.x + rect.width <= 80,
+                "chip overflows 80 cols: x={} w={}",
+                rect.x,
+                rect.width
+            );
+            prev_end = rect.x + rect.width;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5648,7 +5773,7 @@ mod tests {
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
 
         let chips = app.last_rects.filter_chips.clone();
-        assert_eq!(chips.len(), 6, "all six status chips have rects");
+        assert_eq!(chips.len(), 7, "all seven status chips have rects");
 
         // Chips must be spread: there is a real gap between consecutive chips,
         // and the last chip starts well past the midpoint of a 120-col row

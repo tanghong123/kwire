@@ -612,13 +612,14 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
 /// text (`" {label} {count} "`), and the text's display width.
 type ChipCell = (StatusFilter, String, u16);
 
-/// The six status filters paired with the live counts that label each chip.
-fn filter_chip_specs(counts: &crate::app::StatusCounts) -> [(StatusFilter, usize); 6] {
+/// The status filters paired with the live counts that label each chip.
+fn filter_chip_specs(counts: &crate::app::StatusCounts) -> [(StatusFilter, usize); 7] {
     [
         (StatusFilter::All, counts.total),
         (StatusFilter::NeedsYou, counts.needs_you),
         (StatusFilter::Check, counts.check),
         (StatusFilter::Cannot, counts.cannot),
+        (StatusFilter::Queued, counts.queued),
         (StatusFilter::InProgress, counts.in_progress),
         (StatusFilter::Done, counts.done),
     ]
@@ -3416,7 +3417,7 @@ fn help_tab_row(current: HelpPage, max_w: usize) -> Line<'static> {
 /// "Global" page). Keeps the globals reachable from every context page.
 fn help_global_strip(max_w: usize) -> Line<'static> {
     let s = "GLOBAL  ? help \u{00b7} : cmd \u{00b7} q/esc quit \u{00b7} [ ] list \u{00b7} \
-             tab panes \u{00b7} / filter \u{00b7} 1\u{2013}6 jump";
+             tab panes \u{00b7} / filter \u{00b7} 1\u{2013}7 jump";
     Line::from(Span::styled(
         crate::textfit::ellipsize(s, max_w),
         style_dim(),
@@ -3455,8 +3456,8 @@ pub(crate) fn help_page_rows(page: HelpPage) -> (Vec<HelpRow>, Vec<HelpRow>) {
                 ),
                 Key("/", "cycle status filter"),
                 Key(
-                    "1\u{2013}6",
-                    "All / Needs you / Check / Cannot / In progress / Done",
+                    "1\u{2013}7",
+                    "All / Needs you / Check / Cannot / Queued / In progress / Done",
                 ),
             ],
         ),

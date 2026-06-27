@@ -101,6 +101,7 @@ pub fn filter_chip_color(label_key: &str) -> Color {
     match label_key {
         "filter.needs" => C_NEEDS_YOU,    // amber
         "filter.cantdl" => C_FAILED,      // red
+        "filter.queued" => C_NEAR_DIM,    // near-dim beige — waiting / resolving
         "filter.active" => C_DOWNLOADING, // teal / blue
         "filter.done" => C_DONE,          // green
         // filter.all / filter.review and anything else: dim metadata.
