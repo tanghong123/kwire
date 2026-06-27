@@ -2397,7 +2397,16 @@ fn render_detail_modal(
         .first()
         .map(|v| {
             let y = v.year.map(|y| y.to_string()).unwrap_or_else(|| "?".into());
-            let p = v.pages.map(|p| format!("{} pages", p)).unwrap_or_default();
+            // EPUB counts are spine SECTIONS (reflowable, no fixed pages); PDF = real pages.
+            let unit = if v.fmt.eq_ignore_ascii_case("epub") {
+                "sections"
+            } else {
+                "pages"
+            };
+            let p = v
+                .pages
+                .map(|p| format!("{} {}", p, unit))
+                .unwrap_or_default();
             if p.is_empty() {
                 y
             } else {
@@ -3048,10 +3057,15 @@ fn render_settings_modal(frame: &mut Frame, app: &mut AppState) {
                     if included.is_empty() {
                         spans.push(Span::styled("\u{2014}".to_string(), exc_style));
                     } else {
-                        spans.push(Span::styled(included.join(" "), inc_style));
+                        let inc = included.join(" ");
+                        let inc_w = crate::textfit::display_width(&inc);
+                        spans.push(Span::styled(inc, inc_style));
                         if !excluded.is_empty() {
+                            // Ellipsize the "available to add" tail so it never hard-clips
+                            // off the value column; the selected formats above stay intact.
+                            let tail = format!("  + {} (off)", excluded.join(" \u{00b7} "));
                             spans.push(Span::styled(
-                                format!("  + {} (off)", excluded.join(" \u{00b7} ")),
+                                crate::textfit::ellipsize(&tail, value_w.saturating_sub(inc_w)),
                                 exc_style,
                             ));
                         }
