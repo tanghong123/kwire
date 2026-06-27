@@ -301,7 +301,7 @@ impl EngineEmitter for CliEmitter {
 /// Format a download-progress status line.
 ///
 /// When `total_bytes` is known (and non-zero) the full readout is rendered:
-/// `⬇  47%  1.4 MB/s  eta 1m04s  ▰▰▰▰░░░░░░`.
+/// `⬇  47%  1.4 MB/s  eta 1m04s  ▰▰▰▰▱▱▱▱▱▱`.
 ///
 /// When `total_bytes` is `None` (or 0) — common for libgen CDN mirrors that omit
 /// Content-Length — an *indeterminate* readout is rendered instead of a bogus
@@ -345,12 +345,13 @@ pub fn format_progress_line(
     }
 }
 
-/// Render a progress bar with `width` cells using filled (`▰`) / empty (`░`).
+/// Render a progress bar with `width` cells using filled (`▰`) / empty (`▱`),
+/// matching the TUI's ▰▱ bar — no shaded fill on the undownloaded part.
 fn format_bar(pct: u64, width: usize) -> String {
     let filled = (pct as usize * width / 100).min(width);
     let empty = width - filled;
-    // ▰ = U+25B0 BLACK PARALLELOGRAM   ░ = U+2591 LIGHT SHADE
-    "\u{25B0}".repeat(filled) + &"\u{2591}".repeat(empty)
+    // ▰ = U+25B0 BLACK PARALLELOGRAM   ▱ = U+25B1 WHITE PARALLELOGRAM
+    "\u{25B0}".repeat(filled) + &"\u{25B1}".repeat(empty)
 }
 
 /// Format a speed in bytes/sec as a human-readable string (e.g. `"1.4 MB/s"`).
