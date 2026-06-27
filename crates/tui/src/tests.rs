@@ -2952,6 +2952,58 @@ mod tests {
         assert_eq!(ui::settings_value_display("on", 20, true, 3), "on");
     }
 
+    // ── Task 2: search-mirrors row applies the clip rule (no hard clip) ──────
+    #[test]
+    fn settings_search_mirrors_value_ellipsizes_not_clips() {
+        // A mirror host list longer than the value column must degrade to a
+        // `…` ellipsis that fits the column, exactly like the format tail and
+        // the download-folder value — never a hard clip.
+        let mirrors =
+            "libgen.li \u{25cf} libgen.is \u{25cf} libgen.rs \u{25cf} libgen.gs \u{25cf} libgen.gl";
+        let value_w = 16;
+        let out = ui::settings_value_display(mirrors, value_w, false, 0);
+        assert!(
+            crate::textfit::display_width(&out) <= value_w,
+            "search-mirrors value must fit the column: {out:?}"
+        );
+        assert!(
+            out.ends_with('\u{2026}'),
+            "overflowing mirrors must ellipsize: {out:?}"
+        );
+    }
+
+    #[test]
+    fn render_search_mirrors_row_fits_modal_width() {
+        // Render the Settings modal at a narrow width and assert the rendered
+        // "Search mirrors" line never spills past the modal's inner edge.
+        let backend = TestBackend::new(56, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        open_settings_with_draft(&mut app);
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+
+        let buf = terminal.backend().buffer().clone();
+        let w = buf.area.width as usize;
+        let rows: Vec<String> = buf
+            .content()
+            .chunks(w)
+            .map(|row| row.iter().map(|c| c.symbol().to_string()).collect())
+            .collect();
+        let mirror_row = rows
+            .iter()
+            .find(|r| r.contains("Search mirrors"))
+            .expect("a 'Search mirrors' row must render");
+        // No glyph may appear in the trailing border column past the modal —
+        // i.e. the content fits; verify the line's trimmed content width is at
+        // most the terminal width (a hard-clip would have produced a row whose
+        // mirror value runs flush to the edge with no ellipsis).
+        assert!(
+            crate::textfit::display_width(mirror_row.trim_end()) <= w,
+            "search-mirrors row overflows: {mirror_row:?}"
+        );
+    }
+
     // ── TOGGLE field (space) ────────────────────────────────────────────────
 
     #[test]

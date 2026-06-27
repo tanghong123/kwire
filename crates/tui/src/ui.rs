@@ -3025,7 +3025,10 @@ fn render_settings_modal(frame: &mut Frame, app: &mut AppState) {
     ];
     // Append the display-only mirror rows as part of DOWNLOADS & MIRRORS.
     // (We use a plain SettingsRow::Field with index = usize::MAX so they never
-    // match `settings_selected`.)
+    // match `settings_selected`.) Their long host lists flow through the shared
+    // `settings_value_display` helper below, so they follow the cross-cutting
+    // clip rule (unfocused → `…` ellipsis; focused → marquee) instead of
+    // hard-clipping — same as the download-folder/naming values.
     let display_only: Vec<SettingsRow> = vec![
         SettingsRow::Field {
             label: "Search mirrors",
