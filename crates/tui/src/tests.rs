@@ -1134,7 +1134,9 @@ mod tests {
             history_selected: 0,
         });
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
-        // Wheel down with the cursor over history row 1 → hover-select it + focus History.
+        // Wheel down with the cursor over the history area → focus History and
+        // move selection by +1 (0 → 1). The wheel no longer hover-selects the
+        // specific row under the pointer (task 4).
         let rect = app
             .last_rects
             .detail_hist_rows
@@ -1155,9 +1157,87 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(*sub_focus, DetailSubFocus::History, "wheel focuses History");
+                assert_eq!(*history_selected, 1, "wheel moves selection by +1 (0→1)");
+            }
+            other => panic!("expected Detail modal, got {:?}", other),
+        }
+    }
+
+    /// Task 4: the detail wheel moves selection by ±1 and does NOT snap to the
+    /// row under the pointer. With 3 variations selected at 0, scrolling down
+    /// while the cursor hovers the LAST row must land on 1 (sel+1), not 2.
+    #[test]
+    fn detail_wheel_does_not_hover_select_row_under_cursor() {
+        use crate::app::DetailSubFocus;
+        use libgen_core::model::{
+            BookInput, BookRequest, Candidate, DownloadList, Format, Group, RequestStatus,
+        };
+        let mut g = Group::new("Grp");
+        let mut req = BookRequest::new(BookInput {
+            title: "Three Copies".into(),
+            authors: vec!["A".into()],
+            ..Default::default()
+        });
+        req.status = RequestStatus::Matched;
+        req.candidates = (0..3)
+            .map(|i| Candidate {
+                md5: format!("{:0>32}", i),
+                title: "Three Copies".into(),
+                authors: vec!["A".into()],
+                year: Some(2010),
+                publisher: Some("P".into()),
+                language: Some("English".into()),
+                pages: Some(100 + i),
+                extension: Some(Format::Epub),
+                size_bytes: Some(1024 * 1024),
+                source_host: Some("libgen.li".into()),
+                cover_url: None,
+                score: 1.0 - (i as f32) * 0.01,
+                job: None,
+            })
+            .collect();
+        g.books.push(req);
+        let list = DownloadList {
+            title: "L".into(),
+            settings: libgen_core::model::ListSettings::default(),
+            groups: vec![g],
+        };
+        let vm = build_with_id("t".into(), &list);
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(vm);
+        assert!(
+            app.flat[0].book.versions.len() >= 3,
+            "need ≥3 variations for this test"
+        );
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        // Cursor over variation row index 2 (the last), scroll DOWN.
+        let rect = app
+            .last_rects
+            .detail_var_rows
+            .iter()
+            .find(|(_, i)| *i == 2)
+            .map(|(r, _)| *r)
+            .expect("variation row 2 rect");
+        app.on_input(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+        match &app.modal {
+            Some(Modal::Detail { selected, .. }) => {
                 assert_eq!(
-                    *history_selected, 1,
-                    "wheel hover-selects the row under cursor"
+                    *selected, 1,
+                    "wheel moves by +1 (0→1), NOT snap to the hovered row 2"
                 );
             }
             other => panic!("expected Detail modal, got {:?}", other),

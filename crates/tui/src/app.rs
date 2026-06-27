@@ -2203,19 +2203,18 @@ impl AppState {
                                 Intent::Redraw
                             }
                             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                                // The wheel moves selection by ±1 within whichever
+                                // sub-list the cursor is over. It does NOT hover-
+                                // select the row beneath the pointer — that snap was
+                                // removed for the main book list, and the detail
+                                // modal matches it (task 4).
                                 let down = matches!(me.kind, MouseEventKind::ScrollDown);
                                 if point_in_rect(col, row, var_area) {
-                                    let mut new_sel = if down {
+                                    let new_sel = if down {
                                         (sel + 1).min(var_max)
                                     } else {
                                         sel.saturating_sub(1)
                                     };
-                                    for (rect, idx) in &var_rows {
-                                        if point_in_rect(col, row, *rect) {
-                                            new_sel = (*idx).min(var_max);
-                                            break;
-                                        }
-                                    }
                                     self.modal = Some(Modal::Detail {
                                         book_flat_index: flat_index,
                                         selected: new_sel,
@@ -2223,17 +2222,11 @@ impl AppState {
                                         history_selected: hist_sel,
                                     });
                                 } else if point_in_rect(col, row, hist_area) {
-                                    let mut new_hist = if down {
+                                    let new_hist = if down {
                                         (hist_sel + 1).min(hist_max)
                                     } else {
                                         hist_sel.saturating_sub(1)
                                     };
-                                    for (rect, idx) in &hist_rows {
-                                        if point_in_rect(col, row, *rect) {
-                                            new_hist = (*idx).min(hist_max);
-                                            break;
-                                        }
-                                    }
                                     self.modal = Some(Modal::Detail {
                                         book_flat_index: flat_index,
                                         selected: sel,
