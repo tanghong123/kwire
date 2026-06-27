@@ -1023,6 +1023,28 @@ mod tests {
     }
 
     #[test]
+    fn selected_ready_book_dispatches_only_once_armed_with_a_pending_job() {
+        // A user-selected variation lands the book in `Ready` under a `Complete`
+        // goal. BEFORE the orchestrator fix, selection left NO pending candidate
+        // job, so this state was dead — the engine never downloaded (the `d` /
+        // Picker no-op bug). The fix arms the chosen variation `Pending`.
+        assert_eq!(
+            actionable_kind(&req(RequestStatus::Ready, Goal::Complete, None)),
+            None,
+            "selection with no pending variation is invisible to the engine (the bug)"
+        );
+        assert_eq!(
+            actionable_kind(&req(
+                RequestStatus::Ready,
+                Goal::Complete,
+                Some(JobState::Pending)
+            )),
+            Some(WorkKind::Download),
+            "once the selected variation is armed Pending, the engine downloads it"
+        );
+    }
+
+    #[test]
     fn done_complete_reverifies_when_nothing_pending() {
         assert_eq!(
             actionable_kind(&req(RequestStatus::Done, Goal::Complete, None)),

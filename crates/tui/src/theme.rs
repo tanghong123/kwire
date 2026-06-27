@@ -25,6 +25,8 @@ pub const C_PANEL: Color = Color::Reset; // panel background (terminal default)
                                          // paired with a GREEN vertical left accent bar (`▌` in `C_SEL_ACCENT`).
 pub const C_SELECTED: Color = Color::Rgb(0x18, 0x20, 0x13); // selected row — faint green tint
 pub const C_SEL_ACCENT: Color = C_DONE; // green left accent bar on selected rows
+pub const C_SEL_ACCENT_DIM: Color = Color::Rgb(0x5e, 0x70, 0x4f); // muted green accent for the
+                                                                  // selection of a NON-focused list (stays visible, dimmer than C_SEL_ACCENT)
 pub const C_BACKDROP: Color = Color::Rgb(0x12, 0x11, 0x0f); // modal dim overlay
 
 // ---------------------------------------------------------------------------
@@ -62,6 +64,14 @@ pub fn style_selected() -> Style {
 /// list (main book table, detail variations, detail history, settings fields).
 pub fn style_sel_accent() -> Style {
     Style::default().fg(C_SEL_ACCENT).bg(C_SELECTED)
+}
+
+/// Dimmed variant of [`style_sel_accent`] for the selected row of a list that is
+/// NOT focused: a MUTED-green `▌` accent on the plain background (no faint-green
+/// tint). The selection stays visible (never blank) but clearly reads as
+/// inactive next to a focused list's full-green accent + tinted background.
+pub fn style_sel_accent_dim() -> Style {
+    Style::default().fg(C_SEL_ACCENT_DIM).bg(C_BG)
 }
 
 pub fn style_hint() -> Style {

@@ -728,6 +728,214 @@ mod tests {
         }
     }
 
+    /// Detail modal: a LEFT-CLICK on a variation row selects it and focuses the
+    /// Variations sub-list (regardless of where focus was before).
+    #[test]
+    fn detail_click_variation_row_selects_and_focuses_variations() {
+        use crate::app::DetailSubFocus;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection()); // first book has 2 versions
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::History, // start focused elsewhere
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert!(
+            !app.last_rects.detail_var_rows.is_empty(),
+            "variation row rects must be registered for mouse hit-testing"
+        );
+        // Click variation row index 1.
+        let rect = app
+            .last_rects
+            .detail_var_rows
+            .iter()
+            .find(|(_, i)| *i == 1)
+            .map(|(r, _)| *r)
+            .expect("variation row 1 rect");
+        app.on_input(mouse_left_click(rect.x + 1, rect.y));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 1,
+                sub_focus: DetailSubFocus::Variations,
+                history_selected: 0,
+            }),
+            "clicking a variation row selects it + focuses Variations"
+        );
+    }
+
+    /// Detail modal: a LEFT-CLICK on a history row selects that event and focuses
+    /// the History sub-list (Enter on it would open its snapshot).
+    #[test]
+    fn detail_click_history_row_selects_and_focuses_history() {
+        use crate::app::DetailSubFocus;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.flat[0].book.history = vec![
+            ViewEvent {
+                at_ms: 1_000,
+                md5: None,
+                fmt: None,
+                kind: "queued".into(),
+                detail: "queued".into(),
+            },
+            ViewEvent {
+                at_ms: 2_000,
+                md5: None,
+                fmt: None,
+                kind: "discovered".into(),
+                detail: "found 2 copies".into(),
+            },
+        ];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations, // start focused elsewhere
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert!(
+            !app.last_rects.detail_hist_rows.is_empty(),
+            "history row rects must be registered for mouse hit-testing"
+        );
+        let rect = app
+            .last_rects
+            .detail_hist_rows
+            .iter()
+            .find(|(_, i)| *i == 1)
+            .map(|(r, _)| *r)
+            .expect("history row 1 rect");
+        app.on_input(mouse_left_click(rect.x + 1, rect.y));
+        assert_eq!(
+            app.modal,
+            Some(Modal::Detail {
+                book_flat_index: 0,
+                selected: 0,
+                sub_focus: DetailSubFocus::History,
+                history_selected: 1,
+            }),
+            "clicking a history row selects it + focuses History"
+        );
+    }
+
+    /// Detail modal: the WHEEL over the History sub-list scrolls THAT list (and
+    /// focuses it) even when keyboard focus was on Variations.
+    #[test]
+    fn detail_wheel_over_history_scrolls_history() {
+        use crate::app::DetailSubFocus;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.flat[0].book.history = vec![
+            ViewEvent {
+                at_ms: 1_000,
+                md5: None,
+                fmt: None,
+                kind: "queued".into(),
+                detail: "queued".into(),
+            },
+            ViewEvent {
+                at_ms: 2_000,
+                md5: None,
+                fmt: None,
+                kind: "discovered".into(),
+                detail: "found".into(),
+            },
+        ];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        // Wheel down with the cursor over history row 1 → hover-select it + focus History.
+        let rect = app
+            .last_rects
+            .detail_hist_rows
+            .iter()
+            .find(|(_, i)| *i == 1)
+            .map(|(r, _)| *r)
+            .expect("history row 1 rect");
+        app.on_input(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        }));
+        match &app.modal {
+            Some(Modal::Detail {
+                sub_focus,
+                history_selected,
+                ..
+            }) => {
+                assert_eq!(*sub_focus, DetailSubFocus::History, "wheel focuses History");
+                assert_eq!(
+                    *history_selected, 1,
+                    "wheel hover-selects the row under cursor"
+                );
+            }
+            other => panic!("expected Detail modal, got {:?}", other),
+        }
+    }
+
+    /// Render: the NON-focused detail sub-list keeps a DIMMED ▌ accent on its
+    /// selected row while the focused sub-list shows the FULL green accent — both
+    /// visible at once, proving the dim-vs-full distinction.
+    #[test]
+    fn detail_inactive_sublist_keeps_dimmed_accent() {
+        use crate::app::DetailSubFocus;
+        use crate::theme::{C_SEL_ACCENT, C_SEL_ACCENT_DIM};
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection()); // 2 versions
+        app.flat[0].book.history = vec![ViewEvent {
+            at_ms: 1_000,
+            md5: None,
+            fmt: None,
+            kind: "queued".into(),
+            detail: "queued".into(),
+        }];
+        // Variations focused → its selected row is FULL; History (inactive) keeps DIM.
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let mut found_full = false;
+        let mut found_dim = false;
+        for cell in buf.content().iter() {
+            if cell.symbol() == "\u{258c}" {
+                if cell.fg == C_SEL_ACCENT {
+                    found_full = true;
+                }
+                if cell.fg == C_SEL_ACCENT_DIM {
+                    found_dim = true;
+                }
+            }
+        }
+        assert!(
+            found_full,
+            "the focused Variations list must show a FULL green ▌ accent"
+        );
+        assert!(
+            found_dim,
+            "the inactive History list must keep a DIMMED ▌ accent (not blank)"
+        );
+    }
+
     /// Render: inactive book-list selection shows a dim ▌ when Activity/Header focused.
     #[test]
     fn render_inactive_list_selection_shows_dim_accent() {

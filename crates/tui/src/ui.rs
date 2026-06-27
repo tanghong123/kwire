@@ -33,8 +33,9 @@ use crate::app::{
 };
 use crate::theme::{
     self, filter_chip_color, history_kind_color, score_color, style_dim, style_header, style_hint,
-    style_muted, style_normal, style_sel_accent, style_selected, style_title, C_BACKDROP, C_BG,
-    C_BRIGHT, C_DONE, C_FAINT, C_MUTED, C_NEEDS_YOU, C_PANEL, C_SELECTED, C_SOFTER, C_TEXT, C_WARM,
+    style_muted, style_normal, style_sel_accent, style_sel_accent_dim, style_selected, style_title,
+    C_BACKDROP, C_BG, C_BRIGHT, C_DONE, C_FAINT, C_MUTED, C_NEEDS_YOU, C_PANEL, C_SELECTED,
+    C_SOFTER, C_TEXT, C_WARM,
 };
 
 const ACTIVITY_EXPANDED_H: u16 = 5;
@@ -799,8 +800,9 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
         let seq_cell = if is_selected {
             Cell::from("\u{258c}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
         } else if is_inactive_selected {
-            // Dim accent when List pane is inactive — reminds user of the remembered position.
-            Cell::from("\u{258c}").style(Style::default().fg(C_FAINT))
+            // Dimmed (muted-green) accent when the List pane is inactive — the
+            // selection stays visible rather than collapsing to a plain seq #.
+            Cell::from("\u{258c}").style(style_sel_accent_dim())
         } else {
             Cell::from(format!("{:>3}", book.seq)).style(Style::default().fg(C_FAINT))
         };
@@ -880,7 +882,7 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 let vseq_cell = if sub_selected {
                     Cell::from("\u{258c}").style(Style::default().fg(C_DONE).bg(C_SELECTED))
                 } else if sub_inactive {
-                    Cell::from("\u{258c}").style(Style::default().fg(C_FAINT))
+                    Cell::from("\u{258c}").style(style_sel_accent_dim())
                 } else {
                     Cell::from("").style(Style::default().fg(C_FAINT))
                 };
@@ -1801,6 +1803,7 @@ fn render_detail_modal(
     .height(1)
     .style(style_header());
 
+    let var_focused = *sub_focus == DetailSubFocus::Variations;
     let var_rows: Vec<Row> = fb
         .book
         .versions
@@ -1808,6 +1811,10 @@ fn render_detail_modal(
         .enumerate()
         .map(|(i, v)| {
             let is_sel = i == detail_selected;
+            // The selection-bar treatment only goes "full" (green accent + tinted
+            // bg) while Variations is focused; when it's NOT focused the row keeps
+            // a DIMMED accent bar (selection stays visible, never blank).
+            let sel_active = is_sel && var_focused;
             // Shared selected-line accent: green ▌ left bar; ✓ for done; spinner
             // for downloading.
             let check = if is_sel {
@@ -1840,23 +1847,27 @@ fn render_detail_modal(
             } else {
                 format!("{} \u{00b7} {}", v.title, v.author)
             };
-            let row_style = if is_sel {
+            let row_style = if sel_active {
                 style_selected()
             } else {
                 style_normal()
             };
             Row::new([
                 Cell::from(check).style(if is_sel {
-                    style_sel_accent()
+                    if var_focused {
+                        style_sel_accent()
+                    } else {
+                        style_sel_accent_dim()
+                    }
                 } else {
                     theme::style_for_state(&v.state)
                 }),
-                Cell::from(title_author).style(if is_sel {
+                Cell::from(title_author).style(if sel_active {
                     style_selected()
                 } else {
                     style_title()
                 }),
-                Cell::from(v.fmt.clone()).style(if is_sel {
+                Cell::from(v.fmt.clone()).style(if sel_active {
                     style_selected()
                 } else {
                     style_dim()
@@ -1866,27 +1877,27 @@ fn render_detail_modal(
                 } else {
                     "\u{2014}".into()
                 })
-                .style(if is_sel {
+                .style(if sel_active {
                     style_selected()
                 } else {
                     style_dim()
                 }),
-                Cell::from(host.to_string()).style(if is_sel {
+                Cell::from(host.to_string()).style(if sel_active {
                     style_selected()
                 } else {
                     style_dim()
                 }),
-                Cell::from(format!("{:.2}", v.score)).style(if is_sel {
+                Cell::from(format!("{:.2}", v.score)).style(if sel_active {
                     style_selected()
                 } else {
                     Style::default().fg(score_color(v.score.into()))
                 }),
-                Cell::from(state_cell).style(if is_sel {
+                Cell::from(state_cell).style(if sel_active {
                     style_selected()
                 } else {
                     theme::style_for_state(&v.state)
                 }),
-                Cell::from(bar).style(if is_sel {
+                Cell::from(bar).style(if sel_active {
                     style_selected()
                 } else {
                     theme::style_for_state(&v.state)
@@ -1916,12 +1927,32 @@ fn render_detail_modal(
         ],
     )
     .header(var_header)
-    .row_highlight_style(Style::default().bg(C_SELECTED));
+    // Tint the selected row's background only while Variations is focused; an
+    // unfocused list keeps just its dimmed ▌ accent (no bg tint).
+    .row_highlight_style(if var_focused {
+        Style::default().bg(C_SELECTED)
+    } else {
+        Style::default()
+    });
 
     frame.render_stateful_widget(var_table, split[4], &mut var_table_state);
 
+    // Register each variation row rect for mouse hit-testing. The table reserves
+    // its first line for the header, so data row `i` sits at `y + 1 + i`.
+    app.last_rects.detail_var_area = split[4];
+    app.last_rects.detail_var_rows.clear();
+    for i in 0..fb.book.versions.len() {
+        let y = split[4].y + 1 + i as u16;
+        if y < split[4].y + split[4].height {
+            app.last_rects
+                .detail_var_rows
+                .push((Rect::new(split[4].x, y, split[4].width, 1), i));
+        }
+    }
+
     // Output path for done variations shown below (if any)
     // HISTORY header — accent when History is focused.
+    let hist_focused = *sub_focus == DetailSubFocus::History;
     let hist_header_style = if *sub_focus == DetailSubFocus::History {
         style_dim()
     } else {
@@ -1952,7 +1983,11 @@ fn render_detail_modal(
         .skip(scroll_offset)
         .take(win_h)
         .map(|(i, e)| {
-            let is_hist_sel = *sub_focus == DetailSubFocus::History && i == hist_sel;
+            // The row is the selected history event regardless of focus; the
+            // selection bar only goes "full" while History is focused, else it
+            // stays a DIMMED accent (visible, never blank — survives Tab-away).
+            let is_hist_row_sel = i == hist_sel;
+            let sel_active = is_hist_row_sel && hist_focused;
             // Format time as HH:MM:SS from ms timestamp
             let secs = e.at_ms / 1000;
             let time_str = format!(
@@ -1962,15 +1997,19 @@ fn render_detail_modal(
                 secs % 60
             );
             let kind_color = history_kind_color(&e.kind);
-            let base_style = if is_hist_sel {
+            let base_style = if sel_active {
                 style_selected()
             } else {
                 style_dim()
             };
-            // Shared selected-line accent: green ▌ left bar; the leading event
-            // dot is removed (per feedback). Event kind keeps its palette color.
-            let accent = if is_hist_sel {
-                Span::styled("\u{258c} ", style_sel_accent())
+            // Shared selected-line accent: green ▌ left bar (dimmed when the list
+            // isn't focused); the leading event dot is removed (per feedback).
+            let accent = if is_hist_row_sel {
+                if hist_focused {
+                    Span::styled("\u{258c} ", style_sel_accent())
+                } else {
+                    Span::styled("\u{258c} ", style_sel_accent_dim())
+                }
             } else {
                 Span::styled("  ", base_style)
             };
@@ -1979,7 +2018,7 @@ fn render_detail_modal(
                 Span::styled(format!("{:<8}  ", time_str), base_style),
                 Span::styled(
                     format!("{:<12}  ", e.kind),
-                    if is_hist_sel {
+                    if sel_active {
                         style_selected()
                     } else {
                         Style::default().fg(kind_color).add_modifier(Modifier::BOLD)
@@ -1991,6 +2030,17 @@ fn render_detail_modal(
         .collect();
 
     frame.render_widget(List::new(history_items), split[7]);
+
+    // Register each visible history row rect for mouse hit-testing. Visible item
+    // at real index `i` renders at `split[7].y + (i - scroll_offset)`.
+    app.last_rects.detail_hist_area = split[7];
+    app.last_rects.detail_hist_rows.clear();
+    for i in scroll_offset..(scroll_offset + win_h).min(n_hist) {
+        let y = split[7].y + (i - scroll_offset) as u16;
+        app.last_rects
+            .detail_hist_rows
+            .push((Rect::new(split[7].x, y, split[7].width, 1), i));
+    }
 
     // Dim rule above hint (⏎/↑↓/tab omitted per #64).
     render_rule(frame, split[8]);

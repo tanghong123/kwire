@@ -1078,8 +1078,33 @@ impl Orchestrator {
         req.selected = Some(md5.to_string());
         req.status = RequestStatus::Ready;
         if changed {
-            // Different file -> don't resume the old one; start clean.
+            // Different file -> don't resume the old book-level job; start clean.
             req.job = None;
+        }
+        // Arm the SELECTED candidate with a `Pending` download job. Selection
+        // alone (status `Ready`) is invisible to the engine: `actionable_kind`
+        // only dispatches `WorkKind::Download` when a candidate carries a
+        // `Pending` job (`has_pending_variation`). Without this, `d` / the
+        // Picker's select silently no-op'd. Mirror `request_variation`: only
+        // (re)arm a NON-active job, so re-selecting the same in-flight copy
+        // (Resolving/Downloading/Verifying/Paused) never interrupts a live
+        // transfer.
+        if let Some(cand) = req.candidates.iter_mut().find(|c| c.md5 == md5) {
+            let active = matches!(
+                cand.job.as_ref().map(|j| &j.state),
+                Some(
+                    JobState::Resolving
+                        | JobState::Downloading
+                        | JobState::Verifying
+                        | JobState::Paused
+                )
+            );
+            if !active {
+                cand.job = Some(DownloadJob {
+                    state: JobState::Pending,
+                    ..Default::default()
+                });
+            }
         }
         self.store
             .update_request(self.list_id, group_path, book_index, &req)?;
@@ -6139,6 +6164,93 @@ mod tests {
         assert!(
             book.job.is_none(),
             "swapping md5 must clear the old job so the new copy downloads fresh"
+        );
+    }
+
+    /// Regression for the "`d` / Picker select silently does nothing" bug:
+    /// `select_candidate` must arm the CHOSEN variation with a `Pending` job so
+    /// the engine actually dispatches a download. The engine's `actionable_kind`
+    /// keys download dispatch off a candidate whose `job.state == Pending`
+    /// (`has_pending_variation`) plus a `>= Complete` goal — selection / `Ready`
+    /// status alone is invisible to it. (The engine-side dispatch from that
+    /// pending+Complete state is covered by libgen-engine's
+    /// `pending_variation_dispatches_download_*` tests.)
+    #[tokio::test]
+    async fn select_candidate_arms_pending_job_on_chosen_variation() {
+        let store = Store::open_in_memory().unwrap();
+        let search = SearchClient::replay(config(), fixtures_dir());
+        let mut orch = Orchestrator::new(store, &small_list(), search, "/books").unwrap();
+        let (tx, rx) = mpsc::channel(64);
+        let t = tokio::spawn(drain(rx));
+        orch.query_all(&tx).await.unwrap();
+        drop(tx);
+        let _ = t.await.unwrap();
+
+        // Start from a clean slate: no candidate carries a job, and the goal is
+        // parked at Match (as a relaunch would leave it). This is the exact state
+        // in which the old `select_candidate` left a book un-actionable.
+        {
+            let mut req = orch.request_at(&[0], 0).unwrap().unwrap();
+            assert!(
+                req.candidates.len() >= 2,
+                "need >= 2 variations to tell selected from non-selected"
+            );
+            for c in &mut req.candidates {
+                c.job = None;
+            }
+            req.goal = crate::model::Goal::Match;
+            orch.store
+                .update_request(orch.list_id, &[0], 0, &req)
+                .unwrap();
+        }
+
+        let md5s: Vec<String> = orch
+            .request_at(&[0], 0)
+            .unwrap()
+            .unwrap()
+            .candidates
+            .iter()
+            .map(|c| c.md5.clone())
+            .collect();
+        let chosen = md5s[1].clone();
+        let other = md5s[0].clone();
+
+        // The user picks a variation (what `d` / the Picker do), then the caller
+        // arms the goal (mirrors main.rs: select_candidate + set_goal_one).
+        orch.select_candidate(&[0], 0, &chosen).unwrap();
+        orch.set_goal_one(&[0], 0, crate::model::Goal::Complete)
+            .unwrap();
+
+        let req = orch.request_at(&[0], 0).unwrap().unwrap();
+        assert_eq!(req.selected.as_deref(), Some(chosen.as_str()));
+        assert_eq!(req.status, RequestStatus::Ready);
+        assert!(
+            req.goal >= crate::model::Goal::Complete,
+            "goal armed to Complete"
+        );
+
+        let chosen_cand = req.candidates.iter().find(|c| c.md5 == chosen).unwrap();
+        assert_eq!(
+            chosen_cand.job.as_ref().map(|j| &j.state),
+            Some(&JobState::Pending),
+            "the selected variation must carry a Pending job so the engine downloads it"
+        );
+
+        let other_cand = req.candidates.iter().find(|c| c.md5 == other).unwrap();
+        assert!(
+            other_cand.job.is_none(),
+            "a non-selected variation must NOT be armed for download"
+        );
+
+        // The precise condition the engine's `actionable_kind` dispatches on:
+        // a Pending variation under a `>= Complete` goal.
+        assert!(
+            req.goal >= crate::model::Goal::Complete
+                && req
+                    .candidates
+                    .iter()
+                    .any(|c| matches!(c.job.as_ref().map(|j| &j.state), Some(JobState::Pending))),
+            "book is now actionable for Download"
         );
     }
 

@@ -463,6 +463,14 @@ pub struct LastRects {
     pub list_chips: Vec<(Rect, usize)>,
     /// `(row_rect, leg_index)` for each rendered activity leg row.
     pub activity_rows: Vec<(Rect, usize)>,
+    /// Detail modal — the Variations sub-list area (for wheel hit-testing).
+    pub detail_var_area: Rect,
+    /// Detail modal — the History sub-list area (for wheel hit-testing).
+    pub detail_hist_area: Rect,
+    /// Detail modal — `(row_rect, variation_index)` per rendered variation row.
+    pub detail_var_rows: Vec<(Rect, usize)>,
+    /// Detail modal — `(row_rect, history_index)` per rendered (visible) history row.
+    pub detail_hist_rows: Vec<(Rect, usize)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1803,6 +1811,96 @@ impl AppState {
                         }
                         _ => Intent::Redraw,
                     },
+                    // Mouse in the detail modal: click a row to select + focus its
+                    // sub-list; wheel scrolls the sub-list UNDER THE CURSOR and
+                    // hover-selects the row beneath it (mirrors the main-list model).
+                    Event::Mouse(me) => {
+                        let col = me.column;
+                        let row = me.row;
+                        let var_max = self
+                            .flat
+                            .get(flat_index)
+                            .map(|fb| fb.book.versions.len().saturating_sub(1))
+                            .unwrap_or(0);
+                        let hist_max = self
+                            .flat
+                            .get(flat_index)
+                            .map(|fb| fb.book.history.len().saturating_sub(1))
+                            .unwrap_or(0);
+                        let var_rows = self.last_rects.detail_var_rows.clone();
+                        let hist_rows = self.last_rects.detail_hist_rows.clone();
+                        let var_area = self.last_rects.detail_var_area;
+                        let hist_area = self.last_rects.detail_hist_area;
+                        match me.kind {
+                            MouseEventKind::Down(MouseButton::Left) => {
+                                for (rect, idx) in &var_rows {
+                                    if point_in_rect(col, row, *rect) {
+                                        self.modal = Some(Modal::Detail {
+                                            book_flat_index: flat_index,
+                                            selected: (*idx).min(var_max),
+                                            sub_focus: DetailSubFocus::Variations,
+                                            history_selected: hist_sel,
+                                        });
+                                        return Intent::Redraw;
+                                    }
+                                }
+                                for (rect, idx) in &hist_rows {
+                                    if point_in_rect(col, row, *rect) {
+                                        self.modal = Some(Modal::Detail {
+                                            book_flat_index: flat_index,
+                                            selected: sel,
+                                            sub_focus: DetailSubFocus::History,
+                                            history_selected: (*idx).min(hist_max),
+                                        });
+                                        return Intent::Redraw;
+                                    }
+                                }
+                                Intent::Redraw
+                            }
+                            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                                let down = matches!(me.kind, MouseEventKind::ScrollDown);
+                                if point_in_rect(col, row, var_area) {
+                                    let mut new_sel = if down {
+                                        (sel + 1).min(var_max)
+                                    } else {
+                                        sel.saturating_sub(1)
+                                    };
+                                    for (rect, idx) in &var_rows {
+                                        if point_in_rect(col, row, *rect) {
+                                            new_sel = (*idx).min(var_max);
+                                            break;
+                                        }
+                                    }
+                                    self.modal = Some(Modal::Detail {
+                                        book_flat_index: flat_index,
+                                        selected: new_sel,
+                                        sub_focus: DetailSubFocus::Variations,
+                                        history_selected: hist_sel,
+                                    });
+                                } else if point_in_rect(col, row, hist_area) {
+                                    let mut new_hist = if down {
+                                        (hist_sel + 1).min(hist_max)
+                                    } else {
+                                        hist_sel.saturating_sub(1)
+                                    };
+                                    for (rect, idx) in &hist_rows {
+                                        if point_in_rect(col, row, *rect) {
+                                            new_hist = (*idx).min(hist_max);
+                                            break;
+                                        }
+                                    }
+                                    self.modal = Some(Modal::Detail {
+                                        book_flat_index: flat_index,
+                                        selected: sel,
+                                        sub_focus: DetailSubFocus::History,
+                                        history_selected: new_hist,
+                                    });
+                                }
+                                Intent::Redraw
+                            }
+                            _ => Intent::Redraw,
+                        }
+                    }
                     _ => Intent::Redraw,
                 }
             }
