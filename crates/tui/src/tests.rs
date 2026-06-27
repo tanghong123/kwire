@@ -241,6 +241,52 @@ mod tests {
         assert_eq!(app.selected, 1, "selection must not exceed last row");
     }
 
+    // Deleting the last list drops the view so the empty / first-run splash
+    // renders instead of the deleted list's stale rows (regression: the splash
+    // is gated on `view.is_none()`, and `refresh_active_view` used to leave a
+    // stale `Some(view)` when no list remained current).
+    #[test]
+    fn clear_view_drops_view_and_resets_to_empty_state() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // 2 books
+                                    // Simulate a session that had moved selection and parked focus on the
+                                    // header (e.g. the user pressed `D` from the list strip).
+        app.on_input(key(KeyCode::Down));
+        app.focus = Focus::Header;
+        app.header_row = HeaderRow::ListStrip;
+        assert!(app.view.is_some());
+        assert!(!app.flat.is_empty());
+
+        app.clear_view();
+
+        assert!(app.view.is_none(), "view must be dropped after clear");
+        assert!(app.flat.is_empty(), "flat rows must be cleared");
+        assert_eq!(app.selected, 0, "selection resets to 0");
+        assert_eq!(app.focus, Focus::List, "focus returns to the list");
+        assert_eq!(
+            app.header_row,
+            HeaderRow::FilterChips,
+            "header row resets so a later import starts clean"
+        );
+    }
+
+    // With no view and no modal, `render` draws the first-run splash (the
+    // "NO READING LISTS YET" screen) rather than the multi-pane list layout.
+    #[test]
+    fn empty_state_renders_no_reading_lists_splash() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.clear_view();
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert!(
+            buffer_string(&terminal).contains("NO READING LISTS YET"),
+            "empty state should show the first-run splash"
+        );
+    }
+
     // Updated: Tab now cycles 3 panes: List → Activity → Header → List.
     #[test]
     fn tab_cycles_three_panes_forward() {

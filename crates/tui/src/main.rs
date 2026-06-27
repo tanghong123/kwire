@@ -764,6 +764,12 @@ async fn refresh_active_view(app: &mut AppState, handles: &EngineHandles) {
             app.aggregate_origins.clear();
             app.set_view(vm);
         }
+    } else if id.is_empty() {
+        // No list is current — the last one was just deleted. Drop the view so
+        // the empty / first-run splash renders instead of the deleted list's
+        // stale rows (the splash is gated on `app.view.is_none()`).
+        app.aggregate_origins.clear();
+        app.clear_view();
     }
     refresh_all_list_summaries(app, handles).await;
 }

@@ -1244,6 +1244,19 @@ impl AppState {
         }
     }
 
+    /// Drop the active view entirely — used when the last list is deleted and no
+    /// list remains current. Resets the flat rows, selection, and focus so the
+    /// empty / first-run splash renders (gated on `view.is_none()`) instead of
+    /// the deleted list's stale, orphaned rows, and so a later import starts
+    /// from a clean cursor.
+    pub fn clear_view(&mut self) {
+        self.view = None;
+        self.selected = 0;
+        self.focus = Focus::List;
+        self.header_row = HeaderRow::FilterChips;
+        self.rebuild_flat(); // `view` is None → clears `flat`
+    }
+
     // -----------------------------------------------------------------------
     // Pure reducer — NO side effects
     // -----------------------------------------------------------------------
