@@ -20,6 +20,42 @@ a self-contained web UI.
 written for engineers who don't know Rust yet. For *why* things are designed this
 way, see [DESIGN.md](DESIGN.md); for the build order, [PLAN.md](PLAN.md).
 
+## See it in action
+
+The terminal UI driven end to end — import a reading list, auto-match and download
+confident copies, open a book's detail, pick among copies when a match is
+ambiguous, and manage the whole queue:
+
+<video src="https://github.com/tanghong123/kwire/releases/download/v2.0.0/kwire-tour.mp4" controls muted width="100%"></video>
+
+> ▶ If the player doesn't load inline, [watch / download the tour video](https://github.com/tanghong123/kwire/releases/download/v2.0.0/kwire-tour.mp4).
+
+**The main library** — lists across the top, books with their format/size/status,
+and the live activity pane below:
+
+![Kwire main library view](docs/media/03-list-populated.png)
+
+| Book detail — variations + history | Choose a copy — ambiguous match |
+|:---:|:---:|
+| ![Book detail](docs/media/04-book-detail.png) | ![Choose a copy](docs/media/06-picker.png) |
+| **All lists merged** | **Live activity** |
+| ![All aggregate view](docs/media/08-all-aggregate.png) | ![Activity pane](docs/media/11-activity-pane.png) |
+
+<details>
+<summary><b>More views</b> — empty first run, import, context help, second list, manual add, filters, delete</summary>
+
+| | |
+|:---:|:---:|
+| ![Empty first run](docs/media/01-empty-first-run.png) | ![Import a list](docs/media/02-import-command.png) |
+| ![Context-paged help](docs/media/05-help.png) | ![A second list](docs/media/07-second-list.png) |
+| ![Manual add](docs/media/09-manual-add.png) | ![Done filter](docs/media/10-filter-done.png) |
+| ![Delete-list confirm](docs/media/12-delete-confirm.png) | |
+
+</details>
+
+> Screenshots/video are generated from [`demo/tour.tape`](demo/tour.tape) — run
+> `vhs demo/tour.tape` to regenerate them.
+
 ## The name
 
 **Kwire** is a respelling of **quire** (pronounced the same). A *quire* is a gathering
