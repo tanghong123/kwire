@@ -377,6 +377,7 @@ async fn main() -> Result<()> {
                     title: vm.title,
                     done,
                     total,
+                    is_manual: vm.is_manual,
                 });
             }
         }
@@ -880,6 +881,7 @@ async fn refresh_all_list_summaries(app: &mut AppState, handles: &EngineHandles)
                 title: vm.title,
                 done,
                 total,
+                is_manual: vm.is_manual,
             });
         }
     }

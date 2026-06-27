@@ -524,6 +524,10 @@ pub struct ListSummary {
     pub done: usize,
     /// Total number of books in this list.
     pub total: usize,
+    /// True for the singleton mutable **Manual** list (mirrors the engine's
+    /// `ListSettings::is_manual`). The list view shows per-book add/remove
+    /// affordances (and the `x` remove hint) only for this list.
+    pub is_manual: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -3089,6 +3093,19 @@ impl AppState {
         if !still_valid {
             self.selected_var = None;
         }
+    }
+
+    /// True when the currently displayed list is the mutable **Manual** list
+    /// (per-book add/remove affordances apply). False while the aggregate "All"
+    /// view is active or when the active list is an immutable imported list.
+    pub fn active_list_is_manual(&self) -> bool {
+        if self.all_active {
+            return false;
+        }
+        self.all_lists
+            .get(self.active_list_idx)
+            .map(|l| l.is_manual)
+            .unwrap_or(false)
     }
 
     /// Switch to the PREVIOUS reading list in the global rotation (the `[`

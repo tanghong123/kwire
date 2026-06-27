@@ -280,12 +280,14 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
             crate::app::ListSummary {
                 id: "L2".into(),
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
         ];
         app.active_list_idx = 0;
@@ -329,12 +331,14 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
             crate::app::ListSummary {
                 id: "L2".into(),
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
         ];
         app.active_list_idx = 0;
@@ -359,12 +363,14 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
             crate::app::ListSummary {
                 id: "L2".into(),
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
         ];
         app.active_list_idx = 0;
@@ -391,12 +397,14 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
             crate::app::ListSummary {
                 id: "L2".into(),
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
         ];
         app.active_list_idx = 0;
@@ -441,6 +449,7 @@ mod tests {
             title: "Manual".into(),
             done: 0,
             total: 1,
+            is_manual: false,
         }];
         app.active_list_idx = 0;
 
@@ -724,12 +733,14 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
             crate::app::ListSummary {
                 id: "L2".into(),
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
         ];
         app.active_list_idx = 0;
@@ -1645,6 +1656,7 @@ mod tests {
             title: "Test List".into(),
             done: 1,
             total: 2,
+            is_manual: false,
         });
 
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
@@ -4881,6 +4893,46 @@ mod tests {
     }
 
     #[test]
+    fn hint_bar_manual_list_shows_x_remove() {
+        // Task 1: the Manual list (mutable) surfaces the `x` remove affordance
+        // in the bottom hint row; immutable imported lists do NOT.
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.focus = Focus::List;
+        app.flat.clear();
+        app.flat.push(flat_book_with_state("done"));
+        app.selected = 0;
+
+        // Manual list active → hint includes "x remove".
+        app.all_lists = vec![crate::app::ListSummary {
+            id: "M".into(),
+            title: "Manual".into(),
+            done: 0,
+            total: 1,
+            is_manual: true,
+        }];
+        app.active_list_idx = 0;
+        app.all_active = false;
+        assert!(app.active_list_is_manual());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert!(
+            buffer_string(&terminal).contains("x remove"),
+            "manual-list hint must include 'x remove'"
+        );
+
+        // Imported (immutable) list active → no "x remove" hint.
+        app.all_lists[0].is_manual = false;
+        assert!(!app.active_list_is_manual());
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert!(
+            !buffer_string(&terminal).contains("x remove"),
+            "imported-list hint must NOT include 'x remove'"
+        );
+    }
+
+    #[test]
     fn hint_bar_list_needs_selection_shows_choose() {
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -5265,12 +5317,14 @@ mod tests {
                 title: "Classics".into(),
                 done: 0,
                 total: 3,
+                is_manual: false,
             },
             crate::app::ListSummary {
                 id: "list2".into(),
                 title: "Fiction".into(),
                 done: 1,
                 total: 5,
+                is_manual: false,
             },
         ];
         app.active_list_idx = 0;
@@ -5976,6 +6030,7 @@ mod tests {
                 title: format!("Reading List Number {i}"),
                 done: i,
                 total: 10,
+                is_manual: false,
             });
         }
         app.active_list_idx = 2;
@@ -6378,12 +6433,14 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
             crate::app::ListSummary {
                 id: "L2".into(),
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                is_manual: false,
             },
         ]
     }
@@ -6538,6 +6595,7 @@ mod tests {
                     title: format!("List {i}"),
                     done: 0,
                     total: 1,
+                    is_manual: false,
                 })
                 .collect();
             app.modal = Some(Modal::Settings);

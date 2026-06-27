@@ -1909,12 +1909,22 @@ fn global_hint_text(app: &AppState) -> String {
         }
         Focus::List => {
             let state = selected_book_hint_state(app);
+            // The Manual list is the only list whose books can be removed in
+            // place — surface the `x` remove affordance only there (the action
+            // itself is a no-op on immutable imported lists).
+            let manual = if app.active_list_is_manual() {
+                " \u{00b7} x remove"
+            } else {
+                ""
+            };
             match state {
-                "needs_selection" => format!("choose  d detail{GLOBALS}"),
-                "failed" => format!("r retry  d detail{GLOBALS}"),
-                "done" => format!("d detail \u{00b7} o open{GLOBALS}"),
-                "downloading" => format!("p pause \u{00b7} c cancel  d detail{GLOBALS}"),
-                _ => format!("d detail{GLOBALS}"),
+                "needs_selection" => format!("choose  d detail{manual}{GLOBALS}"),
+                "failed" => format!("r retry  d detail{manual}{GLOBALS}"),
+                "done" => format!("d detail \u{00b7} o open{manual}{GLOBALS}"),
+                "downloading" => {
+                    format!("p pause \u{00b7} c cancel  d detail{manual}{GLOBALS}")
+                }
+                _ => format!("d detail{manual}{GLOBALS}"),
             }
         }
         Focus::Activity => {
