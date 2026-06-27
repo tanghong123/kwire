@@ -439,6 +439,76 @@ mod tests {
         assert_eq!(app.active_list_idx, 1);
     }
 
+    /// Task 5: on the focused list strip, `<` and `←` reach the virtual "All"
+    /// stop exactly like `>`/`→`/`[`/`]`. (The bug: `<` had no dispatch at all.)
+    #[test]
+    fn list_strip_prev_keys_reach_all_stop() {
+        use crate::app::{HeaderRow, ALL_LIST_ID};
+        let two_lists = || {
+            vec![
+                crate::app::ListSummary {
+                    id: "L1".into(),
+                    title: "List 1".into(),
+                    done: 0,
+                    total: 1,
+                    is_manual: false,
+                },
+                crate::app::ListSummary {
+                    id: "L2".into(),
+                    title: "List 2".into(),
+                    done: 0,
+                    total: 1,
+                    is_manual: false,
+                },
+            ]
+        };
+
+        for prev_key in [KeyCode::Char('<'), KeyCode::Left] {
+            let mut app = AppState::new();
+            app.all_lists = two_lists();
+            app.active_list_idx = 0;
+            app.all_active = false;
+            app.focus = Focus::Header;
+            app.header_row = HeaderRow::ListStrip;
+
+            // From the FIRST list, prev → All (the aggregate stop).
+            let i = app.on_input(key(prev_key));
+            assert!(
+                matches!(i, Intent::SwitchList { ref id } if id == ALL_LIST_ID),
+                "{prev_key:?} off the first list must reach All"
+            );
+            assert!(app.all_active, "{prev_key:?} must activate the All stop");
+            assert_eq!(app.focus, Focus::Header, "focus unchanged");
+
+            // From All, prev → last list.
+            let i = app.on_input(key(prev_key));
+            assert!(matches!(i, Intent::SwitchList { ref id } if id == "L2"));
+            assert!(!app.all_active);
+        }
+    }
+
+    /// Task 5 (symmetry): `>` on the focused list strip cycles forward through
+    /// the All stop, mirroring `]`/`→`.
+    #[test]
+    fn list_strip_gt_key_reaches_all_stop() {
+        use crate::app::{HeaderRow, ALL_LIST_ID};
+        let mut app = AppState::new();
+        app.all_lists = vec![crate::app::ListSummary {
+            id: "L1".into(),
+            title: "Only".into(),
+            done: 0,
+            total: 1,
+            is_manual: false,
+        }];
+        app.active_list_idx = 0;
+        app.focus = Focus::Header;
+        app.header_row = HeaderRow::ListStrip;
+
+        let i = app.on_input(key(KeyCode::Char('>')));
+        assert!(matches!(i, Intent::SwitchList { ref id } if id == ALL_LIST_ID));
+        assert!(app.all_active, "> off the only list reaches All");
+    }
+
     /// With a single real list the rotation is still All ⇄ that list.
     #[test]
     fn bracket_cycle_single_list_toggles_all() {

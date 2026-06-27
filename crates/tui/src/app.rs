@@ -1547,6 +1547,33 @@ impl AppState {
                         }
                         Intent::Redraw
                     }
+                    // `<` / `>` — char aliases for `←` / `→` (some users press the
+                    // angle brackets to page the list strip). They had NO dispatch,
+                    // so `<` never reached the aggregate "All" stop while `←` did.
+                    KeyCode::Char('<') => {
+                        if self.focus == Focus::Header {
+                            match self.header_row {
+                                HeaderRow::FilterChips => {
+                                    self.filter = self.filter.prev();
+                                    self.rebuild_flat();
+                                }
+                                HeaderRow::ListStrip => return self.cycle_list_prev(),
+                            }
+                        }
+                        Intent::Redraw
+                    }
+                    KeyCode::Char('>') => {
+                        if self.focus == Focus::Header {
+                            match self.header_row {
+                                HeaderRow::FilterChips => {
+                                    self.filter = self.filter.next();
+                                    self.rebuild_flat();
+                                }
+                                HeaderRow::ListStrip => return self.cycle_list_next(),
+                            }
+                        }
+                        Intent::Redraw
+                    }
                     // `a` — fetch ALL preferred-format copies for the focused book:
                     // one top-ranked candidate per format in the list's format
                     // preference, each armed as its own download.
