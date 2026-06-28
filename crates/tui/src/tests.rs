@@ -8117,4 +8117,35 @@ mod tests {
             "english catalog message: {decoded}"
         );
     }
+
+    /// `complete_path` returns the single match for a nested partial filename in a
+    /// real directory — confirming `:import …/jeremy_pub`+Tab DOES complete; the
+    /// reported failure was the throwaway-HOME fresh-DB test (`~` → /tmp/…), not a
+    /// code bug.
+    #[test]
+    fn complete_path_returns_single_match_for_partial() {
+        use std::io::Write;
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("kwire-completepath-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "jeremy_public_domain_list.md",
+            "avery_public_domain_list.md",
+        ] {
+            let mut f = std::fs::File::create(dir.join(name)).unwrap();
+            writeln!(f, "x").unwrap();
+        }
+        let prefix = format!("{}/jeremy_pub", dir.display());
+        let cands = crate::app::complete_path(&prefix);
+        assert_eq!(
+            cands.len(),
+            1,
+            "exactly one match for 'jeremy_pub': {cands:?}"
+        );
+        assert!(
+            cands[0].ends_with("jeremy_public_domain_list.md"),
+            "completed to the full filename: {cands:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

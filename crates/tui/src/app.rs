@@ -224,7 +224,7 @@ const COMMANDS: &[&str] = &["settings", "import", "add", "start-all", "pause-all
 /// user's typed directory prefix preserved (so the buffer stays in `~/…` form).
 /// Directories get a trailing `/` so Tab can descend into them. Bad paths
 /// simply yield no candidates — never panics.
-fn complete_path(arg: &str) -> Vec<String> {
+pub(crate) fn complete_path(arg: &str) -> Vec<String> {
     // Directory portion (incl. trailing `/`) vs. the file-name prefix.
     let (dir_typed, prefix) = match arg.rfind('/') {
         Some(i) => (&arg[..=i], &arg[i + 1..]),
