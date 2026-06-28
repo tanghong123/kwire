@@ -7834,4 +7834,42 @@ mod tests {
         app.advance_marquee(disp_w, 20);
         assert_eq!(app.marquee_offset, 0, "fitting text resets/parks at 0");
     }
+
+    /// plan_series_add: no series / empty seed → user-facing messages; a real
+    /// series → its member titles (reading order) + name.
+    #[test]
+    fn plan_series_add_messages_and_success() {
+        use libgen_core::series::{Series, SeriesMember};
+
+        let err = crate::plan_series_add("Harry Potter", None).unwrap_err();
+        assert_eq!(err, "This book doesn't belong to any book series");
+
+        let err = crate::plan_series_add("   ", None).unwrap_err();
+        assert_eq!(err, "No title on the selected book");
+
+        let series = Series {
+            key: "OL1S".into(),
+            name: "Wings of Fire".into(),
+            members: vec![
+                SeriesMember {
+                    title: "The Dragonet Prophecy".into(),
+                    ..Default::default()
+                },
+                SeriesMember {
+                    title: "The Lost Heir".into(),
+                    ..Default::default()
+                },
+            ],
+        };
+        let (titles, name) =
+            crate::plan_series_add("The Dragonet Prophecy", Some(&series)).unwrap();
+        assert_eq!(name, "Wings of Fire");
+        assert_eq!(
+            titles,
+            vec![
+                "The Dragonet Prophecy".to_string(),
+                "The Lost Heir".to_string()
+            ]
+        );
+    }
 }

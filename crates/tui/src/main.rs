@@ -1832,7 +1832,7 @@ pub(crate) fn plan_series_add(
     }
     let series = match series {
         Some(s) if !s.members.is_empty() => s,
-        _ => return Err("No series found for the selected book".into()),
+        _ => return Err("This book doesn't belong to any book series".into()),
     };
     let titles: Vec<String> = series
         .members
@@ -1841,7 +1841,7 @@ pub(crate) fn plan_series_add(
         .filter(|t| !t.trim().is_empty())
         .collect();
     if titles.is_empty() {
-        return Err("No series found for the selected book".into());
+        return Err("This book doesn't belong to any book series".into());
     }
     Ok((titles, series.name.clone()))
 }
