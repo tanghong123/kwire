@@ -1921,6 +1921,20 @@ fn selected_book_hint_state(app: &AppState) -> &'static str {
         return "unknown";
     };
     let book = &fb.book;
+    // When an `↳ alt. copy` sub-row is focused, the hint reflects THAT copy's own
+    // state, so the advertised keys (r retry / p pause / c cancel / o open) match
+    // the per-copy action they now perform — not the book-level roll-up.
+    if let Some(md5) = app.selected_var.as_deref() {
+        if let Some(v) = book.versions.iter().find(|v| v.md5 == md5) {
+            return match v.state.as_str() {
+                "downloading" => "downloading",
+                "done" => "done",
+                "failed" | "cancelled" => "failed",
+                "needs_selection" => "needs_selection",
+                _ => "unknown",
+            };
+        }
+    }
     if book.discovery == "needs_selection" {
         return "needs_selection";
     }

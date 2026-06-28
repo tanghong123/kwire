@@ -7184,6 +7184,47 @@ mod tests {
         );
     }
 
+    /// The list hint bar follows the SELECTED copy's state: a book whose roll-up
+    /// is "done" still shows `r retry` when its focused alt copy is `failed`, so
+    /// the advertised key matches the per-copy action.
+    #[test]
+    fn list_hint_reflects_selected_copy_state() {
+        let backend = TestBackend::new(132, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let failed_md5 = "f".repeat(32);
+        app.flat[0].book.versions = vec![
+            mk_var("Done Copy", "epub", "done", 100, &"d".repeat(32)),
+            mk_var("Failed Copy", "pdf", "failed", 0, &failed_md5),
+        ];
+        app.focus = Focus::List;
+        app.selected = 0;
+
+        // Whole-book selection: roll-up is "done" → hint shows "o open", not retry.
+        app.selected_var = None;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let whole = buffer_string(&terminal);
+        assert!(
+            whole.contains("o open"),
+            "whole-book done hint shows open: {whole}"
+        );
+        assert!(
+            !whole.contains("retry"),
+            "whole-book done hint must NOT show retry: {whole}"
+        );
+
+        // Failed alt copy focused → hint shows "r retry".
+        app.selected_var = Some(failed_md5);
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let copy = buffer_string(&terminal);
+        assert!(
+            copy.contains("retry"),
+            "failed-copy hint must show retry: {copy}"
+        );
+    }
+
     /// Task #2: list `available` reads `avail` (matching the detail table), so the
     /// two never drift on the available state either.
     #[test]
