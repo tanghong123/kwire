@@ -20,7 +20,7 @@ use libgen_core::model::{
 };
 use libgen_core::orchestrator::{Event, Orchestrator};
 use libgen_core::parse;
-use libgen_core::queue::{Scheduler, SchedulerBuilder};
+use libgen_core::queue::{Progress, Scheduler, SchedulerBuilder};
 use libgen_core::search::{MirrorConfig, SearchClient};
 use libgen_core::store::Store;
 use reqwest::Client;
@@ -319,7 +319,10 @@ async fn concurrent_query_all_matches_sequential_statuses() {
 async fn one_book_orch(server: &MockServer, out: &std::path::Path) -> (Orchestrator, String) {
     let body = vec![7u8; 40_000];
     let md5 = md5_hex(&body);
-    server.put(&md5, body, Duration::from_millis(400)).await;
+    // Long inter-half gap: keeps the transfer reliably "in flight" so a
+    // pause/cancel lands mid-download (and the ~200ms progress poll reports a
+    // partial prefix) regardless of scheduler load.
+    server.put(&md5, body, Duration::from_millis(1500)).await;
 
     let mut book = BookRequest::new(BookInput {
         title: "Slow Book".into(),
@@ -391,24 +394,38 @@ async fn pause_then_resume_completes_with_correct_md5() {
     let (mut orch, md5) = one_book_orch(&server, &out).await;
     let scheduler = scheduler_for(&server);
 
-    // Pause mid-flight.
+    // Pause mid-flight — DETERMINISTICALLY: pause only once a `Progress::Bytes`
+    // reports a non-zero prefix on disk, so the pause can't race ahead of the
+    // first chunk under load (a fixed timer did, flakily). The long inter-half
+    // gap guarantees the ~200ms poll reports the partial prefix well before the
+    // transfer completes.
     let sched = Arc::clone(&scheduler);
     let md5_cl = md5.clone();
-    let (tx, rx) = mpsc::channel::<Event>(256);
-    let ev_task = tokio::spawn(drain(rx));
-    let pauser = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(120)).await;
-        for _ in 0..50 {
-            if sched.pause(&md5_cl).await {
-                break;
+    let (tx, mut rx) = mpsc::channel::<Event>(256);
+    let ev_task = tokio::spawn(async move {
+        let mut events = Vec::new();
+        let mut paused = false;
+        while let Some(ev) = rx.recv().await {
+            if !paused {
+                if let Event::Download(Progress::Bytes { bytes_done, .. }) = &ev {
+                    if *bytes_done > 0 {
+                        paused = true;
+                        for _ in 0..50 {
+                            if sched.pause(&md5_cl).await {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    }
+                }
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            events.push(ev);
         }
+        events
     });
     orch.start_downloads(&scheduler, &tx).await.unwrap();
     drop(tx);
     let _ = ev_task.await.unwrap();
-    let _ = pauser.await;
 
     // Paused: state preserved, resume_offset kept (the .part has the prefix).
     let list = orch.snapshot().unwrap();
