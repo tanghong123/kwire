@@ -6001,6 +6001,40 @@ mod tests {
         );
     }
 
+    /// `progress_visible()` gates the per-Progress repaint: true with no modal or
+    /// the Detail modal (live progress bar), false under any covering modal.
+    #[test]
+    fn progress_visible_only_without_covering_modal() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        assert!(app.progress_visible(), "no modal → progress is visible");
+
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        assert!(app.progress_visible(), "Detail modal shows a progress bar");
+
+        app.modal = Some(Modal::Settings);
+        assert!(!app.progress_visible(), "Settings covers the activity pane");
+
+        app.modal = Some(Modal::Help {
+            page: crate::app::HelpPage::List,
+            parent: Some(Box::new(Modal::Detail {
+                book_flat_index: 0,
+                selected: 0,
+                sub_focus: DetailSubFocus::Variations,
+                history_selected: 0,
+            })),
+        });
+        assert!(
+            !app.progress_visible(),
+            "Help over Detail still covers the progress bar"
+        );
+    }
+
     /// The list strip shows a per-list run-state indicator: ▸ for a list with a
     /// download in flight, ⏸ for a list with a paused transfer (mirrors the
     /// desktop sidebar status dot).

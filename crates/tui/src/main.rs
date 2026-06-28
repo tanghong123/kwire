@@ -425,6 +425,9 @@ async fn run_loop(
     terminal.draw(|f| ui::render(f, app))?;
 
     loop {
+        // Repaint after this iteration unless we can prove nothing visible
+        // changed (a download tick under a covering modal).
+        let mut redraw = true;
         let quit = tokio::select! {
             // Terminal input
             Some(Ok(ev)) = input.next() => {
@@ -435,7 +438,13 @@ async fn run_loop(
             Some(ev) = eng_rx.recv() => {
                 match ev {
                     EngineEvent::Progress(p) => {
+                        // Always apply (keeps state current), but skip the
+                        // whole-frame re-render when a non-progress modal covers
+                        // the book table + activity pane. With downloads emitting
+                        // ~5 Hz × N legs, this avoids a flood of wasted repaints
+                        // behind Help/Settings/Picker/… overlays.
                         app.apply_progress(&p);
+                        redraw = app.progress_visible();
                     }
                     EngineEvent::Refresh => {
                         refresh_active_view(app, &handles).await;
@@ -454,7 +463,9 @@ async fn run_loop(
             }
         };
 
-        terminal.draw(|f| ui::render(f, app))?;
+        if redraw {
+            terminal.draw(|f| ui::render(f, app))?;
+        }
 
         if quit {
             break;

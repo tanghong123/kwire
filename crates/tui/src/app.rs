@@ -1222,6 +1222,16 @@ impl AppState {
         self.modal = Some(Modal::Settings);
     }
 
+    /// Whether live download progress is currently VISIBLE, so a `Progress` tick
+    /// warrants a repaint. True when no modal overlays the main view, or when the
+    /// Detail modal (which draws a per-book progress bar) is the top modal. Every
+    /// other modal covers the book table + activity pane, so progress ticks under
+    /// them can skip the (whole-frame) re-render — the state is still applied, it
+    /// just isn't repainted until the modal closes or the 120ms tick fires.
+    pub fn progress_visible(&self) -> bool {
+        matches!(self.modal, None | Some(Modal::Detail { .. }))
+    }
+
     /// Apply a raw engine Progress event into the live transfer map.
     pub fn apply_progress(&mut self, p: &libgen_core::queue::Progress) {
         use libgen_core::queue::Progress::*;
