@@ -7953,4 +7953,37 @@ mod tests {
             "unknown format must render an em-dash, not ???: {buf}"
         );
     }
+
+    /// The detail-view download progress bar fills the row width (more than the
+    /// old fixed 16 cells) on a wide terminal, and still renders on a narrow one.
+    #[test]
+    fn detail_progress_bar_fills_width() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        app.flat[0].book.versions = vec![mk_var("Dl", "epub", "downloading", 50, &"a".repeat(32))];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+
+        let mut wide = Terminal::new(TestBackend::new(132, 30)).unwrap();
+        wide.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&wide);
+        let bar_cells = buf
+            .chars()
+            .filter(|&c| c == '\u{25b0}' || c == '\u{25b1}')
+            .count();
+        assert!(
+            bar_cells > 16,
+            "detail progress bar should fill the row, got {bar_cells} cells"
+        );
+
+        // Narrow terminal: must still render without panicking.
+        let mut narrow = Terminal::new(TestBackend::new(48, 24)).unwrap();
+        narrow.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
 }

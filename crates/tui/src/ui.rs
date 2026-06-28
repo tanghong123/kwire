@@ -2797,20 +2797,20 @@ fn render_detail_modal(
         app.last_rects.detail_var_rows.push((row_rect, i));
         y += 1;
 
-        // #1: progress bar on its OWN line below — only while downloading.
+        // #1: progress bar on its OWN line below — only while downloading. The
+        // bar fills the row width (minus the indent and the " N% · eta Ns"
+        // suffix) instead of a fixed 16 cells.
         if downloading && y < bottom {
-            let bar = theme::progress_bar(v.progress, 16);
             let eta = v
                 .eta_secs
                 .map(|s| format!(" \u{00b7} eta {}s", s))
                 .unwrap_or_default();
-            let txt = format!(
-                "{}{} {}%{}",
-                " ".repeat(FLEX_ACCENT_W),
-                bar,
-                v.progress,
-                eta
-            );
+            let suffix = format!(" {}%{}", v.progress, eta);
+            let bar_w = (var_area.width as usize)
+                .saturating_sub(FLEX_ACCENT_W + crate::textfit::display_width(&suffix) + 1)
+                .max(8);
+            let bar = theme::progress_bar(v.progress, bar_w);
+            let txt = format!("{}{}{}", " ".repeat(FLEX_ACCENT_W), bar, suffix);
             frame.render_widget(
                 Paragraph::new(Span::styled(txt, theme::style_for_state("downloading"))),
                 Rect::new(var_area.x, y, var_area.width, 1),
