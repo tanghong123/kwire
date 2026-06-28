@@ -198,6 +198,9 @@ enum EngineEvent {
     Progress(Progress),
     /// The active list's ViewModel should be re-projected.
     Refresh,
+    /// Set the bottom-bar status message + re-project the view. Used by
+    /// background commands (e.g. download-series) to post a result back to the UI.
+    Status(String),
 }
 
 impl EngineEmitter for TuiEmitter {
@@ -392,12 +395,15 @@ async fn main() -> Result<()> {
     // (5b) Spawn the engine.
     let engine_handles = engine_state.engine_handles();
     let (eng_tx, eng_rx) = mpsc::unbounded_channel::<EngineEvent>();
+    // Keep a UI-side sender so background commands (download-series) can post a
+    // status back to the loop; the emitter takes the original.
+    let ui_tx = eng_tx.clone();
     let emitter = TuiEmitter { tx: eng_tx };
     spawn_with(engine_handles.clone(), emitter);
     info!("engine spawned");
 
     // (6) Event loop.
-    run_loop(&mut terminal, &mut app, engine_handles, eng_rx).await?;
+    run_loop(&mut terminal, &mut app, engine_handles, eng_rx, ui_tx).await?;
 
     Ok(())
 }
@@ -407,6 +413,7 @@ async fn run_loop(
     app: &mut AppState,
     handles: EngineHandles,
     mut eng_rx: mpsc::UnboundedReceiver<EngineEvent>,
+    ui_tx: mpsc::UnboundedSender<EngineEvent>,
 ) -> Result<()> {
     let mut input = EventStream::new();
     let mut tick_interval = time::interval(Duration::from_millis(120));
@@ -419,7 +426,7 @@ async fn run_loop(
             // Terminal input
             Some(Ok(ev)) = input.next() => {
                 let intent = app.on_input(ev);
-                dispatch_intent(intent, app, &handles).await?
+                dispatch_intent(intent, app, &handles, &ui_tx).await?
             }
             // Engine events
             Some(ev) = eng_rx.recv() => {
@@ -429,6 +436,10 @@ async fn run_loop(
                     }
                     EngineEvent::Refresh => {
                         refresh_active_view(app, &handles).await;
+                    }
+                    EngineEvent::Status(msg) => {
+                        refresh_active_view(app, &handles).await;
+                        app.status_msg = Some(msg);
                     }
                 }
                 false
@@ -461,11 +472,12 @@ async fn dispatch_intent(
     intent: Intent,
     app: &mut AppState,
     handles: &EngineHandles,
+    ui_tx: &mpsc::UnboundedSender<EngineEvent>,
 ) -> Result<bool> {
     match intent {
         Intent::Quit => return Ok(true),
         Intent::Command(line) => {
-            if handle_command_async(&line, app, handles).await? {
+            if handle_command_async(&line, app, handles, ui_tx).await? {
                 return Ok(true);
             }
         }
@@ -598,6 +610,7 @@ async fn handle_command_async(
     line: &str,
     app: &mut AppState,
     handles: &EngineHandles,
+    ui_tx: &mpsc::UnboundedSender<EngineEvent>,
 ) -> Result<bool> {
     let line = line.trim();
     info!("command: {:?}", line);
@@ -672,7 +685,7 @@ async fn handle_command_async(
         }
         // #53 — add the selected book's series siblings to the current list
         "download-series" | "series" => {
-            download_series_cmd(app, handles).await;
+            download_series_cmd(app, handles, ui_tx).await;
         }
         // #55 — toggle mouse capture on/off
         "mouse" => {
@@ -1878,7 +1891,11 @@ pub(crate) fn plan_series_add(
 /// read under a BRIEF orch lock that is then DROPPED; the series lookup (the
 /// network phase) runs with NO lock held; only afterwards is the orch re-locked
 /// to add the discovered siblings.
-async fn download_series_cmd(app: &mut AppState, handles: &EngineHandles) {
+async fn download_series_cmd(
+    app: &mut AppState,
+    handles: &EngineHandles,
+    ui_tx: &mpsc::UnboundedSender<EngineEvent>,
+) {
     let Some(orch_arc) = active_orch(handles).await else {
         app.status_msg = Some("No active list".into());
         return;
@@ -1919,7 +1936,12 @@ async fn download_series_cmd(app: &mut AppState, handles: &EngineHandles) {
         return;
     }
 
-    // 2. Series lookup — NO lock held across the network (replay when configured).
+    // 2. Show an immediate in-progress cue, then run the (multi-second) Open
+    // Library lookup + list creation OFF the command-dispatch path so the UI can
+    // repaint. The spawned task posts the outcome back via EngineEvent::Status.
+    app.status_msg =
+        Some("Searching Open Library for series info (takes a few seconds)\u{2026}".into());
+
     let series_client = {
         let cfg = handles.config.lock().expect("config poisoned").clone();
         match &cfg.replay_dir {
@@ -1927,43 +1949,43 @@ async fn download_series_cmd(app: &mut AppState, handles: &EngineHandles) {
             None => libgen_core::series::SeriesClient::live(),
         }
     };
-    let series = match series_client.lookup(&title, &author).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("download_series: lookup: {e}");
-            app.status_msg = Some(format!("Series lookup failed: {e}"));
-            return;
-        }
-    };
-
-    // 3. Decide what to add (pure; also surfaces the no-series error path).
-    let (titles, series_name) = match plan_series_add(&title, series.as_ref()) {
-        Ok(plan) => plan,
-        Err(e) => {
-            app.status_msg = Some(e);
-            return;
-        }
-    };
-
-    // 4. Create a SEPARATE "<series> (series)" list and add the members there —
-    // NEVER mutate the active/imported list (that immutability invariant is
-    // sacred; mirrors the desktop's `series_to_list`). Then switch to it.
-    let status = match ensure_series_list(handles, &series_name, &titles).await {
-        Ok((added, existed)) => {
-            if existed {
-                format!("Series \"{series_name}\" already imported \u{2014} switched to it")
-            } else {
-                format!("Created \"{series_name} (series)\" with {added} book(s)")
+    let handles_cl = handles.clone();
+    let tx = ui_tx.clone();
+    tokio::spawn(async move {
+        let series = match series_client.lookup(&title, &author).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("download_series: lookup: {e}");
+                let _ = tx.send(EngineEvent::Status(format!("Series lookup failed: {e}")));
+                return;
             }
-        }
-        Err(e) => {
-            tracing::warn!("download_series: ensure_series_list: {e}");
-            format!("Series import failed: {e}")
-        }
-    };
-    handles.engine_wake.notify_one();
-    refresh_active_view(app, handles).await;
-    app.status_msg = Some(status);
+        };
+        // Decide what to add (pure; also surfaces the no-series message).
+        let (titles, series_name) = match plan_series_add(&title, series.as_ref()) {
+            Ok(plan) => plan,
+            Err(e) => {
+                let _ = tx.send(EngineEvent::Status(e));
+                return;
+            }
+        };
+        // Create a SEPARATE "<series> (series)" list — NEVER mutate the active/
+        // imported list (mirrors the desktop's `series_to_list`).
+        let msg = match ensure_series_list(&handles_cl, &series_name, &titles).await {
+            Ok((added, existed)) => {
+                if existed {
+                    format!("Series \"{series_name}\" already imported \u{2014} switched to it")
+                } else {
+                    format!("Created \"{series_name} (series)\" with {added} book(s)")
+                }
+            }
+            Err(e) => {
+                tracing::warn!("download_series: ensure_series_list: {e}");
+                format!("Series import failed: {e}")
+            }
+        };
+        handles_cl.engine_wake.notify_one();
+        let _ = tx.send(EngineEvent::Status(msg));
+    });
 }
 
 /// Create (or reuse) a SEPARATE list titled "{series_name} (series)" — one group
