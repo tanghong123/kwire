@@ -1516,17 +1516,19 @@ fn activity_status_spans(
     };
     let dl = bg(Style::default().fg(C_DOWNLOADING));
     let base = bg(base);
+    // Fixed-width columns so format / % / bar / ETA line up across legs (the whole
+    // block is pinned to the right edge by `activity_leg_line`). The ETA column is
+    // reserved even when a leg has no ETA, so its absence doesn't shift the bar.
     let mut spans = Vec::new();
     if !fmt.is_empty() {
-        spans.push(Span::styled(format!("{fmt}  "), base));
+        spans.push(Span::styled(format!("{fmt:<4}  "), base));
     }
-    spans.push(Span::styled(format!("{pct}%  "), dl));
+    spans.push(Span::styled(format!("{pct:>3}%  "), dl));
     for s in theme::progress_bar_spans(pct, 6) {
         spans.push(Span::styled(s.content, bg(s.style)));
     }
-    if let Some(s) = eta_secs {
-        spans.push(Span::styled(format!("  {s}s"), base));
-    }
+    let eta_str = eta_secs.map(|s| format!("{s}s")).unwrap_or_default();
+    spans.push(Span::styled(format!("  {eta_str:>6}"), base));
     spans
 }
 
@@ -5178,6 +5180,31 @@ mod hint_wrap_tests {
             l0.spans[1].content.as_ref(),
             l3.spans[1].content.as_ref(),
             "marquee offset had no effect"
+        );
+    }
+
+    #[test]
+    fn activity_status_spans_align_to_fixed_width() {
+        // Different format/%/ETA legs must produce the SAME total status width so
+        // the columns line up when each is pinned to the right edge.
+        let width = |spans: &[Span]| -> usize {
+            spans
+                .iter()
+                .map(|s| display_width(s.content.as_ref()))
+                .sum()
+        };
+        let a = activity_status_spans("epub", 6, Some(171), Style::default(), None);
+        let b = activity_status_spans("pdf", 100, None, Style::default(), None);
+        let c = activity_status_spans("epub", 89, Some(1), Style::default(), None);
+        assert_eq!(
+            width(&a),
+            width(&b),
+            "status width must be constant across legs"
+        );
+        assert_eq!(
+            width(&a),
+            width(&c),
+            "status width must be constant across legs"
         );
     }
 }
