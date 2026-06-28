@@ -4651,6 +4651,7 @@ mod tests {
             title_buf: "New Title".into(),
             author_buf: "Author A, Author B".into(),
             field: crate::app::EditBookField::Title,
+            caret: 0,
         });
         let intent = app.on_input(key(KeyCode::Enter));
         assert_eq!(
@@ -4807,6 +4808,7 @@ mod tests {
             title_buf: "Treasure Island".into(),
             author_buf: "Stevenson".into(),
             field: crate::app::EditBookField::Title,
+            caret: 0,
         });
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
     }
@@ -8063,5 +8065,43 @@ mod tests {
             "picker m must mark the book not-found, got {intent:?}"
         );
         assert!(app.modal.is_none(), "picker closes after mark-not-found");
+    }
+
+    /// Edit modal: caret moves and inserts/deletes MID-string, not just at the end.
+    #[test]
+    fn edit_caret_inserts_and_deletes_mid_string() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::EditBook {
+            book_flat_index: 0,
+            title_buf: "abcd".into(),
+            author_buf: String::new(),
+            field: crate::app::EditBookField::Title,
+            caret: 4, // end
+        });
+
+        // Left twice → caret between 'b' and 'c'; insert 'X' → "abXcd".
+        app.on_input(key(KeyCode::Left));
+        app.on_input(key(KeyCode::Left));
+        app.on_input(key(KeyCode::Char('X')));
+        let (buf, caret) = match &app.modal {
+            Some(Modal::EditBook {
+                title_buf, caret, ..
+            }) => (title_buf.clone(), *caret),
+            _ => panic!("edit modal gone"),
+        };
+        assert_eq!(buf, "abXcd", "char inserts at the caret, not the end");
+        assert_eq!(caret, 3, "caret advances past the inserted char");
+
+        // Backspace removes the char before the caret ('X') → "abcd".
+        app.on_input(key(KeyCode::Backspace));
+        let (buf2, caret2) = match &app.modal {
+            Some(Modal::EditBook {
+                title_buf, caret, ..
+            }) => (title_buf.clone(), *caret),
+            _ => panic!("edit modal gone"),
+        };
+        assert_eq!(buf2, "abcd", "backspace deletes the char before the caret");
+        assert_eq!(caret2, 2, "caret moves back after delete");
     }
 }

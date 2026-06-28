@@ -498,6 +498,8 @@ pub enum Modal {
         title_buf: String,
         author_buf: String,
         field: EditBookField,
+        /// Caret position (char index) within the ACTIVE field's buffer.
+        caret: usize,
     },
     /// Confirm removing a book from the list: [y/n].
     ConfirmBookRemove { book_flat_index: usize },
@@ -632,6 +634,12 @@ pub struct ActiveTransfer {
     pub eta_secs: Option<u64>,
     /// Derived from the most-recent ViewBook that has this md5.
     pub title: String,
+}
+
+/// Byte offset of char index `ci` within `s`, clamped to `s.len()` — for
+/// UTF-8-safe insert/remove at a caret position.
+fn byte_at_char(s: &str, ci: usize) -> usize {
+    s.char_indices().nth(ci).map(|(b, _)| b).unwrap_or(s.len())
 }
 
 /// Return `true` when the terminal cell `(col, row)` falls inside `rect`.
@@ -1767,11 +1775,13 @@ impl AppState {
                             let flat_idx = self.selected;
                             let title_buf = fb.book.title.clone();
                             let author_buf = fb.book.author.clone();
+                            let caret = title_buf.chars().count();
                             self.modal = Some(Modal::EditBook {
                                 book_flat_index: flat_idx,
                                 title_buf,
                                 author_buf,
                                 field: EditBookField::Title,
+                                caret,
                             });
                         }
                         Intent::Redraw
@@ -2297,11 +2307,13 @@ impl AppState {
                             if let Some(fb) = self.flat.get(flat_index) {
                                 let title_buf = fb.book.title.clone();
                                 let author_buf = fb.book.author.clone();
+                                let caret = title_buf.chars().count();
                                 self.modal = Some(Modal::EditBook {
                                     book_flat_index: flat_index,
                                     title_buf,
                                     author_buf,
                                     field: EditBookField::Title,
+                                    caret,
                                 });
                             }
                             Intent::Redraw
@@ -2535,14 +2547,23 @@ impl AppState {
                 title_buf,
                 author_buf,
                 field,
+                caret,
             } => {
                 let flat_index = *book_flat_index;
                 let mut tbuf = title_buf.clone();
                 let mut abuf = author_buf.clone();
-                let fld = field.clone();
-                match ev {
+                let mut fld = field.clone();
+                let mut caret = *caret;
+                // Length (char count) of whichever field is active.
+                let active_len = |t: &str, a: &str, f: &EditBookField| match f {
+                    EditBookField::Title => t.chars().count(),
+                    EditBookField::Author => a.chars().count(),
+                };
+                let mut reopen = true;
+                let ret = match ev {
                     Event::Key(KeyEvent { code, .. }) => match code {
                         KeyCode::Esc => {
+                            reopen = false;
                             self.modal = Some(Modal::Detail {
                                 book_flat_index: flat_index,
                                 selected: 0,
@@ -2552,19 +2573,15 @@ impl AppState {
                             Intent::Redraw
                         }
                         KeyCode::Tab => {
-                            let new_field = match fld {
+                            fld = match fld {
                                 EditBookField::Title => EditBookField::Author,
                                 EditBookField::Author => EditBookField::Title,
                             };
-                            self.modal = Some(Modal::EditBook {
-                                book_flat_index: flat_index,
-                                title_buf: tbuf,
-                                author_buf: abuf,
-                                field: new_field,
-                            });
+                            caret = active_len(&tbuf, &abuf, &fld); // caret to end of new field
                             Intent::Redraw
                         }
                         KeyCode::Enter => {
+                            reopen = false;
                             if let Some(fb) = self.flat.get(flat_index) {
                                 let authors: Vec<String> = abuf
                                     .split(',')
@@ -2574,7 +2591,7 @@ impl AppState {
                                 let intent = Intent::EditBook {
                                     group_path: vec![fb.group_index],
                                     book_index: fb.book_index_in_group,
-                                    title: tbuf,
+                                    title: tbuf.clone(),
                                     authors,
                                 };
                                 self.modal = None;
@@ -2583,40 +2600,59 @@ impl AppState {
                             self.modal = None;
                             Intent::Redraw
                         }
+                        KeyCode::Left => {
+                            caret = caret.saturating_sub(1);
+                            Intent::Redraw
+                        }
+                        KeyCode::Right => {
+                            caret = (caret + 1).min(active_len(&tbuf, &abuf, &fld));
+                            Intent::Redraw
+                        }
+                        KeyCode::Home => {
+                            caret = 0;
+                            Intent::Redraw
+                        }
+                        KeyCode::End => {
+                            caret = active_len(&tbuf, &abuf, &fld);
+                            Intent::Redraw
+                        }
                         KeyCode::Backspace => {
-                            match fld {
-                                EditBookField::Title => {
-                                    tbuf.pop();
-                                }
-                                EditBookField::Author => {
-                                    abuf.pop();
-                                }
+                            if caret > 0 {
+                                let buf = match fld {
+                                    EditBookField::Title => &mut tbuf,
+                                    EditBookField::Author => &mut abuf,
+                                };
+                                let byte = byte_at_char(buf, caret - 1);
+                                buf.remove(byte);
+                                caret -= 1;
                             }
-                            self.modal = Some(Modal::EditBook {
-                                book_flat_index: flat_index,
-                                title_buf: tbuf,
-                                author_buf: abuf,
-                                field: fld,
-                            });
                             Intent::Redraw
                         }
                         KeyCode::Char(c) => {
-                            match fld {
-                                EditBookField::Title => tbuf.push(c),
-                                EditBookField::Author => abuf.push(c),
-                            }
-                            self.modal = Some(Modal::EditBook {
-                                book_flat_index: flat_index,
-                                title_buf: tbuf,
-                                author_buf: abuf,
-                                field: fld,
-                            });
+                            let buf = match fld {
+                                EditBookField::Title => &mut tbuf,
+                                EditBookField::Author => &mut abuf,
+                            };
+                            let n = buf.chars().count();
+                            let byte = byte_at_char(buf, caret.min(n));
+                            buf.insert(byte, c);
+                            caret = caret.min(n) + 1;
                             Intent::Redraw
                         }
                         _ => Intent::Redraw,
                     },
                     _ => Intent::Redraw,
+                };
+                if reopen {
+                    self.modal = Some(Modal::EditBook {
+                        book_flat_index: flat_index,
+                        title_buf: tbuf,
+                        author_buf: abuf,
+                        field: fld,
+                        caret,
+                    });
                 }
+                ret
             }
 
             Modal::ConfirmBookRemove { book_flat_index } => {

@@ -169,9 +169,16 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
                 title_buf,
                 author_buf,
                 field,
-            } => {
-                render_edit_book_modal(frame, app, book_flat_index, &title_buf, &author_buf, &field)
-            }
+                caret,
+            } => render_edit_book_modal(
+                frame,
+                app,
+                book_flat_index,
+                &title_buf,
+                &author_buf,
+                &field,
+                caret,
+            ),
             Modal::ConfirmBookRemove { book_flat_index } => {
                 render_confirm_book_remove_modal(frame, app, book_flat_index)
             }
@@ -3884,7 +3891,17 @@ fn render_edit_book_modal(
     title_buf: &str,
     author_buf: &str,
     field: &EditBookField,
+    caret: usize,
 ) {
+    // Insert the caret glyph (▏) at char position `pos` in `s`.
+    fn with_caret(s: &str, pos: usize) -> String {
+        let byte = s.char_indices().nth(pos).map(|(b, _)| b).unwrap_or(s.len());
+        let mut out = String::with_capacity(s.len() + 3);
+        out.push_str(&s[..byte]);
+        out.push('\u{258f}');
+        out.push_str(&s[byte..]);
+        out
+    }
     let area = centered_rect(72, 10, frame.area());
     frame.render_widget(Clear, area);
 
@@ -3915,12 +3932,12 @@ fn render_edit_book_modal(
     .split(padded);
 
     let title_display = if *field == EditBookField::Title {
-        format!("{title_buf}\u{258f}")
+        with_caret(title_buf, caret)
     } else {
         title_buf.to_string()
     };
     let author_display = if *field == EditBookField::Author {
-        format!("{author_buf}\u{258f}")
+        with_caret(author_buf, caret)
     } else {
         author_buf.to_string()
     };
