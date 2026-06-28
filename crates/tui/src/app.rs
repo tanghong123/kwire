@@ -1231,6 +1231,19 @@ impl AppState {
                         }
                     }
                 }
+                // Live-update the PROJECTED view (app.flat) in place. The list rows
+                // and the Activity ViewModel path read app.flat, which is otherwise
+                // only rebuilt on `Refresh` (StatusChanged/Done) — so without this
+                // the displayed % freezes at its start-of-download value (~0%) until
+                // Done. The periodic redraw tick then paints the advancing %.
+                self.update_flat_progress(
+                    md5,
+                    *bytes_done,
+                    *total_bytes,
+                    *speed_bps,
+                    *eta_secs,
+                    host,
+                );
             }
             Done { md5, .. } => {
                 self.transfers.remove(md5);
@@ -1239,6 +1252,44 @@ impl AppState {
                 self.transfers.remove(md5);
             }
             _ => {}
+        }
+    }
+
+    /// Live-patch the matching downloading copy's progress in the projected
+    /// `app.flat` (by md5) from a `Progress::Bytes` tick, so the list rows and the
+    /// Activity ViewModel path advance between `Refresh` events instead of freezing
+    /// at the start-of-download %. The `%` is recomputed only when the total size
+    /// is known; bytes/host/speed/eta are always updated.
+    fn update_flat_progress(
+        &mut self,
+        md5: &str,
+        bytes_done: u64,
+        total_bytes: Option<u64>,
+        speed_bps: Option<u64>,
+        eta_secs: Option<u64>,
+        host: &str,
+    ) {
+        let pct = match total_bytes {
+            Some(total) if total > 0 => {
+                Some((((bytes_done as f64 / total as f64) * 100.0).round() as u32).min(100))
+            }
+            _ => None,
+        };
+        for fb in &mut self.flat {
+            for v in &mut fb.book.versions {
+                if v.md5 == md5 {
+                    if let Some(p) = pct {
+                        v.progress = p;
+                    }
+                    v.total_bytes = total_bytes;
+                    v.downloaded_bytes = Some(bytes_done);
+                    v.speed_bps = speed_bps;
+                    v.eta_secs = eta_secs;
+                    if !host.is_empty() {
+                        v.host = Some(host.to_string());
+                    }
+                }
+            }
         }
     }
 

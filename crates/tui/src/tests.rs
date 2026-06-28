@@ -7872,4 +7872,40 @@ mod tests {
             ]
         );
     }
+
+    /// A `Progress::Bytes` telemetry tick must advance the projected progress
+    /// (app.flat) WITHOUT a StatusChanged/Refresh, so the list + activity don't
+    /// freeze at the start-of-download %.
+    #[test]
+    fn bytes_tick_advances_progress_without_refresh() {
+        use libgen_core::queue::Progress;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let md5 = "a".repeat(32);
+        app.flat[0].book.versions = vec![mk_var("Downloading", "epub", "downloading", 0, &md5)];
+
+        // Telemetry only — no Refresh.
+        app.apply_progress(&Progress::Bytes {
+            md5: md5.clone(),
+            leg_id: 0,
+            is_hedge: false,
+            host: "libgen.li".into(),
+            bytes_done: 50,
+            total_bytes: Some(100),
+            speed_bps: Some(2000),
+            eta_secs: Some(1),
+        });
+
+        assert_eq!(
+            app.flat[0].book.versions[0].progress, 50,
+            "Bytes tick must advance projected progress without a Refresh"
+        );
+
+        let backend = TestBackend::new(132, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(buf.contains("dling 50%"), "list shows live 50%: {buf}");
+    }
 }
