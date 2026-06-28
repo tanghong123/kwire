@@ -375,11 +375,14 @@ async fn main() -> Result<()> {
                             .unwrap_or(false)
                     })
                     .count();
+                let (downloading, paused) = list_transfer_counts(&vm);
                 summaries.push(ListSummary {
                     id,
                     title: vm.title,
                     done,
                     total,
+                    downloading,
+                    paused,
                     is_manual: vm.is_manual,
                 });
             }
@@ -868,6 +871,27 @@ async fn resolve_book_orch(
     }
 }
 
+/// `(downloading, paused)` variation counts for a list view — mirrors the desktop
+/// sidebar's `statusOf`: a list reads as "running" if any variation is
+/// downloading, else "paused" if any is paused (and none downloading).
+fn list_transfer_counts(vm: &libgen_engine::ViewModel) -> (usize, usize) {
+    let mut downloading = 0;
+    let mut paused = 0;
+    for v in vm
+        .groups
+        .iter()
+        .flat_map(|g| g.books.iter())
+        .flat_map(|b| b.versions.iter())
+    {
+        match v.state.as_str() {
+            "downloading" => downloading += 1,
+            "paused" => paused += 1,
+            _ => {}
+        }
+    }
+    (downloading, paused)
+}
+
 /// Recompute summaries for ALL loaded lists and update `app.all_lists`.
 async fn refresh_all_list_summaries(app: &mut AppState, handles: &EngineHandles) {
     let (current_id, pairs) = {
@@ -907,11 +931,14 @@ async fn refresh_all_list_summaries(app: &mut AppState, handles: &EngineHandles)
                         .unwrap_or(false)
                 })
                 .count();
+            let (downloading, paused) = list_transfer_counts(&vm);
             summaries.push(ListSummary {
                 id,
                 title: vm.title,
                 done,
                 total,
+                downloading,
+                paused,
                 is_manual: vm.is_manual,
             });
         }

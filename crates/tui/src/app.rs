@@ -552,6 +552,11 @@ pub struct ListSummary {
     pub done: usize,
     /// Total number of books in this list.
     pub total: usize,
+    /// Count of variations currently downloading (any > 0 ⇒ the list is "running").
+    pub downloading: usize,
+    /// Count of variations paused mid-transfer (any > 0, with none downloading,
+    /// ⇒ the list is "paused"). Mirrors the desktop sidebar's per-list status dot.
+    pub paused: usize,
     /// True for the singleton mutable **Manual** list (mirrors the engine's
     /// `ListSettings::is_manual`). The list view shows per-book add/remove
     /// affordances (and the `x` remove hint) only for this list.

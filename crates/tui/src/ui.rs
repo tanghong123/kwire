@@ -523,10 +523,24 @@ fn render_list_strip(frame: &mut Frame, app: &mut AppState, area: Rect) {
         .enumerate()
         .map(|(i, list)| {
             let active = !app.all_active && i == app.active_list_idx;
-            let text = if active {
-                format!("   \u{2605} {} {}/{}", list.title, list.done, list.total)
+            // Per-list run state, mirroring the desktop sidebar dot: ▸ running
+            // (any variation downloading), ⏸ paused (some paused, none running),
+            // else nothing. A width-1 glyph carried inline in the single-style
+            // column (shape conveys state since the column has one color).
+            let status = if list.downloading > 0 {
+                "\u{25b8} " // ▸ running
+            } else if list.paused > 0 {
+                "\u{23f8} " // ⏸ paused
             } else {
-                format!("   {} {}/{}", list.title, list.done, list.total)
+                ""
+            };
+            let text = if active {
+                format!(
+                    "   \u{2605} {}{} {}/{}",
+                    status, list.title, list.done, list.total
+                )
+            } else {
+                format!("   {}{} {}/{}", status, list.title, list.done, list.total)
             };
             Lbl { text, active }
         })

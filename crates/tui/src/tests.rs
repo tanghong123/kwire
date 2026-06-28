@@ -342,6 +342,8 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
             crate::app::ListSummary {
@@ -349,6 +351,8 @@ mod tests {
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
         ];
@@ -393,6 +397,8 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
             crate::app::ListSummary {
@@ -400,6 +406,8 @@ mod tests {
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
         ];
@@ -425,6 +433,8 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
             crate::app::ListSummary {
@@ -432,6 +442,8 @@ mod tests {
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
         ];
@@ -459,6 +471,8 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
             crate::app::ListSummary {
@@ -466,6 +480,8 @@ mod tests {
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
         ];
@@ -513,6 +529,8 @@ mod tests {
                     title: "List 1".into(),
                     done: 0,
                     total: 1,
+                    downloading: 0,
+                    paused: 0,
                     is_manual: false,
                 },
                 crate::app::ListSummary {
@@ -520,6 +538,8 @@ mod tests {
                     title: "List 2".into(),
                     done: 0,
                     total: 1,
+                    downloading: 0,
+                    paused: 0,
                     is_manual: false,
                 },
             ]
@@ -560,6 +580,8 @@ mod tests {
             title: "Only".into(),
             done: 0,
             total: 1,
+            downloading: 0,
+            paused: 0,
             is_manual: false,
         }];
         app.active_list_idx = 0;
@@ -581,6 +603,8 @@ mod tests {
             title: "Manual".into(),
             done: 0,
             total: 1,
+            downloading: 0,
+            paused: 0,
             is_manual: false,
         }];
         app.active_list_idx = 0;
@@ -865,6 +889,8 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
             crate::app::ListSummary {
@@ -872,6 +898,8 @@ mod tests {
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
         ];
@@ -1873,6 +1901,8 @@ mod tests {
             title: "Test List".into(),
             done: 1,
             total: 2,
+            downloading: 0,
+            paused: 0,
             is_manual: false,
         });
 
@@ -5591,6 +5621,8 @@ mod tests {
             title: "Manual".into(),
             done: 0,
             total: 1,
+            downloading: 0,
+            paused: 0,
             is_manual: true,
         }];
         app.active_list_idx = 0;
@@ -5969,6 +6001,49 @@ mod tests {
         );
     }
 
+    /// The list strip shows a per-list run-state indicator: ▸ for a list with a
+    /// download in flight, ⏸ for a list with a paused transfer (mirrors the
+    /// desktop sidebar status dot).
+    #[test]
+    fn list_strip_shows_run_state_indicator() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // a view must be loaded or render() shows the splash
+        app.all_active = false;
+        app.all_lists = vec![
+            crate::app::ListSummary {
+                id: "l1".into(),
+                title: "Running List".into(),
+                done: 0,
+                total: 3,
+                downloading: 2,
+                paused: 0,
+                is_manual: false,
+            },
+            crate::app::ListSummary {
+                id: "l2".into(),
+                title: "Paused List".into(),
+                done: 0,
+                total: 3,
+                downloading: 0,
+                paused: 1,
+                is_manual: false,
+            },
+        ];
+        app.active_list_idx = 0;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            content.contains('\u{25b8}'),
+            "a downloading list should show the ▸ running indicator"
+        );
+        assert!(
+            content.contains('\u{23f8}'),
+            "a paused list should show the ⏸ paused indicator"
+        );
+    }
+
     /// Click an already-selected needs_selection book → OpenPicker.
     #[test]
     fn mouse_click_selected_needs_selection_fires_open_picker() {
@@ -5997,6 +6072,8 @@ mod tests {
                 title: "Classics".into(),
                 done: 0,
                 total: 3,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
             crate::app::ListSummary {
@@ -6004,6 +6081,8 @@ mod tests {
                 title: "Fiction".into(),
                 done: 1,
                 total: 5,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
         ];
@@ -6913,6 +6992,8 @@ mod tests {
                 title: format!("Reading List Number {i}"),
                 done: i,
                 total: 10,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             });
         }
@@ -7605,6 +7686,8 @@ mod tests {
                 title: "List 1".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
             crate::app::ListSummary {
@@ -7612,6 +7695,8 @@ mod tests {
                 title: "List 2".into(),
                 done: 0,
                 total: 1,
+                downloading: 0,
+                paused: 0,
                 is_manual: false,
             },
         ]
@@ -7767,6 +7852,8 @@ mod tests {
                     title: format!("List {i}"),
                     done: 0,
                     total: 1,
+                    downloading: 0,
+                    paused: 0,
                     is_manual: false,
                 })
                 .collect();
