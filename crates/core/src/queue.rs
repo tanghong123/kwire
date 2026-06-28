@@ -1245,19 +1245,26 @@ impl Scheduler {
                 Some(&req.md5),
             );
 
-            // FAST PATH: when hedging is disabled AND this leg is not part of a
-            // live race, await the transfer directly — byte-for-byte the original
-            // behavior, zero extra wakeups (so pause/cancel/resume timing is
-            // unchanged). Only when hedging is enabled do we run the stall monitor.
-            let needs_monitor = self.hedge.enabled || leg.is_hedge;
-            let result = if !needs_monitor {
-                dl.await
-            } else {
+            // Always run the poll loop while the transfer streams: it drives the
+            // per-leg PROGRESS emit every tick, so %/ETA/bar move in real time even
+            // with hedging OFF (the default). The stall→hedge decision INSIDE the
+            // loop is still gated on `hedge.enabled`, so with hedging off this only
+            // adds a lightweight ~200ms `.part`-size poll — no extra network, and
+            // pause/cancel still observe the same cancel tokens.
+            let result = {
                 tokio::pin!(dl);
                 loop {
-                    // Poll the stall monitor on a tick while the download runs. The
-                    // tick is a fraction of the stall window so detection is timely.
-                    let tick = (self.hedge.stall_window / 8).max(Duration::from_millis(25));
+                    // Poll on a tick while the download runs. This drives BOTH the
+                    // stall monitor AND the per-leg progress emit, so cap it at
+                    // 200ms: a fraction of the stall window would be multiple
+                    // seconds (stall_window/8 ≈ 1.9s by default), which is far too
+                    // coarse to show progress — a small/fast file finishes between
+                    // polls, so the UI only ever sees 0% → done. Stall detection
+                    // keys off elapsed time, not tick count, so a finer tick is
+                    // harmless there.
+                    let tick = (self.hedge.stall_window / 8)
+                        .min(Duration::from_millis(200))
+                        .max(Duration::from_millis(25));
                     tokio::select! {
                         biased;
                         // If a sibling won the race, abort this leg promptly.

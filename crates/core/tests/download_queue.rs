@@ -419,6 +419,61 @@ async fn corrupt_body_fails_md5_verification() {
     assert!(!libgen_core::download::part_path(&dest).exists());
 }
 
+/// A download slow enough to span the poll tick must emit INTERMEDIATE progress
+/// (0 < bytes_done < total), not just start + completion — so the UI shows a
+/// moving bar. Regression: the scheduler poll was `stall_window/8` (~1.9s), so
+/// anything finishing faster (most small/fast files) only ever reported 0% then
+/// done; the poll is now capped at 200ms.
+#[tokio::test]
+async fn slow_download_emits_intermediate_progress() {
+    let server = MockServer::start().await;
+    let blob = make_blob(8000);
+    let md5 = md5_hex(&blob);
+    let mut cfg = PathConfig::new(blob.clone());
+    cfg.delay = Duration::from_millis(500); // stream stays in flight ~500ms
+    server.set(&format!("/get/{md5}"), cfg).await;
+
+    let resolver = DirectUrlResolver::new("mock", server.template("/get"), client());
+    let chain = ResolverChain::new(vec![Arc::new(resolver)]);
+    let sched = Arc::new(
+        SchedulerBuilder::new(chain, client())
+            .default_limits(HostLimits {
+                max_concurrency: 2,
+                min_interval: Duration::from_millis(0),
+                max_attempts: 2,
+            })
+            .build(),
+    );
+
+    let dir = tempdir();
+    let (tx, rx) = mpsc::channel(256);
+    let ev_task = tokio::spawn(collect_events(rx));
+    let outcomes = sched
+        .run(
+            vec![DownloadRequest::new(md5.clone(), dir.join("out.bin"))],
+            tx,
+        )
+        .await;
+    let events = ev_task.await.unwrap();
+    assert!(outcomes[0].result.is_ok(), "download should succeed");
+
+    let byte_ticks: Vec<u64> = events
+        .iter()
+        .filter_map(|e| match e {
+            Progress::Bytes { bytes_done, .. } => Some(*bytes_done),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        byte_ticks
+            .iter()
+            .any(|&b| b > 0 && (b as usize) < blob.len()),
+        "expected an intermediate Progress::Bytes (0 < bytes_done < {}), got {:?}",
+        blob.len(),
+        byte_ticks
+    );
+}
+
 #[tokio::test]
 async fn resume_after_truncated_download() {
     // Deterministic resume: simulate a prior interrupted download by writing a
