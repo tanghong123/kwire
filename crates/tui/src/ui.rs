@@ -2577,18 +2577,10 @@ fn render_detail_modal(
         .iter()
         .filter(|v| v.state == "downloading")
         .count();
-    let backfill_note = if book.backfilled.is_empty() {
-        format!(
-            "{} req \u{00b7} {} done \u{00b7} {} active",
-            n_requested, n_done, n_active
-        )
-    } else {
-        format!("{} auto-filled from match", book.backfilled.join(" & "))
-    };
-    let subtitle = format!(
-        "{} \u{00b7} seq {:02}   \u{25cf} {}",
-        fb.group_name, book.seq, backfill_note
-    );
+    // The trailing "● …" note was redundant: the req/done/active counts already
+    // appear in the VARIATIONS header below, and an auto-filled year is already
+    // shown top-right. Keep the subtitle to just the group + sequence.
+    let subtitle = format!("{} \u{00b7} seq {:02}", fb.group_name, book.seq);
     // #6: ellipsize (display-width aware) so a long group name degrades to `…`
     // instead of hard-clipping mid-word at narrow widths. No marquee (decided).
     let subtitle = crate::textfit::ellipsize(&subtitle, split[1].width as usize);

@@ -1002,8 +1002,8 @@ mod tests {
         );
     }
 
-    /// #6: the detail breadcrumb subtitle (`{group} · seq NN ● note`) must
-    /// ellipsize with `…` at a narrow width instead of HARD-CLIPPING the tail.
+    /// #6: the detail breadcrumb subtitle (`{group} · seq NN`) must ellipsize
+    /// with `…` at a narrow width instead of HARD-CLIPPING the tail.
     #[test]
     fn detail_breadcrumb_ellipsizes_long_group_at_width_80() {
         use crate::app::DetailSubFocus;
@@ -1011,8 +1011,9 @@ mod tests {
             BookInput, BookRequest, Candidate, DownloadList, Format, Group, RequestStatus,
         };
 
-        // A group name long enough that the breadcrumb overflows the modal width.
-        let long_group = "Lift-Off Aerospace Engineering Handbook Master Collection Omnibus";
+        // A group name long enough that the breadcrumb overflows the modal width
+        // on its own (the old "● N req · …" trailer was removed).
+        let long_group = "Lift-Off Aerospace Engineering Handbook Master Collection Omnibus Deluxe Annotated Edition";
         let mut g = Group::new(long_group);
         let mut req = BookRequest::new(BookInput {
             title: "Apollo Guidance Computer".into(),
@@ -1077,10 +1078,10 @@ mod tests {
             crumb.contains('\u{2026}'),
             "breadcrumb must show … when clipped: {crumb:?}"
         );
-        // …and the clipped tail (the back-fill note `… ● N req · N done · N active`)
-        // is NOT rendered through — i.e. truncated, not hard-clipped past the edge.
+        // …and the clipped tail (the " · seq NN" suffix) is NOT rendered through —
+        // i.e. truncated with …, not hard-clipped past the edge.
         assert!(
-            !crumb.contains("active"),
+            !crumb.contains("seq"),
             "breadcrumb tail must be truncated with …, not hard-clipped: {crumb:?}"
         );
     }
@@ -7985,5 +7986,31 @@ mod tests {
         // Narrow terminal: must still render without panicking.
         let mut narrow = Terminal::new(TestBackend::new(48, 24)).unwrap();
         narrow.draw(|f| ui::render(f, &mut app)).unwrap();
+    }
+
+    /// The detail subtitle no longer carries the redundant "● …" trailer (the
+    /// auto-filled note / req-done-active counts), even when a field is backfilled.
+    #[test]
+    fn detail_subtitle_has_no_backfill_trailer() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        app.flat[0].book.backfilled = vec!["year".into()];
+        app.flat[0].book.versions = vec![mk_var("Copy", "epub", "available", 0, &"a".repeat(32))];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        let backend = TestBackend::new(132, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            !buf.contains("auto-filled"),
+            "detail subtitle must not show the auto-filled trailer: {buf}"
+        );
     }
 }
