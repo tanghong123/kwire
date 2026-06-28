@@ -2187,7 +2187,7 @@ fn render_picker_modal(
         .border_style(style_dim())
         .title(Span::styled(
             picker_border_title(&fb.book.title, area.width),
-            style_dim(),
+            theme::style_modal_title(),
         ))
         .style(style_normal());
 
@@ -2200,7 +2200,7 @@ fn render_picker_modal(
 
     // Layout: subheader (1) + column header row (1) + table rows + rule (1) + hint (wraps)
     const PICKER_HINT: &str =
-        "\u{2191}\u{2193} pick  \u{23ce} this copy  a all formats  v meta  esc cancel";
+        "\u{2191}\u{2193} pick  \u{23ce} this copy  a all formats  v meta  m none correct  esc cancel";
     let picker_hint_h = hint_wrap_height(PICKER_HINT, padded.width);
     let split = Layout::vertical([
         Constraint::Length(1),             // subheader
@@ -3607,6 +3607,7 @@ pub(crate) fn help_page_rows(page: HelpPage) -> (Vec<HelpRow>, Vec<HelpRow>) {
                 Head("MORE"),
                 Key("a", "all preferred formats"),
                 Key("v", "candidate metadata"),
+                Key("m", "none correct \u{2192} mark not-found"),
                 Key("esc", "close"),
             ],
         ),

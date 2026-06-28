@@ -8046,4 +8046,22 @@ mod tests {
             "detail title renders"
         );
     }
+
+    /// `m` in the picker marks the book not-found (none of the copies are correct)
+    /// and closes the picker.
+    #[test]
+    fn picker_m_marks_not_found() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm_needs_selection());
+        app.modal = Some(Modal::Picker {
+            book_flat_index: 0,
+            selected: 0,
+        });
+        let intent = app.on_input(key(KeyCode::Char('m')));
+        assert!(
+            matches!(intent, Intent::MarkNotFound { .. }),
+            "picker m must mark the book not-found, got {intent:?}"
+        );
+        assert!(app.modal.is_none(), "picker closes after mark-not-found");
+    }
 }

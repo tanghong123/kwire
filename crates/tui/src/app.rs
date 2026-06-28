@@ -2069,6 +2069,19 @@ impl AppState {
                             }
                             Intent::Redraw
                         }
+                        // `m` — none of these copies are correct → mark the book
+                        // not-found and close the picker.
+                        KeyCode::Char('m') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                let intent = Intent::MarkNotFound {
+                                    group_path: vec![fb.group_index],
+                                    book_index: fb.book_index_in_group,
+                                };
+                                self.modal = None;
+                                return intent;
+                            }
+                            Intent::Redraw
+                        }
                         // `?` — open Help on the Picker page, restoring the picker on close.
                         KeyCode::Char('?') => {
                             self.modal = Some(Modal::Help {
