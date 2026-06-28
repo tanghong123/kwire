@@ -702,6 +702,12 @@ pub struct AppState {
     /// Live scheduler telemetry keyed by md5. Updated by Progress events from the engine.
     pub transfers: std::collections::HashMap<String, ActiveTransfer>,
 
+    /// Global md5 → book-title map across ALL loaded lists (rebuilt each refresh
+    /// from every list's snapshot). Lets the Activity pane label a transfer whose
+    /// book isn't in the CURRENT view (e.g. a download from a list you're not
+    /// viewing) with its real title instead of the bare md5.
+    pub md5_titles: std::collections::HashMap<String, String>,
+
     /// Tab-completion candidates for the `:` command line.
     /// Non-empty while the wildmenu is visible.
     pub completion_candidates: Vec<String>,
@@ -905,6 +911,7 @@ impl AppState {
             settings_selected: 0,
             settings_draft: None,
             transfers: std::collections::HashMap::new(),
+            md5_titles: std::collections::HashMap::new(),
             completion_candidates: Vec::new(),
             completion_index: 0,
             status_msg: None,
@@ -1218,17 +1225,20 @@ impl AppState {
                 t.total_bytes = *total_bytes;
                 t.speed_bps = *speed_bps;
                 t.eta_secs = *eta_secs;
-                // Populate title from current ViewModel if we can find it.
+                // Populate title from the current ViewModel, falling back to the
+                // GLOBAL md5→title map (covers a transfer whose book isn't in the
+                // current view — e.g. a download from a list you're not viewing),
+                // so the Activity pane shows a real title instead of the md5.
                 if t.title.is_empty() {
-                    if let Some(vm) = &self.view {
-                        'outer: for g in &vm.groups {
-                            for b in &g.books {
-                                if b.versions.iter().any(|v| v.md5 == *md5) {
-                                    t.title = b.title.clone();
-                                    break 'outer;
-                                }
-                            }
-                        }
+                    let from_view = self.view.as_ref().and_then(|vm| {
+                        vm.groups
+                            .iter()
+                            .flat_map(|g| &g.books)
+                            .find(|b| b.versions.iter().any(|v| v.md5 == *md5))
+                            .map(|b| b.title.clone())
+                    });
+                    if let Some(title) = from_view.or_else(|| self.md5_titles.get(md5).cloned()) {
+                        t.title = title;
                     }
                 }
                 // Live-update the PROJECTED view (app.flat) in place. The list rows

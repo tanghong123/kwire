@@ -866,10 +866,19 @@ async fn refresh_all_list_summaries(app: &mut AppState, handles: &EngineHandles)
     };
 
     let mut summaries: Vec<ListSummary> = Vec::new();
+    let mut md5_titles: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for (id, orch_arc) in pairs {
         let guard = orch_arc.lock().await;
         if let Ok(snap) = guard.snapshot() {
             let vm = build_with_id(id.clone(), &snap);
+            // Global md5 → title across ALL loaded lists, so the Activity pane can
+            // label a transfer whose book isn't in the current view (Task #4).
+            for b in vm.groups.iter().flat_map(|g| &g.books) {
+                for v in &b.versions {
+                    md5_titles.insert(v.md5.clone(), b.title.clone());
+                }
+            }
             let total: usize = vm.groups.iter().map(|g| g.books.len()).sum();
             let done: usize = vm
                 .groups
@@ -897,6 +906,7 @@ async fn refresh_all_list_summaries(app: &mut AppState, handles: &EngineHandles)
         .position(|s| s.id == current_id)
         .unwrap_or(0);
     app.all_lists = summaries;
+    app.md5_titles = md5_titles;
     app.active_list_idx = active_idx;
     // Keep the list-strip's aggregate highlight in sync with the actual current
     // view. cycle_list keeps these consistent, but `:add` / open_list change

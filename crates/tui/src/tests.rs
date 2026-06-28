@@ -7908,4 +7908,31 @@ mod tests {
         let buf = buffer_string(&terminal);
         assert!(buf.contains("dling 50%"), "list shows live 50%: {buf}");
     }
+
+    /// A transfer whose book isn't in the CURRENT view still gets a real title
+    /// from the global md5→title map (populated from all loaded lists), not the md5.
+    #[test]
+    fn activity_uses_global_md5_title_for_other_lists() {
+        use libgen_core::queue::Progress;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm()); // current view has no md5 = "z"*32
+        let md5 = "z".repeat(32);
+        app.md5_titles.insert(md5.clone(), "Wings of Fire".into());
+
+        app.apply_progress(&Progress::Bytes {
+            md5: md5.clone(),
+            leg_id: 0,
+            is_hedge: false,
+            host: "libgen.li".into(),
+            bytes_done: 1,
+            total_bytes: Some(10),
+            speed_bps: None,
+            eta_secs: None,
+        });
+
+        assert_eq!(
+            app.transfers[&md5].title, "Wings of Fire",
+            "transfer for a book outside the current view uses the global md5→title map"
+        );
+    }
 }
