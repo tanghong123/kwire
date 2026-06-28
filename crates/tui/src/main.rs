@@ -1921,25 +1921,104 @@ async fn download_series_cmd(app: &mut AppState, handles: &EngineHandles) {
         }
     };
 
-    // 4. Add the siblings to the CURRENT list and queue each for discovery.
+    // 4. Create a SEPARATE "<series> (series)" list and add the members there —
+    // NEVER mutate the active/imported list (that immutability invariant is
+    // sacred; mirrors the desktop's `series_to_list`). Then switch to it.
+    let status = match ensure_series_list(handles, &series_name, &titles).await {
+        Ok((added, existed)) => {
+            if existed {
+                format!("Series \"{series_name}\" already imported \u{2014} switched to it")
+            } else {
+                format!("Created \"{series_name} (series)\" with {added} book(s)")
+            }
+        }
+        Err(e) => {
+            tracing::warn!("download_series: ensure_series_list: {e}");
+            format!("Series import failed: {e}")
+        }
+    };
+    handles.engine_wake.notify_one();
+    refresh_active_view(app, handles).await;
+    app.status_msg = Some(status);
+}
+
+/// Create (or reuse) a SEPARATE list titled "{series_name} (series)" — one group
+/// named after the series — add the member titles to it (each queued for
+/// discovery via `add_book`, which sets goal=Complete), load its orchestrator,
+/// and switch the active view to it. NEVER touches the seed/active list, so the
+/// user's imported list stays immutable. On a re-run (list already exists) it
+/// just switches to it without re-adding (no duplicates). Returns
+/// `(books_added, already_existed)`.
+async fn ensure_series_list(
+    handles: &EngineHandles,
+    series_name: &str,
+    titles: &[String],
+) -> Result<(usize, bool), String> {
+    use libgen_core::model::{DownloadList, Group, ListSettings};
+    let cfg = handles.config.lock().expect("config poisoned").clone();
+    let list_title = format!("{series_name} (series)");
+
+    // Find or create the list (its own group named after the series).
+    let (store_id, existed) = {
+        let mut store = open_store(&cfg).map_err(|e| e.to_string())?;
+        match store
+            .list_id_by_title(&list_title)
+            .map_err(|e| e.to_string())?
+        {
+            Some(id) => (id, true),
+            None => {
+                let list = DownloadList {
+                    title: list_title.clone(),
+                    settings: ListSettings::default(),
+                    groups: vec![Group::new(series_name.to_string())],
+                };
+                let id = store.insert_list(&list).map_err(|e| e.to_string())?;
+                (id, false)
+            }
+        }
+    };
+    let id = Library::id_for(store_id);
+
+    // Load the orchestrator if it isn't already attached.
+    let already = { handles.library.lock().await.arc_for(&id).is_some() };
+    if !already {
+        let search = build_search(&cfg).map_err(|e| e.to_string())?;
+        let store2 = open_store(&cfg).map_err(|e| e.to_string())?;
+        let orch = libgen_core::orchestrator::Orchestrator::attach(
+            store2,
+            store_id,
+            search,
+            cfg.effective_out_dir(),
+        )
+        .with_query_concurrency(cfg.app.query_concurrency);
+        handles
+            .library
+            .lock()
+            .await
+            .lists
+            .push(LoadedList::new(id.clone(), orch));
+    }
+
+    // Add members only for a freshly-created list (avoid duplicates on re-run).
     let mut added = 0usize;
-    {
-        let mut guard = orch_arc.lock().await;
-        for t in &titles {
-            match guard.add_book(t, vec![]) {
-                Ok((group_path, book_idx)) => {
-                    let _ = guard.set_goal_one(&group_path, book_idx, Goal::Complete);
-                    added += 1;
+    if !existed {
+        if let Some(orch_arc) = { handles.library.lock().await.arc_for(&id) } {
+            let mut guard = orch_arc.lock().await;
+            for t in titles {
+                // add_book appends to group[0] and sets goal=Complete itself.
+                match guard.add_book(t, vec![]) {
+                    Ok(_) => added += 1,
+                    Err(e) => tracing::warn!("ensure_series_list: add_book '{t}': {e}"),
                 }
-                Err(e) => tracing::warn!("download_series: add_book '{t}': {e}"),
             }
         }
     }
-    handles.engine_wake.notify_one();
-    refresh_active_view(app, handles).await;
-    app.status_msg = Some(format!(
-        "Added {added} book(s) from the series \"{series_name}\""
-    ));
+
+    // Switch the active view to the series list.
+    {
+        handles.library.lock().await.current = id.clone();
+    }
+    Ok((added, existed))
 }
 
 /// Persist the staged settings draft: per-list settings → orchestrator,
