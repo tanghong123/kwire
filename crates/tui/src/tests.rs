@@ -2768,6 +2768,35 @@ mod tests {
         );
     }
 
+    /// A host whose only leg is at 0% still shows its leg count + rate on the
+    /// host row (never blank), even with no measured speed.
+    #[test]
+    fn activity_host_row_shows_count_and_rate_at_zero_pct() {
+        use ratatui::layout::Rect;
+        let backend = TestBackend::new(120, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let mut v = mk_var("Kidnapped", "epub", "downloading", 0, &"f".repeat(32));
+        v.host = Some("cdn2.booksdl.lc".into());
+        app.flat[0].book.versions = vec![v];
+        app.activity_expanded = true;
+        let area = Rect::new(0, 0, 120, 14);
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("cdn2.booksdl.lc"),
+            "host must be shown: {buf:?}"
+        );
+        assert!(
+            buf.contains("1\u{2193} \u{00b7} 0 KB/s"),
+            "host row must show count + rate even at 0%: {buf:?}"
+        );
+    }
+
     /// The Activity header pins the aggregate throughput (↓ rate) to the right
     /// edge and renders it in the download color.
     #[test]

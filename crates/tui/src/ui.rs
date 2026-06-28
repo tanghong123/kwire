@@ -1500,6 +1500,17 @@ fn activity_leg_line(
 
 /// Build the right-pinned STATUS spans for an Activity download leg —
 /// `fmt  NN%  ▰▰▱▱▱▱  eta` — with the percentage and progress bar in the download
+/// Format a transfer rate with a space before the unit (matches the design mock):
+/// `>= 1 MB/s` → "X.Y MB/s", else "N KB/s" (so 396_000 → "396 KB/s",
+/// 1_800_000 → "1.8 MB/s", 0 → "0 KB/s").
+fn fmt_rate(bps: u64) -> String {
+    if bps >= 1_000_000 {
+        format!("{:.1} MB/s", bps as f64 / 1_000_000.0)
+    } else {
+        format!("{} KB/s", bps / 1_000)
+    }
+}
+
 /// Humanize an ETA in seconds for the Activity pane: `< 60` → "Ns"; otherwise
 /// "MmSSs" (e.g. 171 → "2m51s", 64 → "1m04s", 9 → "9s").
 fn fmt_eta(secs: u64) -> String {
@@ -1567,10 +1578,9 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
 
     // Aggregate speed across all live transfers
     let total_speed_bps: u64 = app.transfers.values().filter_map(|t| t.speed_bps).sum();
-    let speed_str = if total_speed_bps >= 1_000_000 {
-        format!("\u{2193} {:.1}MB/s", total_speed_bps as f64 / 1_000_000.0)
-    } else if total_speed_bps >= 1_000 {
-        format!("\u{2193} {}KB/s", total_speed_bps / 1_000)
+    // Empty when nothing is moving, so the header doesn't show "↓ 0 KB/s".
+    let speed_str = if total_speed_bps >= 1_000 {
+        format!("\u{2193} {}", fmt_rate(total_speed_bps))
     } else {
         String::new()
     };
@@ -1727,21 +1737,13 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                     .filter(|t| &t.host == host)
                     .filter_map(|t| t.speed_bps)
                     .sum();
-                let host_speed_str = if host_speed >= 1_000_000 {
-                    format!("{:.1}MB/s", host_speed as f64 / 1_000_000.0)
-                } else if host_speed >= 1_000 {
-                    format!("{}KB/s", host_speed / 1_000)
-                } else {
-                    String::new()
-                };
+                // Always show the leg count + rate on the host row, even at 0 B/s
+                // (a host whose only leg just started shouldn't read as rate-less).
                 let host_rest = format!(
-                    " {}{}",
+                    " {}   {}↓ \u{00b7} {}",
                     host,
-                    if host_speed_str.is_empty() {
-                        String::new()
-                    } else {
-                        format!("   {}↓ \u{00b7} {}", versions.len(), host_speed_str)
-                    }
+                    versions.len(),
+                    fmt_rate(host_speed)
                 );
                 all_content.push(Line::from(vec![
                     // The host status dot reads in the download color (matches the bar).
@@ -1812,22 +1814,11 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
     } else {
         for (host, transfers) in &telemetry_groups {
             let host_speed: u64 = transfers.iter().map(|(_, _, s)| s).sum();
-            let speed_s = if host_speed >= 1_000_000 {
-                format!("{:.1}MB/s", host_speed as f64 / 1_000_000.0)
-            } else if host_speed >= 1_000 {
-                format!("{}KB/s", host_speed / 1_000)
-            } else {
-                String::new()
-            };
             let host_rest = format!(
-                " {}   {}↓{}",
+                " {}   {}↓ \u{00b7} {}",
                 host,
                 transfers.len(),
-                if speed_s.is_empty() {
-                    String::new()
-                } else {
-                    format!(" \u{00b7} {}", speed_s)
-                }
+                fmt_rate(host_speed)
             );
             all_content.push(Line::from(vec![
                 Span::styled("\u{25cf}", Style::default().fg(C_DOWNLOADING)),
@@ -5207,6 +5198,13 @@ mod hint_wrap_tests {
             l3.spans[1].content.as_ref(),
             "marquee offset had no effect"
         );
+    }
+
+    #[test]
+    fn fmt_rate_spaces_unit_and_thresholds() {
+        assert_eq!(fmt_rate(0), "0 KB/s");
+        assert_eq!(fmt_rate(396_000), "396 KB/s");
+        assert_eq!(fmt_rate(1_800_000), "1.8 MB/s");
     }
 
     #[test]
