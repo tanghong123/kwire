@@ -215,7 +215,14 @@ impl SettingsDraft {
 // (`:requery`, `:delete`, `:reorganize`, `:cleanup`, `:pause`, `:start`,
 // `:download-series`, `:refresh-mirrors`, `:mouse`, …) still dispatch when
 // typed but are intentionally not advertised — they will move to hot keys.
-const COMMANDS: &[&str] = &["settings", "import", "add", "start-all", "pause-all"];
+const COMMANDS: &[&str] = &[
+    "settings",
+    "import",
+    "add",
+    "about",
+    "start-all",
+    "pause-all",
+];
 
 /// Filesystem-path completion for `:import <partial-path>`.
 ///
@@ -520,6 +527,9 @@ pub enum Modal {
         /// Modal to return to on Esc; `None` means close entirely.
         parent: Option<Box<Modal>>,
     },
+    /// The `:about` splash — the empty-screen wordmark + tagline in a modal.
+    /// Closes on Esc. No state.
+    About,
 }
 
 // ---------------------------------------------------------------------------
@@ -1986,12 +1996,22 @@ impl AppState {
             return Intent::Redraw;
         }
 
+        // `:about` splash — any key dismisses it.
+        if matches!(&self.modal, Some(Modal::About)) {
+            if let Event::Key(_) = ev {
+                self.modal = None;
+            }
+            return Intent::Redraw;
+        }
+
         let modal = match &self.modal {
             Some(m) => m.clone(),
             None => return Intent::Redraw,
         };
 
         match &modal {
+            // Handled above (any key dismisses); arm kept for exhaustiveness.
+            Modal::About => Intent::Redraw,
             Modal::Picker {
                 book_flat_index,
                 selected,

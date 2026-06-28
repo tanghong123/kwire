@@ -186,13 +186,109 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             Modal::Snapshot { title, lines, .. } => {
                 render_snapshot_modal(frame, &title, &lines);
             }
+            Modal::About => render_about_modal(frame),
         }
     }
+}
+
+/// The `:about` modal — the empty-screen splash (logo + KWIRE wordmark +
+/// tagline) in a centered box, reusing the shared splash content. Esc closes.
+fn render_about_modal(frame: &mut Frame) {
+    let area = centered_rect(70, 19, frame.area());
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(style_dim())
+        .title(Span::styled(" about ", theme::style_modal_title()))
+        .style(style_normal());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let padded = inner.inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
+
+    // logo(3) blank(1) wordmark(6) blank(1) tagline(2) blank(1) footer(1)
+    let parts = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(1),
+        Constraint::Length(6),
+        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(padded);
+
+    let logo_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(style_dim());
+    let logo_area = centered_rect(9, 3, parts[0]);
+    frame.render_widget(
+        Paragraph::new("\u{25a4} \u{25a4} \u{25a4}")
+            .alignment(Alignment::Center)
+            .style(style_dim())
+            .block(logo_block),
+        logo_area,
+    );
+    frame.render_widget(
+        Paragraph::new(kwire_banner_lines()).alignment(Alignment::Center),
+        parts[2],
+    );
+    frame.render_widget(
+        Paragraph::new(kwire_tagline_lines()).alignment(Alignment::Center),
+        parts[4],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled("esc to close", style_dim())).alignment(Alignment::Center),
+        parts[6],
+    );
 }
 
 // ---------------------------------------------------------------------------
 // Empty / first-run screen
 // ---------------------------------------------------------------------------
+
+/// The "KWIRE" ASCII-art wordmark (ANSI Shadow figlet, 6 rows), in the bright
+/// bold color. Shared by the empty/first-run splash and the `:about` modal.
+fn kwire_banner_lines() -> Vec<Line<'static>> {
+    const BANNER: &[&str] = &[
+        "██╗  ██╗ ██╗    ██╗ ██╗ ██████╗  ███████╗",
+        "██║ ██╔╝ ██║    ██║ ██║ ██╔══██╗ ██╔════╝",
+        "█████╔╝  ██║ █╗ ██║ ██║ ██████╔╝ █████╗  ",
+        "██╔═██╗  ██║███╗██║ ██║ ██╔══██╗ ██╔══╝  ",
+        "██║  ██╗ ╚███╔███╔╝ ██║ ██║  ██║ ███████╗",
+        "╚═╝  ╚═╝  ╚══╝╚══╝  ╚═╝ ╚═╝  ╚═╝ ╚══════╝",
+    ];
+    let style = Style::default().fg(C_BRIGHT).add_modifier(Modifier::BOLD);
+    BANNER
+        .iter()
+        .map(|row| Line::from(Span::styled(*row, style)))
+        .collect()
+}
+
+/// The two-line tagline ("A quire gathers …"). Shared by the splash + `:about`.
+fn kwire_tagline_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            Span::styled("A ", Style::default().fg(C_WARM)),
+            Span::styled(
+                "quire",
+                Style::default().fg(C_WARM).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " gathers folded sheets into one section of a book \u{2014}",
+                Style::default().fg(C_WARM),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "kwire gathers a scattered reading list into one tidy collection.",
+            Style::default().fg(C_WARM),
+        )),
+    ]
+}
 
 fn render_empty(frame: &mut Frame, app: &mut AppState) {
     let area = frame.area();
@@ -261,45 +357,14 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     );
 
     // 2. Wordmark — ASCII-art block-letter banner, centered, in the bright color.
-    //    Generated from the ANSI Shadow figlet font for "KWIRE" (6 rows × 41 cols).
-    let banner: &[&str] = &[
-        "██╗  ██╗ ██╗    ██╗ ██╗ ██████╗  ███████╗",
-        "██║ ██╔╝ ██║    ██║ ██║ ██╔══██╗ ██╔════╝",
-        "█████╔╝  ██║ █╗ ██║ ██║ ██████╔╝ █████╗  ",
-        "██╔═██╗  ██║███╗██║ ██║ ██╔══██╗ ██╔══╝  ",
-        "██║  ██╗ ╚███╔███╔╝ ██║ ██║  ██║ ███████╗",
-        "╚═╝  ╚═╝  ╚══╝╚══╝  ╚═╝ ╚═╝  ╚═╝ ╚══════╝",
-    ];
-    let banner_style = Style::default().fg(C_BRIGHT).add_modifier(Modifier::BOLD);
-    let banner_lines: Vec<Line> = banner
-        .iter()
-        .map(|row| Line::from(Span::styled(*row, banner_style)))
-        .collect();
     frame.render_widget(
-        Paragraph::new(banner_lines).alignment(Alignment::Center),
+        Paragraph::new(kwire_banner_lines()).alignment(Alignment::Center),
         parts[2],
     );
 
-    // 3. Tagline — 2 lines, "quire" emphasized
-    //    "A quire gathers folded sheets into one section of a book —"
-    //    "kwire gathers a scattered reading list into one tidy collection."
-    let line1 = Line::from(vec![
-        Span::styled("A ", Style::default().fg(C_WARM)),
-        Span::styled(
-            "quire",
-            Style::default().fg(C_WARM).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " gathers folded sheets into one section of a book \u{2014}",
-            Style::default().fg(C_WARM),
-        ),
-    ]);
-    let line2 = Line::from(Span::styled(
-        "kwire gathers a scattered reading list into one tidy collection.",
-        Style::default().fg(C_WARM),
-    ));
+    // 3. Tagline — 2 lines, "quire" emphasized.
     frame.render_widget(
-        Paragraph::new(vec![line1, line2]).alignment(Alignment::Center),
+        Paragraph::new(kwire_tagline_lines()).alignment(Alignment::Center),
         parts[4],
     );
 

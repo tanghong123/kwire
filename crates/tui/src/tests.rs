@@ -2257,7 +2257,7 @@ mod tests {
 
     #[test]
     fn tab_on_empty_buf_opens_wildmenu_with_all_commands() {
-        // ":" + Tab → wildmenu advertises exactly the five supported commands.
+        // ":" + Tab → wildmenu advertises exactly the supported commands.
         let mut app = AppState::new();
         app.on_input(key(KeyCode::Char(':'))); // buf = ""
         app.on_input(key(KeyCode::Tab));
@@ -2265,14 +2265,21 @@ mod tests {
             !app.completion_candidates.is_empty(),
             "Tab on empty prefix should open wildmenu"
         );
-        // The advertised set is exactly these five.
+        // The advertised set is exactly these commands.
         let mut got = app.completion_candidates.clone();
         got.sort();
-        let mut want = vec!["add", "import", "pause-all", "settings", "start-all"];
+        let mut want = vec![
+            "about",
+            "add",
+            "import",
+            "pause-all",
+            "settings",
+            "start-all",
+        ];
         want.sort();
         assert_eq!(
             got, want,
-            "wildmenu must advertise exactly the five commands"
+            "wildmenu must advertise exactly the supported commands"
         );
         // Unadvertised / removed commands must NOT appear.
         for cmd in &["open", "add-md5", "requery", "delete", "cleanup", "mouse"] {
@@ -8147,5 +8154,36 @@ mod tests {
             "completed to the full filename: {cands:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `:ab` + Tab completes to `about`, the About modal renders the splash, and
+    /// any key dismisses it.
+    #[test]
+    fn about_command_completes_and_modal_renders() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+
+        // ":ab" + Tab → "about" (the only command with that prefix).
+        app.command_buf = Some("ab".into());
+        app.on_input(key(KeyCode::Tab));
+        assert_eq!(
+            app.command_buf.as_deref(),
+            Some("about"),
+            "ab → about completion"
+        );
+
+        // The About modal renders the splash (title + tagline).
+        app.command_buf = None;
+        app.modal = Some(Modal::About);
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(buf.contains("about"), "about title renders: {buf}");
+        assert!(buf.contains("gathers"), "tagline renders: {buf}");
+
+        // Any key dismisses.
+        app.on_input(key(KeyCode::Esc));
+        assert!(app.modal.is_none(), "esc closes the about modal");
     }
 }

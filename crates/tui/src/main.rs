@@ -613,6 +613,9 @@ async fn handle_command_async(
             };
             app.open_settings(&app_settings);
         }
+        "about" => {
+            app.modal = Some(Modal::About);
+        }
         "help" => {
             app.modal = Some(Modal::Help {
                 page: HelpPage::List,
