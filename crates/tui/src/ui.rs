@@ -210,9 +210,9 @@ fn render_about_modal(frame: &mut Frame) {
         vertical: 0,
     });
 
-    // logo(3) blank(1) wordmark(6) blank(1) tagline(2) blank(1) footer(1)
+    // logo(4) blank(1) wordmark(6) blank(1) tagline(2) blank(1) footer(1)
     let parts = Layout::vertical([
-        Constraint::Length(3),
+        Constraint::Length(4),
         Constraint::Length(1),
         Constraint::Length(6),
         Constraint::Length(1),
@@ -223,16 +223,9 @@ fn render_about_modal(frame: &mut Frame) {
     ])
     .split(padded);
 
-    let logo_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(style_dim());
-    let logo_area = centered_rect(9, 3, parts[0]);
     frame.render_widget(
-        Paragraph::new("\u{25a4} \u{25a4} \u{25a4}")
-            .alignment(Alignment::Center)
-            .style(style_dim())
-            .block(logo_block),
-        logo_area,
+        Paragraph::new(kwire_logo_lines()),
+        centered_rect(LOGO_W, 4, parts[0]),
     );
     frame.render_widget(
         Paragraph::new(kwire_banner_lines()).alignment(Alignment::Center),
@@ -291,6 +284,27 @@ fn kwire_tagline_lines() -> Vec<Line<'static>> {
     ]
 }
 
+/// A small "stack of books" mark — three ragged piles (uneven widths + jittered
+/// indents so it reads hand-piled) — rendered dim. Shared by the empty splash and
+/// the `:about` modal. 4 rows; render left-aligned inside a centered box so the
+/// piles stay column-aligned.
+fn kwire_logo_lines() -> Vec<Line<'static>> {
+    const PILES: &[&str] = &[
+        " \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}     \u{2586}\u{2586}\u{2586}     \u{2586}\u{2586}\u{2586}\u{2586}  ",
+        "  \u{2586}\u{2586}\u{2586}     \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}   \u{2586}\u{2586}\u{2586}\u{2586}\u{2586} ",
+        " \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}\u{2586}    \u{2586}\u{2586}\u{2586}     \u{2586}\u{2586}\u{2586}   ",
+        " \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}     \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}   \u{2586}\u{2586}\u{2586}\u{2586}\u{2586}  ",
+    ];
+    PILES
+        .iter()
+        .map(|r| Line::from(Span::styled(*r, style_dim())))
+        .collect()
+}
+
+/// Width of the book-stack mark (the `kwire_logo_lines` block), for the centered
+/// box it renders into.
+const LOGO_W: u16 = 25;
+
 fn render_empty(frame: &mut Frame, app: &mut AppState) {
     let area = frame.area();
 
@@ -307,7 +321,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
 
     // Vertically center the content block.
     // Content lines:
-    //   3 — logo box (bordered: top border + content + bottom border)
+    //   4 — book-stack mark (three ragged piles)
     //   1 — blank
     //   6 — wordmark (ASCII-art banner, 6 rows)
     //   1 — blank
@@ -316,8 +330,8 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     //   1 — NO READING LISTS YET
     //   1 — blank
     //   3 — command hints
-    // Total = 3 + 1 + 6 + 1 + 2 + 1 + 1 + 1 + 3 = 19 lines
-    let content_h: u16 = 19;
+    // Total = 4 + 1 + 6 + 1 + 2 + 1 + 1 + 1 + 3 = 20 lines
+    let content_h: u16 = 20;
     let top_pad = outer[0].height.saturating_sub(content_h) / 2;
 
     let content_area = Layout::vertical([
@@ -329,7 +343,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
 
     // Split content_area into its pieces.
     let parts = Layout::vertical([
-        Constraint::Length(3), // logo box (bordered)
+        Constraint::Length(4), // book-stack mark
         Constraint::Length(1), // blank
         Constraint::Length(6), // wordmark (ASCII-art banner)
         Constraint::Length(1), // blank
@@ -341,20 +355,11 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     ])
     .split(content_area);
 
-    // 1. Logo glyph — a bordered box containing "▤ ▤ ▤"
-    let logo_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(style_dim());
-    // Make the logo box small (~9 wide), centered
-    let logo_inner_w: u16 = 7;
-    let logo_box_w: u16 = logo_inner_w + 2; // +2 for borders
-    let logo_area = centered_rect(logo_box_w, 3, parts[0]);
+    // 1. Book-stack mark — three ragged piles, dim, centered (left-aligned inside
+    //    a centered box so the piles stay column-aligned).
     frame.render_widget(
-        Paragraph::new("\u{25a4} \u{25a4} \u{25a4}")
-            .alignment(Alignment::Center)
-            .style(style_dim())
-            .block(logo_block),
-        logo_area,
+        Paragraph::new(kwire_logo_lines()),
+        centered_rect(LOGO_W, 4, parts[0]),
     );
 
     // 2. Wordmark — ASCII-art block-letter banner, centered, in the bright color.

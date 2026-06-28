@@ -4852,6 +4852,11 @@ mod tests {
             content.contains("██"),
             "empty screen should contain the ASCII-art block-letter banner"
         );
+        // …above the enlarged book-stack mark (three ragged ▆ piles).
+        assert!(
+            content.contains("\u{2586}\u{2586}\u{2586}"),
+            "empty screen should contain the book-stack mark"
+        );
     }
 
     #[test]
