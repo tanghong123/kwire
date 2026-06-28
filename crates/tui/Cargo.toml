@@ -17,8 +17,8 @@ clap.workspace = true
 reqwest.workspace = true
 
 # TUI
-ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
 
 # Shared UI-string catalog (parses the embedded app/ui/i18n.json).
 serde_json.workspace = true
