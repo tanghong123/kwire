@@ -1080,7 +1080,7 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 _ => "queued",
             };
             (
-                "???".to_string(),
+                "\u{2014}".to_string(),
                 "\u{2014}".to_string(),
                 state_label(&book.discovery).to_string(),
                 0u32,

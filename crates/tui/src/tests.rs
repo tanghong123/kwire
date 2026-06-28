@@ -7935,4 +7935,22 @@ mod tests {
             "transfer for a book outside the current view uses the global md5→title map"
         );
     }
+
+    /// An unknown-format (no-versions/discovery) book renders an em-dash in the
+    /// format column, not "???".
+    #[test]
+    fn unknown_format_renders_dash_not_question_marks() {
+        let backend = TestBackend::new(132, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.versions = vec![]; // no copies discovered yet
+        app.flat[0].book.discovery = "querying".into();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            !buf.contains("???"),
+            "unknown format must render an em-dash, not ???: {buf}"
+        );
+    }
 }
