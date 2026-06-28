@@ -145,9 +145,9 @@ pub async fn load_list(
     // file (along with their metadata). To re-import, Remove the existing list first
     // (right-click the list → Remove list), or rename your list.
     if store.list_id_by_title(&list.title).map_err(err)?.is_some() {
-        return Err(format!(
-            "A list named “{}” already exists. Remove it first (right-click the list → Remove list), or rename your list before importing.",
-            list.title
+        return Err(libgen_core::model::ui_msg(
+            "err.list_exists",
+            &[("name", &list.title)],
         ));
     }
     let store_id = store.insert_list(&list).map_err(err)?;

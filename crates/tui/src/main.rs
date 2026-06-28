@@ -1189,7 +1189,12 @@ async fn import_file(app: &mut AppState, handles: &EngineHandles, path: &str) {
     match store.list_id_by_title(&list.title) {
         Ok(Some(_)) => {
             tracing::warn!("import: list '{}' already exists", list.title);
-            app.status_msg = Some(format!("List \"{}\" already exists", list.title));
+            // Shared catalog message (decoded by the hint bar) so desktop + TUI
+            // word it identically.
+            app.status_msg = Some(libgen_core::model::ui_msg(
+                "err.list_exists",
+                &[("name", &list.title)],
+            ));
             return;
         }
         Err(e) => {

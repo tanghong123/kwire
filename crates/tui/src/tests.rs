@@ -8104,4 +8104,17 @@ mod tests {
         assert_eq!(buf2, "abcd", "backspace deletes the char before the caret");
         assert_eq!(caret2, 2, "caret moves back after delete");
     }
+
+    /// The shared err.list_exists catalog key decodes to the English message with
+    /// the list name interpolated (single-sourced for desktop + TUI).
+    #[test]
+    fn list_exists_message_decodes_from_catalog() {
+        let token = libgen_core::model::ui_msg("err.list_exists", &[("name", "My List")]);
+        let decoded = crate::i18n::decode(&token);
+        assert!(decoded.contains("My List"), "name interpolated: {decoded}");
+        assert!(
+            decoded.contains("already exists"),
+            "english catalog message: {decoded}"
+        );
+    }
 }
