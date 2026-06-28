@@ -1757,7 +1757,7 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                     let is_leg_dim = !activity_active && leg_idx == sel_leg;
                     let (marker, marker_style, title_style, status_base, sel_bg) = if is_leg_sel {
                         (
-                            format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                            format!("  {} ", theme::spinner(app.tick)),
                             Style::default().fg(C_DONE).bg(C_SELECTED),
                             style_selected(),
                             style_selected(),
@@ -1765,7 +1765,7 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                         )
                     } else if is_leg_dim {
                         (
-                            format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                            format!("  {} ", theme::spinner(app.tick)),
                             Style::default().fg(C_DOWNLOADING),
                             style_muted(),
                             style_dim(),
@@ -1830,7 +1830,7 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                 let is_leg_dim = !activity_active && leg_idx == sel_leg;
                 let (marker, marker_style, title_style, status_base, sel_bg) = if is_leg_sel {
                     (
-                        format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                        format!("  {} ", theme::spinner(app.tick)),
                         Style::default().fg(C_DONE).bg(C_SELECTED),
                         style_selected(),
                         style_selected(),
@@ -1838,7 +1838,7 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                     )
                 } else if is_leg_dim {
                     (
-                        format!("  \u{25b8} {} ", theme::spinner(app.tick)),
+                        format!("  {} ", theme::spinner(app.tick)),
                         Style::default().fg(C_DOWNLOADING),
                         style_muted(),
                         style_dim(),

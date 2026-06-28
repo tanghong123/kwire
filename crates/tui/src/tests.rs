@@ -2797,6 +2797,36 @@ mod tests {
         );
     }
 
+    /// Every leg gets a uniform prefix — no leg (not even the selected one) shows
+    /// a stray ▸ the others lack. (Header is ▾ when expanded, so any ▸ would be a
+    /// leg marker.)
+    #[test]
+    fn activity_legs_have_no_stray_selection_arrow() {
+        use ratatui::layout::Rect;
+        let backend = TestBackend::new(120, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let mut a = mk_var("Treasure Island", "pdf", "downloading", 40, &"a".repeat(32));
+        a.host = Some("cdn3.booksdl.lc".into());
+        let mut b = mk_var("White Fang", "epub", "downloading", 70, &"b".repeat(32));
+        b.host = Some("cdn3.booksdl.lc".into());
+        app.flat[0].book.versions = vec![a, b];
+        app.activity_expanded = true;
+        app.focus = Focus::Activity;
+        app.activity_selected = 0; // leg 0 selected — previously got a ▸ accent
+        let area = Rect::new(0, 0, 120, 14);
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            !buf.contains('\u{25b8}'),
+            "no leg should carry a stray ▸ prefix: {buf:?}"
+        );
+    }
+
     /// The Activity header pins the aggregate throughput (↓ rate) to the right
     /// edge and renders it in the download color.
     #[test]
