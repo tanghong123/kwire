@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Margin, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState,
@@ -35,8 +35,8 @@ use crate::app::{
 use crate::theme::{
     self, filter_chip_color, history_kind_color, score_color, style_dim, style_header, style_hint,
     style_muted, style_normal, style_sel_accent, style_sel_accent_dim, style_selected, style_title,
-    C_BACKDROP, C_BG, C_BRIGHT, C_DONE, C_FAINT, C_MUTED, C_NEEDS_YOU, C_PANEL, C_SELECTED,
-    C_SOFTER, C_TEXT, C_WARM,
+    C_BACKDROP, C_BG, C_BRIGHT, C_DONE, C_DOWNLOADING, C_FAINT, C_MUTED, C_NEEDS_YOU, C_PANEL,
+    C_SELECTED, C_SOFTER, C_TEXT, C_WARM,
 };
 
 /// Docked Activity pane height when expanded (1 header + content rows). Capped
@@ -1470,14 +1470,16 @@ fn activity_leg_line(
     marker_style: Style,
     title: &str,
     title_style: Style,
-    status: String,
-    status_style: Style,
+    status: Vec<Span<'static>>,
     row_w: usize,
     focused: bool,
     marquee_off: usize,
 ) -> Line<'static> {
     let marker_w = crate::textfit::display_width(&marker);
-    let status_w = crate::textfit::display_width(&status);
+    let status_w: usize = status
+        .iter()
+        .map(|s| crate::textfit::display_width(s.content.as_ref()))
+        .sum();
     // Region left of the pinned status for the title (+ a 2-col gap before it).
     let avail = row_w.saturating_sub(marker_w + status_w);
     let title_budget = avail.saturating_sub(2);
@@ -1487,12 +1489,45 @@ fn activity_leg_line(
         crate::textfit::ellipsize(title, title_budget)
     };
     let pad = avail.saturating_sub(crate::textfit::display_width(&title_fitted));
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(marker, marker_style),
         Span::styled(title_fitted, title_style),
         Span::styled(" ".repeat(pad), title_style),
-        Span::styled(status, status_style),
-    ])
+    ];
+    spans.extend(status);
+    Line::from(spans)
+}
+
+/// Build the right-pinned STATUS spans for an Activity download leg —
+/// `fmt  NN%  ▰▰▱▱▱▱  eta` — with the percentage and progress bar in the download
+/// color (filled bright, remainder faint) so the pane reads at a glance. `base`
+/// styles the format + ETA fields; when `sel_bg` is set the selection background
+/// is layered over every field so a selected leg still highlights.
+fn activity_status_spans(
+    fmt: &str,
+    pct: u32,
+    eta_secs: Option<u64>,
+    base: Style,
+    sel_bg: Option<Color>,
+) -> Vec<Span<'static>> {
+    let bg = |st: Style| match sel_bg {
+        Some(c) => st.bg(c),
+        None => st,
+    };
+    let dl = bg(Style::default().fg(C_DOWNLOADING));
+    let base = bg(base);
+    let mut spans = Vec::new();
+    if !fmt.is_empty() {
+        spans.push(Span::styled(format!("{fmt}  "), base));
+    }
+    spans.push(Span::styled(format!("{pct}%  "), dl));
+    for s in theme::progress_bar_spans(pct, 6) {
+        spans.push(Span::styled(s.content, bg(s.style)));
+    }
+    if let Some(s) = eta_secs {
+        spans.push(Span::styled(format!("  {s}s"), base));
+    }
+    spans
 }
 
 pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
@@ -1671,8 +1706,8 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                 } else {
                     String::new()
                 };
-                let host_line = format!(
-                    "\u{25cf} {}{}",
+                let host_rest = format!(
+                    " {}{}",
                     host,
                     if host_speed_str.is_empty() {
                         String::new()
@@ -1680,48 +1715,51 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                         format!("   {}↓ \u{00b7} {}", versions.len(), host_speed_str)
                     }
                 );
-                all_content.push(Line::from(Span::styled(
-                    host_line,
-                    Style::default().fg(C_WARM),
-                )));
+                all_content.push(Line::from(vec![
+                    // The host status dot reads in the download color (matches the bar).
+                    Span::styled("\u{25cf}", Style::default().fg(C_DOWNLOADING)),
+                    Span::styled(host_rest, Style::default().fg(C_WARM)),
+                ]));
                 leg_map.push(None); // host label — not a selectable leg
 
                 for (title, pct, fmt, eta_secs) in versions {
                     let is_leg_sel = activity_active && leg_idx == sel_leg;
                     let is_leg_dim = !activity_active && leg_idx == sel_leg;
-                    let bar = theme::progress_bar((*pct).into(), 6);
-                    let eta = eta_secs.map(|s| format!("  {}s", s)).unwrap_or_default();
-                    // Pinned-right STATUS: fmt · % · bar · eta (always visible).
-                    let status = format!("{}  {}%  {}{}", fmt, pct, bar, eta);
-                    let (marker, marker_style, title_style, status_style) = if is_leg_sel {
+                    let (marker, marker_style, title_style, status_base, sel_bg) = if is_leg_sel {
                         (
                             format!("  \u{25b8} {} ", theme::spinner(app.tick)),
                             Style::default().fg(C_DONE).bg(C_SELECTED),
                             style_selected(),
                             style_selected(),
+                            Some(C_SELECTED),
                         )
                     } else if is_leg_dim {
                         (
                             format!("  \u{25b8} {} ", theme::spinner(app.tick)),
-                            style_dim(),
+                            Style::default().fg(C_DOWNLOADING),
                             style_muted(),
                             style_dim(),
+                            None,
                         )
                     } else {
                         (
                             format!("  {} ", theme::spinner(app.tick)),
-                            style_muted(),
+                            Style::default().fg(C_DOWNLOADING),
                             style_normal(),
                             style_muted(),
+                            None,
                         )
                     };
+                    // Pinned-right STATUS: fmt · % · bar · eta (% + bar colored).
+                    let status = activity_status_spans(fmt, *pct, *eta_secs, status_base, sel_bg);
+                    let status_w: usize = status
+                        .iter()
+                        .map(|s| crate::textfit::display_width(s.content.as_ref()))
+                        .sum();
                     // Focused leg: advance + use its title marquee; else `…`.
                     let marquee_off = if is_leg_sel {
                         let budget = row_w
-                            .saturating_sub(
-                                crate::textfit::display_width(&marker)
-                                    + crate::textfit::display_width(&status),
-                            )
+                            .saturating_sub(crate::textfit::display_width(&marker) + status_w)
                             .saturating_sub(2);
                         app.advance_activity_marquee(crate::textfit::display_width(title), budget);
                         app.activity_marquee_offset
@@ -1734,7 +1772,6 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                         title,
                         title_style,
                         status,
-                        status_style,
                         row_w,
                         is_leg_sel,
                         marquee_off,
@@ -1754,8 +1791,8 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
             } else {
                 String::new()
             };
-            let host_line = format!(
-                "\u{25cf} {}   {}↓{}",
+            let host_rest = format!(
+                " {}   {}↓{}",
                 host,
                 transfers.len(),
                 if speed_s.is_empty() {
@@ -1764,45 +1801,48 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                     format!(" \u{00b7} {}", speed_s)
                 }
             );
-            all_content.push(Line::from(Span::styled(
-                host_line,
-                Style::default().fg(C_WARM),
-            )));
+            all_content.push(Line::from(vec![
+                Span::styled("\u{25cf}", Style::default().fg(C_DOWNLOADING)),
+                Span::styled(host_rest, Style::default().fg(C_WARM)),
+            ]));
             leg_map.push(None); // host label — not a selectable leg
             for (title, pct, _) in transfers {
                 let is_leg_sel = activity_active && leg_idx == sel_leg;
                 let is_leg_dim = !activity_active && leg_idx == sel_leg;
-                let bar = theme::progress_bar((*pct).into(), 6);
-                // Pinned-right STATUS: % · bar (always visible).
-                let status = format!("{}%  {}", pct, bar);
-                let (marker, marker_style, title_style, status_style) = if is_leg_sel {
+                let (marker, marker_style, title_style, status_base, sel_bg) = if is_leg_sel {
                     (
                         format!("  \u{25b8} {} ", theme::spinner(app.tick)),
                         Style::default().fg(C_DONE).bg(C_SELECTED),
                         style_selected(),
                         style_selected(),
+                        Some(C_SELECTED),
                     )
                 } else if is_leg_dim {
                     (
                         format!("  \u{25b8} {} ", theme::spinner(app.tick)),
-                        style_dim(),
+                        Style::default().fg(C_DOWNLOADING),
                         style_muted(),
                         style_dim(),
+                        None,
                     )
                 } else {
                     (
                         format!("  {} ", theme::spinner(app.tick)),
-                        style_muted(),
+                        Style::default().fg(C_DOWNLOADING),
                         style_normal(),
                         style_muted(),
+                        None,
                     )
                 };
+                // Pinned-right STATUS: % · bar (no fmt/eta in the telemetry path).
+                let status = activity_status_spans("", (*pct).into(), None, status_base, sel_bg);
+                let status_w: usize = status
+                    .iter()
+                    .map(|s| crate::textfit::display_width(s.content.as_ref()))
+                    .sum();
                 let marquee_off = if is_leg_sel {
                     let budget = row_w
-                        .saturating_sub(
-                            crate::textfit::display_width(&marker)
-                                + crate::textfit::display_width(&status),
-                        )
+                        .saturating_sub(crate::textfit::display_width(&marker) + status_w)
                         .saturating_sub(2);
                     app.advance_activity_marquee(crate::textfit::display_width(title), budget);
                     app.activity_marquee_offset
@@ -1815,7 +1855,6 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                     title,
                     title_style,
                     status,
-                    status_style,
                     row_w,
                     is_leg_sel,
                     marquee_off,
@@ -1836,14 +1875,13 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
         )));
         leg_map.push(None);
         for (title, fmt) in &queued_items {
-            let status = format!("{}  queued", fmt);
+            let status = vec![Span::styled(format!("{fmt}  queued"), style_dim())];
             all_content.push(activity_leg_line(
                 format!("  {} ", theme::spinner(app.tick)),
                 style_dim(),
                 title,
                 style_muted(),
                 status,
-                style_dim(),
                 row_w,
                 false,
                 0,
@@ -5082,8 +5120,7 @@ mod hint_wrap_tests {
             Style::default(),
             title,
             Style::default(),
-            status.to_string(),
-            Style::default(),
+            vec![Span::styled(status.to_string(), Style::default())],
             row_w,
             false, // not focused → ellipsize
             0,
@@ -5118,8 +5155,7 @@ mod hint_wrap_tests {
             Style::default(),
             title,
             Style::default(),
-            status.to_string(),
-            Style::default(),
+            vec![Span::styled(status.to_string(), Style::default())],
             row_w,
             true,
             0,
@@ -5129,8 +5165,7 @@ mod hint_wrap_tests {
             Style::default(),
             title,
             Style::default(),
-            status.to_string(),
-            Style::default(),
+            vec![Span::styled(status.to_string(), Style::default())],
             row_w,
             true,
             3,

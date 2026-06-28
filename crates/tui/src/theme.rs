@@ -2,6 +2,7 @@
 //! is unset. All render code references these constants instead of hardcoding.
 
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 
 // ---------------------------------------------------------------------------
 // Palette (§7)
@@ -122,6 +123,20 @@ pub fn progress_bar(pct: u32, width: usize) -> String {
     let filled = ((pct as usize) * width / 100).min(width);
     let empty = width - filled;
     format!("{}{}", "▰".repeat(filled), "▱".repeat(empty))
+}
+
+/// Styled variant of [`progress_bar`]: the filled `▰` portion in the download
+/// color, the remaining `▱` portion faint. Shared by the Activity pane and the
+/// Detail view so the bar style can't drift between them. Total display width is
+/// exactly `width.max(2)` cells.
+pub fn progress_bar_spans(pct: u32, width: usize) -> Vec<Span<'static>> {
+    let width = width.max(2);
+    let filled = ((pct as usize) * width / 100).min(width);
+    let empty = width - filled;
+    vec![
+        Span::styled("▰".repeat(filled), Style::default().fg(C_DOWNLOADING)),
+        Span::styled("▱".repeat(empty), Style::default().fg(C_FAINT)),
+    ]
 }
 
 /// Color-code a MATCH score: green → amber → red by value.

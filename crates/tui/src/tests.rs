@@ -2729,6 +2729,45 @@ mod tests {
         );
     }
 
+    /// The Activity pane renders its download visuals in the download color: the
+    /// host status dot (●) and the progress-bar filled cells (▰) read
+    /// `C_DOWNLOADING`.
+    #[test]
+    fn activity_pane_colors_dot_and_bar() {
+        use crate::theme::C_DOWNLOADING;
+        use ratatui::layout::Rect;
+        let backend = TestBackend::new(120, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let mut v = mk_var("Treasure Island", "pdf", "downloading", 42, &"e".repeat(32));
+        v.host = Some("cdn4.booksdl.lc".into());
+        app.flat[0].book.versions = vec![v];
+        app.activity_expanded = true;
+
+        let area = Rect::new(0, 0, 120, 14);
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let mut dot_colored = false;
+        let mut bar_colored = false;
+        for cell in buf.content().iter() {
+            if cell.symbol() == "\u{25cf}" && cell.fg == C_DOWNLOADING {
+                dot_colored = true;
+            }
+            if cell.symbol() == "\u{25b0}" && cell.fg == C_DOWNLOADING {
+                bar_colored = true;
+            }
+        }
+        assert!(dot_colored, "host dot ● should render in C_DOWNLOADING");
+        assert!(
+            bar_colored,
+            "a filled progress-bar cell ▰ should render in C_DOWNLOADING"
+        );
+    }
+
     /// `r`/`p`/`c` in the Activity pane act on the leg resolved by
     /// `focused_transfer_md5`, which must follow the pane's HOST-grouped render
     /// order — not the old md5-sorted order, which selected a different leg.
