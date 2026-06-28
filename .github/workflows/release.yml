@@ -1,13 +1,24 @@
 name: Release
 
-# Cut a versioned GitHub Release automatically when the version in
+# Build a versioned GitHub Release when the version in
 # app/src-tauri/tauri.conf.json changes. Ordinary pushes to main just run CI
-# (see ci.yml) — this workflow only publishes when `v<version>` has no tag yet.
+# (see ci.yml) — this only fires when no `v<version>` release exists yet.
+#
+# IMMUTABLE RELEASES: this repo has immutable releases enabled, so a *published*
+# release rejects new assets. We therefore build into a DRAFT release (mutable),
+# attach the macOS bundles + the kwire TUI binary, and leave it as a draft. A
+# human finalizes locally (the demo video is recorded locally per release):
+#
+#   gh release upload  v<version> demo/out/kwire-tour.mp4   # add the tour video
+#   gh release edit    v<version> --draft=false             # publish (-> tag)
+#
+# Publishing the draft is also what creates the git tag, after which this
+# workflow won't re-trigger for that version.
 on:
   push:
     branches: [main]
 
-# Needed to create the tag + GitHub Release and upload assets.
+# Needed to create the draft release and upload assets.
 permissions:
   contents: write
 
@@ -20,24 +31,26 @@ jobs:
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # fetch history + tags so we can test for v<version>
 
       - id: check
-        name: Compare tauri.conf.json version against existing tags
+        name: Has this version already been released (draft or published)?
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(jq -r .version app/src-tauri/tauri.conf.json)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
-            echo "Tag v$VERSION already exists — nothing to release."
+          # `gh release view` finds drafts too, so a half-finished draft never
+          # gets duplicated on the next push.
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists (draft or published) — skipping."
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
-            echo "New version v$VERSION — a release will be cut."
+            echo "No release v$VERSION yet — will build a draft."
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           fi
 
   release:
-    name: Build & release (${{ matrix.target }})
+    name: Build & draft (${{ matrix.target }})
     needs: detect
     if: needs.detect.outputs.should_release == 'true'
     strategy:
@@ -70,12 +83,12 @@ jobs:
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/kwire" "dist/kwire-${{ matrix.target }}"
 
-      # Build the Kwire desktop bundles AND create / reuse the v<version> release.
-      # The first matrix job creates the release + tag; the second reuses it.
-      # No frontend build step: tauri.conf.json ships the prebuilt static app/ui
-      # (frontendDist "../ui"), so there is no beforeBuildCommand / npm install.
-      # Bundles are UNSIGNED — see note in the workflow PR/description.
-      - name: Build & release desktop app
+      # Build the Kwire desktop bundles into a DRAFT v<version> release. The first
+      # matrix job creates the draft; the second reuses it. Draft (not published)
+      # so assets can still be attached under immutable releases. No frontend
+      # build step: tauri.conf ships the prebuilt static app/ui (frontendDist
+      # "../ui"). Bundles are UNSIGNED.
+      - name: Build & draft desktop app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -83,14 +96,13 @@ jobs:
           projectPath: app
           tagName: v${{ needs.detect.outputs.version }}
           releaseName: Kwire v${{ needs.detect.outputs.version }}
-          releaseBody: Automated release for v${{ needs.detect.outputs.version }}.
-          releaseDraft: false
+          releaseBody: Automated build for v${{ needs.detect.outputs.version }}. Finalize by attaching kwire-tour.mp4 and publishing.
+          releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
 
-      # Attach the TUI binary to the same release (the desktop step above created
-      # it). Distinct filename per arch, so the two matrix jobs never collide.
-      - name: Upload TUI binary to the release
+      # Attach the TUI binary to the same draft (distinct filename per arch).
+      - name: Upload TUI binary to the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "v${{ needs.detect.outputs.version }}" "dist/kwire-${{ matrix.target }}" --clobber
