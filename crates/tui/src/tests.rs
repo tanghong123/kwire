@@ -4572,6 +4572,7 @@ mod tests {
             Some(Modal::ReQuery {
                 book_flat_index: 0,
                 buf,
+                ..
             }) => {
                 assert!(
                     !buf.is_empty(),
@@ -4589,6 +4590,7 @@ mod tests {
         app.modal = Some(Modal::ReQuery {
             book_flat_index: 0,
             buf: "New Title".into(),
+            caret: 0,
         });
         let intent = app.on_input(key(KeyCode::Enter));
         assert_eq!(
@@ -4610,6 +4612,7 @@ mod tests {
         app.modal = Some(Modal::ReQuery {
             book_flat_index: 0,
             buf: "whatever".into(),
+            caret: 0,
         });
         app.on_input(key(KeyCode::Esc));
         assert!(
@@ -4800,6 +4803,7 @@ mod tests {
         app.modal = Some(Modal::ReQuery {
             book_flat_index: 0,
             buf: "Treasure".into(),
+            caret: 0,
         });
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
     }
@@ -8185,5 +8189,35 @@ mod tests {
         // Any key dismisses.
         app.on_input(key(KeyCode::Esc));
         assert!(app.modal.is_none(), "esc closes the about modal");
+    }
+
+    /// ReQuery modal: caret moves and inserts/deletes MID-string (same as Edit).
+    #[test]
+    fn requery_caret_inserts_and_deletes_mid_string() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::ReQuery {
+            book_flat_index: 0,
+            buf: "abcd".into(),
+            caret: 4, // end
+        });
+
+        app.on_input(key(KeyCode::Left));
+        app.on_input(key(KeyCode::Left));
+        app.on_input(key(KeyCode::Char('X')));
+        let (buf, caret) = match &app.modal {
+            Some(Modal::ReQuery { buf, caret, .. }) => (buf.clone(), *caret),
+            _ => panic!("requery modal gone"),
+        };
+        assert_eq!(buf, "abXcd", "char inserts at the caret, not the end");
+        assert_eq!(caret, 3, "caret advances past the inserted char");
+
+        app.on_input(key(KeyCode::Backspace));
+        let (buf2, caret2) = match &app.modal {
+            Some(Modal::ReQuery { buf, caret, .. }) => (buf.clone(), *caret),
+            _ => panic!("requery modal gone"),
+        };
+        assert_eq!(buf2, "abcd", "backspace deletes the char before the caret");
+        assert_eq!(caret2, 2, "caret moves back after delete");
     }
 }

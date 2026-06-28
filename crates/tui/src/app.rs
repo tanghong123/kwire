@@ -498,7 +498,12 @@ pub enum Modal {
         target_id: String,
     },
     /// Inline re-query: user types a corrected title for a single book.
-    ReQuery { book_flat_index: usize, buf: String },
+    ReQuery {
+        book_flat_index: usize,
+        buf: String,
+        /// Caret position (char index) within `buf`.
+        caret: usize,
+    },
     /// Inline edit: user edits title and/or author for a single book.
     EditBook {
         book_flat_index: usize,
@@ -2315,9 +2320,11 @@ impl AppState {
                         KeyCode::Char('s') => {
                             if let Some(fb) = self.flat.get(flat_index) {
                                 let title = fb.book.title.clone();
+                                let caret = title.chars().count();
                                 self.modal = Some(Modal::ReQuery {
                                     book_flat_index: flat_index,
                                     buf: title,
+                                    caret,
                                 });
                             }
                             Intent::Redraw
@@ -2507,12 +2514,16 @@ impl AppState {
             Modal::ReQuery {
                 book_flat_index,
                 buf,
+                caret,
             } => {
                 let flat_index = *book_flat_index;
-                let buf = buf.clone();
-                match ev {
+                let mut buf = buf.clone();
+                let mut caret = *caret;
+                let mut reopen = true;
+                let ret = match ev {
                     Event::Key(KeyEvent { code, .. }) => match code {
                         KeyCode::Esc => {
+                            reopen = false;
                             // Return to the detail modal.
                             self.modal = Some(Modal::Detail {
                                 book_flat_index: flat_index,
@@ -2523,6 +2534,7 @@ impl AppState {
                             Intent::Redraw
                         }
                         KeyCode::Enter => {
+                            reopen = false;
                             let trimmed = buf.trim().to_string();
                             if !trimmed.is_empty() {
                                 if let Some(fb) = self.flat.get(flat_index) {
@@ -2538,28 +2550,49 @@ impl AppState {
                             self.modal = None;
                             Intent::Redraw
                         }
+                        KeyCode::Left => {
+                            caret = caret.saturating_sub(1);
+                            Intent::Redraw
+                        }
+                        KeyCode::Right => {
+                            caret = (caret + 1).min(buf.chars().count());
+                            Intent::Redraw
+                        }
+                        KeyCode::Home => {
+                            caret = 0;
+                            Intent::Redraw
+                        }
+                        KeyCode::End => {
+                            caret = buf.chars().count();
+                            Intent::Redraw
+                        }
                         KeyCode::Backspace => {
-                            let mut new_buf = buf;
-                            new_buf.pop();
-                            self.modal = Some(Modal::ReQuery {
-                                book_flat_index: flat_index,
-                                buf: new_buf,
-                            });
+                            if caret > 0 {
+                                let byte = byte_at_char(&buf, caret - 1);
+                                buf.remove(byte);
+                                caret -= 1;
+                            }
                             Intent::Redraw
                         }
                         KeyCode::Char(c) => {
-                            let mut new_buf = buf;
-                            new_buf.push(c);
-                            self.modal = Some(Modal::ReQuery {
-                                book_flat_index: flat_index,
-                                buf: new_buf,
-                            });
+                            let n = buf.chars().count();
+                            let byte = byte_at_char(&buf, caret.min(n));
+                            buf.insert(byte, c);
+                            caret = caret.min(n) + 1;
                             Intent::Redraw
                         }
                         _ => Intent::Redraw,
                     },
                     _ => Intent::Redraw,
+                };
+                if reopen {
+                    self.modal = Some(Modal::ReQuery {
+                        book_flat_index: flat_index,
+                        buf,
+                        caret,
+                    });
                 }
+                ret
             }
 
             Modal::EditBook {

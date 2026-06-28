@@ -163,7 +163,8 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             Modal::ReQuery {
                 book_flat_index,
                 buf,
-            } => render_requery_modal(frame, app, book_flat_index, &buf),
+                caret,
+            } => render_requery_modal(frame, app, book_flat_index, &buf, caret),
             Modal::EditBook {
                 book_flat_index,
                 title_buf,
@@ -3898,7 +3899,22 @@ fn render_reorganize_modal(frame: &mut Frame, diff: &[(String, String)], selecte
 // #49 Re-query inline input modal
 // ---------------------------------------------------------------------------
 
-fn render_requery_modal(frame: &mut Frame, app: &AppState, book_flat_index: usize, buf: &str) {
+fn render_requery_modal(
+    frame: &mut Frame,
+    app: &AppState,
+    book_flat_index: usize,
+    buf: &str,
+    caret: usize,
+) {
+    // Insert the caret glyph (▏) at char position `pos` in `s`.
+    fn with_caret(s: &str, pos: usize) -> String {
+        let byte = s.char_indices().nth(pos).map(|(b, _)| b).unwrap_or(s.len());
+        let mut out = String::with_capacity(s.len() + 3);
+        out.push_str(&s[..byte]);
+        out.push('\u{258f}');
+        out.push_str(&s[byte..]);
+        out
+    }
     let area = centered_rect(72, 7, frame.area());
     frame.render_widget(Clear, area);
 
@@ -3923,7 +3939,7 @@ fn render_requery_modal(frame: &mut Frame, app: &AppState, book_flat_index: usiz
         vertical: 1,
     });
 
-    let display_buf = format!("{buf}\u{258f}"); // block cursor at end
+    let display_buf = with_caret(buf, caret); // caret at its position
     let split = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
