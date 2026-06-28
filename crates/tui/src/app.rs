@@ -730,6 +730,15 @@ pub struct AppState {
     /// Live scheduler telemetry keyed by md5. Updated by Progress events from the engine.
     pub transfers: std::collections::HashMap<String, ActiveTransfer>,
 
+    /// Per-leg download state (primary + speculative hedge legs), the shared
+    /// engine [`LegTracker`] fed from the raw Progress stream. The Activity pane
+    /// reads it via [`AppState::now_ms`] to render alt-copy rows; `transfers`
+    /// (above) remains the md5-keyed telemetry fallback. See `docs/LEG_LIFECYCLE.md`.
+    pub legs: libgen_engine::LegTracker,
+    /// Monotonic clock origin for `legs` keep-alive timestamps (the LegTracker is
+    /// clock-free by design). Read via [`AppState::now_ms`].
+    legs_clock: std::time::Instant,
+
     /// Global md5 → book-title map across ALL loaded lists (rebuilt each refresh
     /// from every list's snapshot). Lets the Activity pane label a transfer whose
     /// book isn't in the CURRENT view (e.g. a download from a list you're not
@@ -939,6 +948,8 @@ impl AppState {
             settings_selected: 0,
             settings_draft: None,
             transfers: std::collections::HashMap::new(),
+            legs: libgen_engine::LegTracker::new(),
+            legs_clock: std::time::Instant::now(),
             md5_titles: std::collections::HashMap::new(),
             completion_candidates: Vec::new(),
             completion_index: 0,
@@ -1232,9 +1243,21 @@ impl AppState {
         matches!(self.modal, None | Some(Modal::Detail { .. }))
     }
 
+    /// Monotonic millisecond clock for the leg tracker's keep-alive timestamps.
+    /// Relative to app start; only differences matter (the TTL backstop).
+    pub fn now_ms(&self) -> u64 {
+        self.legs_clock.elapsed().as_millis() as u64
+    }
+
     /// Apply a raw engine Progress event into the live transfer map.
     pub fn apply_progress(&mut self, p: &libgen_core::queue::Progress) {
         use libgen_core::queue::Progress::*;
+        // Feed the shared per-leg tracker first (it sees EVERY variant, incl. the
+        // keep-alives Stalled/Retrying/Resuming/FailingOver and LegEnded that the
+        // match below ignores) so the Activity pane can render primary + alt-copy
+        // legs and the headline % can follow the primary leg.
+        let now = self.now_ms();
+        self.legs.note(p, now);
         match p {
             Resolved {
                 md5,
@@ -1249,6 +1272,7 @@ impl AppState {
             }
             Bytes {
                 md5,
+                leg_id,
                 host,
                 bytes_done,
                 total_bytes,
@@ -1256,13 +1280,24 @@ impl AppState {
                 eta_secs,
                 ..
             } => {
+                // The headline (md5-keyed) telemetry + the projected `app.flat` %
+                // follow the PRIMARY leg only (lowest live leg_id), so a slower
+                // hedge can't drag the displayed % backward. This subsumes the old
+                // leading-leg heuristic. Falls back to applying when the tracker has
+                // no legs yet (shouldn't happen — we just `note`d this event).
+                let is_primary = self
+                    .legs
+                    .primary(md5, now)
+                    .is_none_or(|l| l.leg_id == *leg_id);
                 let t = self.transfers.entry(md5.clone()).or_default();
                 t.md5 = md5.clone();
-                t.host = host.clone();
-                t.bytes_done = *bytes_done;
-                t.total_bytes = *total_bytes;
-                t.speed_bps = *speed_bps;
-                t.eta_secs = *eta_secs;
+                if is_primary {
+                    t.host = host.clone();
+                    t.bytes_done = *bytes_done;
+                    t.total_bytes = *total_bytes;
+                    t.speed_bps = *speed_bps;
+                    t.eta_secs = *eta_secs;
+                }
                 // Populate title from the current ViewModel, falling back to the
                 // GLOBAL md5→title map (covers a transfer whose book isn't in the
                 // current view — e.g. a download from a list you're not viewing),
@@ -1284,14 +1319,17 @@ impl AppState {
                 // only rebuilt on `Refresh` (StatusChanged/Done) — so without this
                 // the displayed % freezes at its start-of-download value (~0%) until
                 // Done. The periodic redraw tick then paints the advancing %.
-                self.update_flat_progress(
-                    md5,
-                    *bytes_done,
-                    *total_bytes,
-                    *speed_bps,
-                    *eta_secs,
-                    host,
-                );
+                // Primary-leg only, so the headline % never flips to a slower hedge.
+                if is_primary {
+                    self.update_flat_progress(
+                        md5,
+                        *bytes_done,
+                        *total_bytes,
+                        *speed_bps,
+                        *eta_secs,
+                        host,
+                    );
+                }
             }
             Done { md5, .. } => {
                 self.transfers.remove(md5);
