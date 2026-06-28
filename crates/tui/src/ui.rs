@@ -2939,21 +2939,19 @@ fn render_detail_modal(
         y += 1;
 
         // #1: progress bar on its OWN line below — only while downloading. The
-        // bar fills the row width (minus the indent and the " N% · eta Ns"
-        // suffix) instead of a fixed 16 cells.
+        // bar fills the row width (minus the indent and the " N%" suffix). Shares
+        // the Activity pane's styled bar (filled = download color, remainder
+        // faint); the live ETA lives in the Activity pane, not here.
         if downloading && y < bottom {
-            let eta = v
-                .eta_secs
-                .map(|s| format!(" \u{00b7} eta {}s", s))
-                .unwrap_or_default();
-            let suffix = format!(" {}%{}", v.progress, eta);
+            let suffix = format!(" {}%", v.progress);
             let bar_w = (var_area.width as usize)
                 .saturating_sub(FLEX_ACCENT_W + crate::textfit::display_width(&suffix) + 1)
                 .max(8);
-            let bar = theme::progress_bar(v.progress, bar_w);
-            let txt = format!("{}{}{}", " ".repeat(FLEX_ACCENT_W), bar, suffix);
+            let mut spans = vec![Span::styled(" ".repeat(FLEX_ACCENT_W), Style::default())];
+            spans.extend(theme::progress_bar_spans(v.progress, bar_w));
+            spans.push(Span::styled(suffix, Style::default().fg(C_DOWNLOADING)));
             frame.render_widget(
-                Paragraph::new(Span::styled(txt, theme::style_for_state("downloading"))),
+                Paragraph::new(Line::from(spans)),
                 Rect::new(var_area.x, y, var_area.width, 1),
             );
             y += 1;

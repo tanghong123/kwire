@@ -2797,6 +2797,43 @@ mod tests {
         );
     }
 
+    /// The Detail view's downloading progress bar shares the Activity pane's
+    /// styled bar (filled cells in the download color) and shows NO ETA.
+    #[test]
+    fn detail_progress_bar_is_colored_and_has_no_eta() {
+        use crate::theme::C_DOWNLOADING;
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let mut v = mk_var("Treasure Island", "pdf", "downloading", 55, &"a".repeat(32));
+        v.host = Some("cdn.booksdl.lc".into());
+        v.eta_secs = Some(171); // would surface "· eta 171s" under the old code
+        app.flat[0].book.versions = vec![v];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: crate::app::DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let content = buffer_string(&terminal);
+        assert!(
+            !content.contains("\u{00b7} eta"),
+            "the Detail download row must not show an ETA: {content:?}"
+        );
+        let buf = terminal.backend().buffer();
+        let bar_colored = buf
+            .content()
+            .iter()
+            .any(|c| c.symbol() == "\u{25b0}" && c.fg == C_DOWNLOADING);
+        assert!(
+            bar_colored,
+            "the Detail progress bar's filled cells should be C_DOWNLOADING"
+        );
+    }
+
     /// Every leg gets a uniform prefix — no leg (not even the selected one) shows
     /// a stray ▸ the others lack. (Header is ▾ when expanded, so any ▸ would be a
     /// leg marker.)
