@@ -4,6 +4,7 @@
 
 pub mod bridge;
 pub mod engine;
+pub mod legs;
 pub mod state;
 pub mod viewmodel;
 
@@ -12,6 +13,7 @@ pub use engine::{
     build_scheduler, build_search, ensure_scheduler_from, open_store, reconcile_completed_inflight,
     spawn_with, BookStatePayload, EngineEmitter, NoopEmitter, RECONCILE_MAX_ATTEMPTS,
 };
+pub use legs::{LegTracker, LegView, LEG_TTL_MS};
 pub use state::{
     default_max_concurrent_downloads, AppSettings, AppState, Config, EngineHandles, Library,
     LoadedList,
