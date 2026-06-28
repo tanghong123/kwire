@@ -2671,6 +2671,40 @@ mod tests {
         );
     }
 
+    /// `r`/`p`/`c` in the Activity pane act on the leg resolved by
+    /// `focused_transfer_md5`, which must follow the pane's HOST-grouped render
+    /// order — not the old md5-sorted order, which selected a different leg.
+    #[test]
+    fn activity_focused_leg_follows_host_order_not_md5_sort() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        // Two downloading legs whose host order is the REVERSE of md5-sort order:
+        //   host "aaa.example" carries md5 "zzz…"  → renders first  (leg 0)
+        //   host "zzz.example" carries md5 "aaa…"  → renders second (leg 1)
+        let host_first_md5 = "z".repeat(32); // first HOST group
+        let host_second_md5 = "a".repeat(32); // second HOST group
+        let mut a = make_downloading_flat_book("Book A", 0, 0);
+        a.book.versions[0].md5 = host_first_md5.clone();
+        a.book.versions[0].host = Some("aaa.example".into());
+        let mut b = make_downloading_flat_book("Book B", 0, 1);
+        b.book.versions[0].md5 = host_second_md5.clone();
+        b.book.versions[0].host = Some("zzz.example".into());
+        app.flat = vec![a, b];
+
+        app.activity_selected = 0;
+        assert_eq!(
+            app.focused_transfer_md5(),
+            Some(host_first_md5.clone()),
+            "leg 0 must be the first HOST group's copy, not the md5-sorted first"
+        );
+        app.activity_selected = 1;
+        assert_eq!(
+            app.focused_transfer_md5(),
+            Some(host_second_md5),
+            "leg 1 must be the second HOST group's copy"
+        );
+    }
+
     #[test]
     fn activity_scroll_does_not_affect_book_selection() {
         // While Activity is focused, j/k must not move app.selected.

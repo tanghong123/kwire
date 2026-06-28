@@ -3407,23 +3407,16 @@ impl AppState {
         }
     }
 
-    /// Return the md5 of the transfer row currently focused in the Activity pane.
+    /// The Activity-pane download legs in the SAME order they render: ViewModel
+    /// legs (`state == "downloading"`) grouped by host (a `BTreeMap`, so hosts are
+    /// alphabetical; legs within a host keep `flat` order). `activity_selected`
+    /// indexes into this list. Empty when there are no live ViewModel legs — the
+    /// caller then falls back to the telemetry-only path (sorted by md5).
     ///
-    /// Transfers are sorted by md5 for a stable deterministic ordering so that
-    /// `activity_selected` always maps to the same transfer regardless of HashMap
-    /// iteration order.
-    pub fn focused_transfer_md5(&self) -> Option<String> {
-        let mut keys: Vec<&String> = self.transfers.keys().collect();
-        keys.sort();
-        keys.get(self.activity_selected).map(|k| (*k).clone())
-    }
-
-    /// Build a [`Modal::Snapshot`] for the Activity-pane leg at `activity_selected`.
-    ///
-    /// Mirrors the iteration order in `render_activity` so the index stays in sync.
-    /// Returns `None` when there are no active legs or the selection is out of range.
-    fn build_leg_snapshot_modal(&self) -> Option<Modal> {
-        // ViewModel path: host_groups sorted by host name (BTreeMap).
+    /// Single source of truth for leg ordering, shared by `focused_transfer_md5`
+    /// (which `r`/`p`/`c` act on) and `build_leg_snapshot_modal` (the `Enter`
+    /// snapshot) so the focused leg and the acted-on leg can never diverge.
+    fn activity_legs(&self) -> Vec<(&FlatBook, String, &ViewVariation)> {
         let mut host_groups: std::collections::BTreeMap<String, Vec<(&FlatBook, &ViewVariation)>> =
             std::collections::BTreeMap::new();
         for fb in &self.flat {
@@ -3434,38 +3427,61 @@ impl AppState {
                 }
             }
         }
+        host_groups
+            .into_iter()
+            .flat_map(|(host, legs)| legs.into_iter().map(move |(fb, v)| (fb, host.clone(), v)))
+            .collect()
+    }
 
+    /// Return the md5 of the transfer leg currently focused in the Activity pane.
+    ///
+    /// Resolves the leg via [`Self::activity_legs`] (host-grouped render order) so
+    /// `activity_selected` maps to the leg the user actually sees highlighted;
+    /// falls back to md5-sorted telemetry keys when no live ViewModel legs exist.
+    pub fn focused_transfer_md5(&self) -> Option<String> {
+        let legs = self.activity_legs();
+        if !legs.is_empty() {
+            return legs
+                .get(self.activity_selected)
+                .map(|(_, _, v)| v.md5.clone());
+        }
+        // Telemetry-only fallback: sorted by md5 (matches build_leg_snapshot_modal).
+        let mut keys: Vec<&String> = self.transfers.keys().collect();
+        keys.sort();
+        keys.get(self.activity_selected).map(|k| (*k).clone())
+    }
+
+    /// Build a [`Modal::Snapshot`] for the Activity-pane leg at `activity_selected`.
+    ///
+    /// Uses the same [`Self::activity_legs`] ordering as `focused_transfer_md5`, so
+    /// the snapshot and the `r`/`p`/`c` actions always target the same leg.
+    /// Returns `None` when there are no active legs or the selection is out of range.
+    fn build_leg_snapshot_modal(&self) -> Option<Modal> {
+        let legs = self.activity_legs();
         let target = self.activity_selected;
-        let mut leg_idx = 0usize;
 
-        if !host_groups.is_empty() {
-            for (host, legs) in &host_groups {
-                for (fb, v) in legs {
-                    if leg_idx == target {
-                        let telemetry = self.transfers.get(&v.md5);
-                        let lines = build_leg_snapshot_lines(&fb.book.title, host, v, telemetry);
-                        return Some(Modal::Snapshot {
-                            title: format!(" {} \u{00b7} {} ", v.fmt, &v.md5[..8.min(v.md5.len())]),
-                            lines,
-                            parent: None,
-                        });
-                    }
-                    leg_idx += 1;
-                }
-            }
-        } else {
-            // Telemetry-only path: sorted by md5 (same order as focused_transfer_md5).
-            let mut keys: Vec<&String> = self.transfers.keys().collect();
-            keys.sort();
-            if let Some(md5) = keys.get(target) {
-                let t = &self.transfers[*md5];
-                let lines = build_transfer_snapshot_lines(t);
-                return Some(Modal::Snapshot {
-                    title: format!(" leg \u{00b7} {} ", &md5[..8.min(md5.len())]),
-                    lines,
-                    parent: None,
-                });
-            }
+        if !legs.is_empty() {
+            let (fb, host, v) = legs.get(target)?;
+            let telemetry = self.transfers.get(&v.md5);
+            let lines = build_leg_snapshot_lines(&fb.book.title, host, v, telemetry);
+            return Some(Modal::Snapshot {
+                title: format!(" {} \u{00b7} {} ", v.fmt, &v.md5[..8.min(v.md5.len())]),
+                lines,
+                parent: None,
+            });
+        }
+
+        // Telemetry-only path: sorted by md5 (same order as focused_transfer_md5).
+        let mut keys: Vec<&String> = self.transfers.keys().collect();
+        keys.sort();
+        if let Some(md5) = keys.get(target) {
+            let t = &self.transfers[*md5];
+            let lines = build_transfer_snapshot_lines(t);
+            return Some(Modal::Snapshot {
+                title: format!(" leg \u{00b7} {} ", &md5[..8.min(md5.len())]),
+                lines,
+                parent: None,
+            });
         }
 
         None
