@@ -898,6 +898,12 @@ async fn refresh_all_list_summaries(app: &mut AppState, handles: &EngineHandles)
         .unwrap_or(0);
     app.all_lists = summaries;
     app.active_list_idx = active_idx;
+    // Keep the list-strip's aggregate highlight in sync with the actual current
+    // view. cycle_list keeps these consistent, but `:add` / open_list change
+    // `lib.current` to a real list WITHOUT resetting `all_active`, which left the
+    // strip highlighting "★ All" while the body showed the new list. Deriving it
+    // here fixes every current-switching path.
+    app.all_active = current_id == ALL_LIST_ID;
 }
 
 async fn select_candidate(
