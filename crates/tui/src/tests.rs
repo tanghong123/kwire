@@ -7101,6 +7101,39 @@ mod tests {
         );
     }
 
+    /// List-view `o`/`R` open the SELECTED alt-copy sub-row's file when one is
+    /// focused (`selected_var`), and fall back to the first downloaded copy for a
+    /// whole-book selection.
+    #[test]
+    fn list_open_targets_selected_copy_else_first() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let mut first = mk_var("First", "epub", "done", 100, &"a".repeat(32));
+        first.output_path = Some("/books/first.epub".into());
+        let mut second = mk_var("Second", "pdf", "done", 100, &"b".repeat(32));
+        second.output_path = Some("/books/second.pdf".into());
+        app.flat[0].book.versions = vec![first, second];
+        app.focus = Focus::List;
+        app.selected = 0;
+
+        // Alt-copy sub-row (2nd copy) focused → open THAT copy.
+        app.selected_var = Some("b".repeat(32));
+        assert_eq!(
+            app.on_input(key(KeyCode::Char('o'))),
+            Intent::OpenFile("/books/second.pdf".into()),
+            "list o must open the selected copy's file"
+        );
+
+        // Whole-book selection → first downloaded copy.
+        app.selected_var = None;
+        assert_eq!(
+            app.on_input(key(KeyCode::Char('o'))),
+            Intent::OpenFile("/books/first.epub".into()),
+            "whole-book selection opens the first downloaded copy"
+        );
+    }
+
     /// Task #2: list `available` reads `avail` (matching the detail table), so the
     /// two never drift on the available state either.
     #[test]

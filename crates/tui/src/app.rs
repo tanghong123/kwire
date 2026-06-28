@@ -1578,9 +1578,7 @@ impl AppState {
                     }
                     KeyCode::Char('o') => {
                         if let Some(fb) = self.flat.get(self.selected) {
-                            if let Some(path) =
-                                fb.book.versions.iter().find_map(|v| v.output_path.clone())
-                            {
+                            if let Some(path) = list_target_path(fb, self.selected_var.as_deref()) {
                                 return Intent::OpenFile(path);
                             }
                         }
@@ -1588,9 +1586,7 @@ impl AppState {
                     }
                     KeyCode::Char('R') => {
                         if let Some(fb) = self.flat.get(self.selected) {
-                            if let Some(path) =
-                                fb.book.versions.iter().find_map(|v| v.output_path.clone())
-                            {
+                            if let Some(path) = list_target_path(fb, self.selected_var.as_deref()) {
                                 return Intent::RevealFile(path);
                             }
                         }
@@ -3943,6 +3939,24 @@ pub fn build_history_snapshot_lines(ev: &ViewEvent) -> Vec<(String, String)> {
 
 /// Build `(label, value)` rows for a **leg snapshot** (ViewModel data + optional
 /// live telemetry).
+/// The output path list-view `o` (open) / `R` (reveal) should target: the
+/// SELECTED copy's file when an `↳ alt. copy` sub-row is focused (`selected_var`
+/// holds its md5), else the first downloaded copy for a whole-book selection.
+fn list_target_path(fb: &FlatBook, selected_var: Option<&str>) -> Option<String> {
+    if let Some(md5) = selected_var {
+        if let Some(p) = fb
+            .book
+            .versions
+            .iter()
+            .find(|v| v.md5 == md5)
+            .and_then(|v| v.output_path.clone())
+        {
+            return Some(p);
+        }
+    }
+    fb.book.versions.iter().find_map(|v| v.output_path.clone())
+}
+
 /// The output path `o` (open) / `R` (reveal) should target in the Detail modal:
 /// the FOCUSED variation's own file when a specific copy is highlighted
 /// (`Variations` sub-focus), else the first downloaded copy — used for `History`
