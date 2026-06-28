@@ -6977,6 +6977,62 @@ mod tests {
         );
     }
 
+    /// Detail-view `r` on a focused FAILED copy must re-arm just THAT copy
+    /// (per-copy `RequestVariations`), not reset the whole book — so the failed
+    /// variation re-downloads in place instead of vanishing.
+    #[test]
+    fn detail_retry_rearms_focused_copy_not_whole_book() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let failed_md5 = "f".repeat(32);
+        app.flat[0].book.versions = vec![
+            mk_var("Failed Copy", "epub", "failed", 0, &failed_md5),
+            mk_var("Other Copy", "pdf", "done", 100, &"d".repeat(32)),
+        ];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0, // focus the failed copy
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+
+        let intent = app.on_input(key(KeyCode::Char('r')));
+        match intent {
+            Intent::RequestVariations { md5s, .. } => assert_eq!(
+                md5s,
+                vec![failed_md5],
+                "r must re-arm only the focused failed copy"
+            ),
+            other => panic!("expected per-copy RequestVariations, got {other:?}"),
+        }
+    }
+
+    /// Detail-view `r` falls back to a whole-book re-query when History is focused
+    /// (no specific copy in context).
+    #[test]
+    fn detail_retry_history_focus_falls_back_to_whole_book() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        app.flat[0].book.versions =
+            vec![mk_var("Failed Copy", "epub", "failed", 0, &"f".repeat(32))];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::History,
+            history_selected: 0,
+        });
+
+        let intent = app.on_input(key(KeyCode::Char('r')));
+        assert!(
+            matches!(intent, Intent::Retry { .. }),
+            "History focus must keep whole-book retry, got {intent:?}"
+        );
+    }
+
     /// Task #2: list `available` reads `avail` (matching the detail table), so the
     /// two never drift on the available state either.
     #[test]

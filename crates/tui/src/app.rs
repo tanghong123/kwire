@@ -2133,6 +2133,28 @@ impl AppState {
                         }
                         KeyCode::Char('r') => {
                             if let Some(fb) = self.flat.get(flat_index) {
+                                // Per-copy retry: when a specific variation is
+                                // focused, re-arm just THAT copy (request_variation
+                                // resets a Failed/Cancelled/Done job to Pending
+                                // without clearing the other candidates), so a
+                                // failed copy re-downloads in place instead of
+                                // wiping every variation and re-querying the whole
+                                // book. Whole-book re-query is reserved for History
+                                // focus or a book with no copies discovered yet.
+                                if sf == DetailSubFocus::Variations {
+                                    if let Some(v) = fb.book.versions.get(sel) {
+                                        let md5 = v.md5.clone();
+                                        self.status_msg = Some(format!(
+                                            "Retrying: {} ({})",
+                                            fb.book.title, v.fmt
+                                        ));
+                                        return Intent::RequestVariations {
+                                            group_path: vec![fb.group_index],
+                                            book_index: fb.book_index_in_group,
+                                            md5s: vec![md5],
+                                        };
+                                    }
+                                }
                                 return Intent::Retry {
                                     group_path: vec![fb.group_index],
                                     book_index: fb.book_index_in_group,

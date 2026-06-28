@@ -3579,7 +3579,7 @@ pub(crate) fn help_page_rows(page: HelpPage) -> (Vec<HelpRow>, Vec<HelpRow>) {
             vec![
                 Head("ACT"),
                 Key("d", "download focused variation"),
-                Key("r", "retry"),
+                Key("r", "retry focused copy (re-download)"),
                 Key("s", "re-query (inline search)"),
                 Key("e", "edit"),
                 Key("x \u{00b7} Del", "remove"),
