@@ -1500,6 +1500,16 @@ fn activity_leg_line(
 
 /// Build the right-pinned STATUS spans for an Activity download leg —
 /// `fmt  NN%  ▰▰▱▱▱▱  eta` — with the percentage and progress bar in the download
+/// Humanize an ETA in seconds for the Activity pane: `< 60` → "Ns"; otherwise
+/// "MmSSs" (e.g. 171 → "2m51s", 64 → "1m04s", 9 → "9s").
+fn fmt_eta(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    }
+}
+
 /// color (filled bright, remainder faint) so the pane reads at a glance. `base`
 /// styles the format + ETA fields; when `sel_bg` is set the selection background
 /// is layered over every field so a selected leg still highlights.
@@ -1527,7 +1537,7 @@ fn activity_status_spans(
     for s in theme::progress_bar_spans(pct, 6) {
         spans.push(Span::styled(s.content, bg(s.style)));
     }
-    let eta_str = eta_secs.map(|s| format!("{s}s")).unwrap_or_default();
+    let eta_str = eta_secs.map(fmt_eta).unwrap_or_default();
     spans.push(Span::styled(format!("  {eta_str:>6}"), base));
     spans
 }
@@ -5197,6 +5207,16 @@ mod hint_wrap_tests {
             l3.spans[1].content.as_ref(),
             "marquee offset had no effect"
         );
+    }
+
+    #[test]
+    fn fmt_eta_humanizes_minutes() {
+        assert_eq!(fmt_eta(9), "9s");
+        assert_eq!(fmt_eta(59), "59s");
+        assert_eq!(fmt_eta(60), "1m00s");
+        assert_eq!(fmt_eta(64), "1m04s");
+        assert_eq!(fmt_eta(130), "2m10s");
+        assert_eq!(fmt_eta(171), "2m51s");
     }
 
     #[test]
