@@ -7134,6 +7134,56 @@ mod tests {
         );
     }
 
+    /// List-view `r`/`p`/`c` act on the SELECTED alt-copy sub-row when one is
+    /// focused (per-copy intents), and fall back to whole-book intents otherwise.
+    #[test]
+    fn list_rpc_act_on_selected_copy_else_whole_book() {
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let copy_md5 = "b".repeat(32);
+        app.flat[0].book.versions = vec![
+            mk_var("First", "epub", "downloading", 40, &"a".repeat(32)),
+            mk_var("Second", "pdf", "downloading", 10, &copy_md5),
+        ];
+        app.focus = Focus::List;
+        app.selected = 0;
+
+        // Alt-copy sub-row focused → per-copy intents.
+        app.selected_var = Some(copy_md5.clone());
+        match app.on_input(key(KeyCode::Char('r'))) {
+            Intent::RequestVariations { md5s, .. } => assert_eq!(md5s, vec![copy_md5.clone()]),
+            other => panic!("r expected per-copy RequestVariations, got {other:?}"),
+        }
+        assert_eq!(
+            app.on_input(key(KeyCode::Char('p'))),
+            Intent::PauseTransfer {
+                md5: copy_md5.clone()
+            }
+        );
+        assert_eq!(
+            app.on_input(key(KeyCode::Char('c'))),
+            Intent::CancelTransfer {
+                md5: copy_md5.clone()
+            }
+        );
+
+        // Whole-book selection → book-level intents.
+        app.selected_var = None;
+        assert!(
+            matches!(app.on_input(key(KeyCode::Char('r'))), Intent::Retry { .. }),
+            "r on whole book → Retry"
+        );
+        assert!(
+            matches!(app.on_input(key(KeyCode::Char('p'))), Intent::Pause { .. }),
+            "p on whole book → Pause"
+        );
+        assert!(
+            matches!(app.on_input(key(KeyCode::Char('c'))), Intent::Cancel { .. }),
+            "c on whole book → Cancel"
+        );
+    }
+
     /// Task #2: list `available` reads `avail` (matching the detail table), so the
     /// two never drift on the available state either.
     #[test]

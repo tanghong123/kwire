@@ -1514,9 +1514,20 @@ impl AppState {
                         }
                         Focus::List => {
                             if let Some(fb) = self.flat.get(self.selected) {
-                                Intent::Retry {
-                                    group_path: vec![fb.group_index],
-                                    book_index: fb.book_index_in_group,
+                                // Alt-copy sub-row focused → re-arm just THAT copy
+                                // (mirrors the detail-view `r` fix); whole-book row
+                                // → re-query the whole book.
+                                if let Some(md5) = self.selected_var.clone() {
+                                    Intent::RequestVariations {
+                                        group_path: vec![fb.group_index],
+                                        book_index: fb.book_index_in_group,
+                                        md5s: vec![md5],
+                                    }
+                                } else {
+                                    Intent::Retry {
+                                        group_path: vec![fb.group_index],
+                                        book_index: fb.book_index_in_group,
+                                    }
                                 }
                             } else {
                                 Intent::Redraw
@@ -1535,9 +1546,15 @@ impl AppState {
                         }
                         Focus::List => {
                             if let Some(fb) = self.flat.get(self.selected) {
-                                Intent::Pause {
-                                    group_path: vec![fb.group_index],
-                                    book_index: fb.book_index_in_group,
+                                // Alt-copy sub-row focused → pause just THAT copy's
+                                // transfer; whole-book row → pause the whole book.
+                                if let Some(md5) = self.selected_var.clone() {
+                                    Intent::PauseTransfer { md5 }
+                                } else {
+                                    Intent::Pause {
+                                        group_path: vec![fb.group_index],
+                                        book_index: fb.book_index_in_group,
+                                    }
                                 }
                             } else {
                                 Intent::Redraw
@@ -1556,9 +1573,15 @@ impl AppState {
                         }
                         Focus::List => {
                             if let Some(fb) = self.flat.get(self.selected) {
-                                Intent::Cancel {
-                                    group_path: vec![fb.group_index],
-                                    book_index: fb.book_index_in_group,
+                                // Alt-copy sub-row focused → cancel just THAT copy's
+                                // transfer; whole-book row → cancel the whole book.
+                                if let Some(md5) = self.selected_var.clone() {
+                                    Intent::CancelTransfer { md5 }
+                                } else {
+                                    Intent::Cancel {
+                                        group_path: vec![fb.group_index],
+                                        book_index: fb.book_index_in_group,
+                                    }
                                 }
                             } else {
                                 Intent::Redraw
