@@ -169,15 +169,7 @@ pub async fn load_list(
     refresh_library(&state).await
 }
 
-/// The title of the singleton mutable list.
-const MANUAL_LIST_TITLE: &str = "Manual";
-
-/// The naming template the Manual list uses: NO leading sequence number (the
-/// user curates books individually, so a positional number is meaningless). The
-/// 6-hex md5 tag is appended by the naming code as a suffix (see
-/// `naming::filename`), so it is NOT a template token — the result is
-/// `Author - Title - <md5:6>.ext`.
-const MANUAL_NAMING_TEMPLATE: &str = "{authors} - {title}.{ext}";
+use libgen_core::model::MANUAL_LIST_TITLE;
 
 /// **Add a book to the mutable Manual list** (the UI's manual-add). Finds — or
 /// creates — the singleton list titled `"Manual"` (with `is_manual = true` and a
@@ -249,20 +241,7 @@ async fn ensure_manual_list(state: &AppState) -> Result<String, String> {
     // Reuse the persisted Manual list if it exists; otherwise create it.
     let store_id = match store.list_id_by_title(MANUAL_LIST_TITLE).map_err(err)? {
         Some(existing) => existing,
-        None => {
-            let settings = libgen_core::model::ListSettings {
-                naming_template: MANUAL_NAMING_TEMPLATE.to_string(),
-                is_manual: true,
-                ..Default::default()
-            };
-            let list = DownloadList {
-                title: MANUAL_LIST_TITLE.to_string(),
-                settings,
-                // A single root group holds the manually-added books (flat).
-                groups: vec![libgen_core::model::Group::new(MANUAL_LIST_TITLE)],
-            };
-            store.insert_list(&list).map_err(err)?
-        }
+        None => store.insert_list(&DownloadList::manual()).map_err(err)?,
     };
     let id = Library::id_for(store_id);
 
@@ -1665,7 +1644,7 @@ pub async fn download_series(
         _ => return Err(libgen_core::model::ui_msg("err.not_in_series", &[])),
     };
 
-    let list = series_to_list(&series);
+    let list = series.to_download_list();
 
     // Persist via the SAME path as `load_list`: de-dupe by title (re-running
     // refreshes the same list instead of duplicating it), attach a fresh orch.
@@ -1694,26 +1673,6 @@ pub async fn download_series(
     set_goal_for(&state, &id, Goal::Complete).await?;
     state.wake_engine();
     refresh_library(&state).await
-}
-
-/// Project a detected [`Series`] into a [`DownloadList`]: one book per member, in
-/// reading order, under a single group named after the series. The list title is
-/// `"<series name> (series)"` so a re-run de-dupes onto the same list.
-fn series_to_list(series: &libgen_core::series::Series) -> DownloadList {
-    use libgen_core::model::{BookInput, BookRequest, Group};
-    let title = format!("{} (series)", series.name);
-    let mut group = Group::new(series.name.clone());
-    for m in &series.members {
-        group.books.push(BookRequest::new(BookInput {
-            title: m.title.clone(),
-            ..Default::default()
-        }));
-    }
-    DownloadList {
-        title,
-        settings: Default::default(),
-        groups: vec![group],
-    }
 }
 
 /// Reveal a finished file in the OS file manager (Finder on macOS).

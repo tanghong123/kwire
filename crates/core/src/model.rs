@@ -4,6 +4,14 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Title of the single mutable "Manual" list that holds hand-added books, shared
+/// by the desktop + TUI so both look up / create the SAME list.
+pub const MANUAL_LIST_TITLE: &str = "Manual";
+
+/// Filename template for the Manual list (authors first, since manual adds are
+/// usually one-off books, not a numbered series).
+pub const MANUAL_NAMING_TEMPLATE: &str = "{authors} - {title}.{ext}";
+
 /// A whole reading list = one destination folder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DownloadList {
@@ -13,6 +21,23 @@ pub struct DownloadList {
     /// Top-level groups. A flat list is represented as a single implicit group
     /// (or books placed in a root group named after the list).
     pub groups: Vec<Group>,
+}
+
+impl DownloadList {
+    /// The empty, mutable "Manual" list shape (title + settings + a single root
+    /// group). Shared by the desktop + TUI manual-add commands so a freshly
+    /// created Manual list is byte-for-byte identical regardless of frontend.
+    pub fn manual() -> DownloadList {
+        DownloadList {
+            title: MANUAL_LIST_TITLE.to_string(),
+            settings: ListSettings {
+                naming_template: MANUAL_NAMING_TEMPLATE.to_string(),
+                is_manual: true,
+                ..Default::default()
+            },
+            groups: vec![Group::new(MANUAL_LIST_TITLE)],
+        }
+    }
 }
 
 /// A (possibly nested) group of books → maps to a subfolder.

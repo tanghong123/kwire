@@ -29,6 +29,31 @@ pub struct Series {
     pub members: Vec<SeriesMember>,
 }
 
+impl Series {
+    /// Project this series into a fresh [`crate::model::DownloadList`]: one book
+    /// per member in reading order, under a single group named after the series,
+    /// titled `"{name} (series)"`. A pure shape projection — the caller drives the
+    /// members (sets `goal = Complete`) after attaching the list.
+    ///
+    /// Shared by the desktop and TUI "download whole series" commands so the list
+    /// shape can never drift between the two frontends.
+    pub fn to_download_list(&self) -> crate::model::DownloadList {
+        use crate::model::{BookInput, BookRequest, Group};
+        let mut group = Group::new(self.name.clone());
+        for m in &self.members {
+            group.books.push(BookRequest::new(BookInput {
+                title: m.title.clone(),
+                ..Default::default()
+            }));
+        }
+        crate::model::DownloadList {
+            title: format!("{} (series)", self.name),
+            settings: Default::default(),
+            groups: vec![group],
+        }
+    }
+}
+
 /// One entry in a series.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SeriesMember {
@@ -1752,6 +1777,48 @@ mod libgen_goodreads_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_download_list_projects_members_in_order_under_one_group() {
+        let series = Series {
+            key: "OL123S".into(),
+            name: "Oz".into(),
+            members: vec![
+                SeriesMember {
+                    title: "The Wonderful Wizard of Oz".into(),
+                    ..Default::default()
+                },
+                SeriesMember {
+                    title: "The Marvelous Land of Oz".into(),
+                    ..Default::default()
+                },
+            ],
+        };
+        let list = series.to_download_list();
+        assert_eq!(list.title, "Oz (series)");
+        assert_eq!(list.groups.len(), 1);
+        assert_eq!(list.groups[0].name, "Oz");
+        let titles: Vec<&str> = list.groups[0]
+            .books
+            .iter()
+            .map(|b| b.input.title.as_str())
+            .collect();
+        assert_eq!(
+            titles,
+            ["The Wonderful Wizard of Oz", "The Marvelous Land of Oz"]
+        );
+    }
+
+    #[test]
+    fn manual_list_shape_is_canonical() {
+        let m = crate::model::DownloadList::manual();
+        assert_eq!(m.title, crate::model::MANUAL_LIST_TITLE);
+        assert!(m.settings.is_manual);
+        assert_eq!(m.settings.naming_template, "{authors} - {title}.{ext}");
+        assert_eq!(m.groups.len(), 1);
+        assert_eq!(m.groups[0].name, crate::model::MANUAL_LIST_TITLE);
+        assert!(m.groups[0].books.is_empty());
+    }
 
     #[test]
     fn fixture_key_is_deterministic_and_distinct_per_url() {
