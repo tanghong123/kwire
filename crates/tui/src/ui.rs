@@ -3547,11 +3547,14 @@ pub(crate) fn help_page_rows(page: HelpPage) -> (Vec<HelpRow>, Vec<HelpRow>) {
                 Key("e", "edit title / author"),
                 Key("x \u{00b7} Del", "remove (confirm)"),
                 Key("m", "mark not-found"),
-                Key("o \u{00b7} R", "open file \u{00b7} reveal in Finder"),
+                Key("o \u{00b7} R", "open \u{00b7} reveal (selected copy)"),
                 Blank,
                 Head("ACT  (List focus only)"),
-                Key("r", "retry / re-download"),
-                Key("p \u{00b7} c", "pause \u{00b7} cancel"),
+                Key("r", "retry selected copy (else whole book)"),
+                Key(
+                    "p \u{00b7} c",
+                    "pause \u{00b7} cancel selected copy (else book)",
+                ),
             ],
         ),
         HelpPage::Header => (

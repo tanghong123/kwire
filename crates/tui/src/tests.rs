@@ -2078,6 +2078,26 @@ mod tests {
         }
     }
 
+    /// The List help page advertises the per-copy behavior of r/p/c/o so users
+    /// know those keys target the selected alt copy.
+    #[test]
+    fn list_help_page_mentions_per_copy_actions() {
+        let backend = TestBackend::new(120, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Help {
+            page: HelpPage::List,
+            parent: None,
+        });
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            buf.contains("selected copy"),
+            "List help must advertise per-copy r/p/c/o behavior: {buf}"
+        );
+    }
+
     /// Default draft used in settings tests (no view loaded — uses engine defaults).
     fn default_draft() -> SettingsDraft {
         SettingsDraft {
