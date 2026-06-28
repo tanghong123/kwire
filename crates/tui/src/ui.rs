@@ -2166,7 +2166,7 @@ fn render_picker_modal(
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(style_dim())
-                .title(Span::styled(" choose a copy ", style_dim()))
+                .title(Span::styled(" choose a copy ", theme::style_modal_title()))
                 .style(style_normal()),
             area,
         );
@@ -2424,7 +2424,7 @@ fn render_detail_modal(
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(style_dim())
-            .title(Span::styled(" Book detail ", style_dim()))
+            .title(Span::styled(" Book detail ", theme::style_modal_title()))
             .style(style_normal());
         frame.render_widget(block, area);
         return;
@@ -2959,7 +2959,7 @@ fn render_settings_modal(frame: &mut Frame, app: &mut AppState) {
                 Some(v) if app.all_lists.len() > 1 => format!(" Settings \u{00b7} {} ", v.title),
                 _ => " Settings ".to_string(),
             },
-            style_dim(),
+            theme::style_modal_title(),
         ))
         .style(style_normal());
 

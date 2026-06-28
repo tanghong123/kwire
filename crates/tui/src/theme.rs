@@ -45,6 +45,13 @@ pub fn style_muted() -> Style {
     Style::default().fg(C_MUTED).bg(C_BG)
 }
 
+/// High-contrast modal title style — green accent + bold, matching the Help
+/// modal's active-page title. Used for every modal's border title so they read
+/// consistently (Detail / Settings / Picker were dim and inconsistent).
+pub fn style_modal_title() -> Style {
+    Style::default().fg(C_DONE).add_modifier(Modifier::BOLD)
+}
+
 pub fn style_title() -> Style {
     Style::default()
         .fg(C_BRIGHT)

@@ -8013,4 +8013,37 @@ mod tests {
             "detail subtitle must not show the auto-filled trailer: {buf}"
         );
     }
+
+    /// Modal titles use the shared high-contrast style (green accent + bold).
+    #[test]
+    fn modal_titles_use_high_contrast_style() {
+        use crate::app::DetailSubFocus;
+        use ratatui::style::Modifier;
+        let s = crate::theme::style_modal_title();
+        assert_eq!(
+            s.fg,
+            Some(crate::theme::C_DONE),
+            "modal title is the green accent"
+        );
+        assert!(
+            s.add_modifier.contains(Modifier::BOLD),
+            "modal title is bold"
+        );
+
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert!(
+            buffer_string(&terminal).contains("Book detail"),
+            "detail title renders"
+        );
+    }
 }
