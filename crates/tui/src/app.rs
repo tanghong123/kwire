@@ -2113,9 +2113,7 @@ impl AppState {
                         }
                         KeyCode::Char('o') => {
                             if let Some(fb) = self.flat.get(flat_index) {
-                                if let Some(path) =
-                                    fb.book.versions.iter().find_map(|v| v.output_path.clone())
-                                {
+                                if let Some(path) = detail_target_path(fb, &sf, sel) {
                                     return Intent::OpenFile(path);
                                 }
                             }
@@ -2123,9 +2121,7 @@ impl AppState {
                         }
                         KeyCode::Char('R') => {
                             if let Some(fb) = self.flat.get(flat_index) {
-                                if let Some(path) =
-                                    fb.book.versions.iter().find_map(|v| v.output_path.clone())
-                                {
+                                if let Some(path) = detail_target_path(fb, &sf, sel) {
                                     return Intent::RevealFile(path);
                                 }
                             }
@@ -3947,6 +3943,24 @@ pub fn build_history_snapshot_lines(ev: &ViewEvent) -> Vec<(String, String)> {
 
 /// Build `(label, value)` rows for a **leg snapshot** (ViewModel data + optional
 /// live telemetry).
+/// The output path `o` (open) / `R` (reveal) should target in the Detail modal:
+/// the FOCUSED variation's own file when a specific copy is highlighted
+/// (`Variations` sub-focus), else the first downloaded copy — used for `History`
+/// focus, or when the focused copy isn't downloaded yet.
+fn detail_target_path(fb: &FlatBook, sf: &DetailSubFocus, sel: usize) -> Option<String> {
+    if matches!(sf, DetailSubFocus::Variations) {
+        if let Some(p) = fb
+            .book
+            .versions
+            .get(sel)
+            .and_then(|v| v.output_path.clone())
+        {
+            return Some(p);
+        }
+    }
+    fb.book.versions.iter().find_map(|v| v.output_path.clone())
+}
+
 fn build_leg_snapshot_lines(
     book_title: &str,
     host: &str,

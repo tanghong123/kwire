@@ -7067,6 +7067,40 @@ mod tests {
         );
     }
 
+    /// Detail-view `o`/`R` open/reveal the FOCUSED copy's file, not the first
+    /// downloaded copy — so focusing the 2nd done copy opens ITS path.
+    #[test]
+    fn detail_open_reveal_target_focused_copy() {
+        use crate::app::DetailSubFocus;
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let mut first = mk_var("First Copy", "epub", "done", 100, &"a".repeat(32));
+        first.output_path = Some("/books/first.epub".into());
+        let mut second = mk_var("Second Copy", "pdf", "done", 100, &"b".repeat(32));
+        second.output_path = Some("/books/second.pdf".into());
+        app.flat[0].book.versions = vec![first, second];
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 1, // focus the SECOND copy (not first)
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+
+        let o = app.on_input(key(KeyCode::Char('o')));
+        assert_eq!(
+            o,
+            Intent::OpenFile("/books/second.pdf".into()),
+            "o must open the focused copy's file, not the first"
+        );
+        let r = app.on_input(key(KeyCode::Char('R')));
+        assert_eq!(
+            r,
+            Intent::RevealFile("/books/second.pdf".into()),
+            "R must reveal the focused copy's file, not the first"
+        );
+    }
+
     /// Task #2: list `available` reads `avail` (matching the detail table), so the
     /// two never drift on the available state either.
     #[test]
