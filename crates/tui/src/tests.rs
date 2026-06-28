@@ -2768,6 +2768,50 @@ mod tests {
         );
     }
 
+    /// The Activity header pins the aggregate throughput (↓ rate) to the right
+    /// edge and renders it in the download color.
+    #[test]
+    fn activity_header_right_aligns_and_colors_throughput() {
+        use crate::theme::C_DOWNLOADING;
+        use ratatui::layout::Rect;
+        let backend = TestBackend::new(120, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.activity_expanded = true;
+        app.transfers.insert(
+            "a".repeat(32),
+            ActiveTransfer {
+                md5: "a".repeat(32),
+                host: "cdn.booksdl.lc".into(),
+                bytes_done: 1000,
+                total_bytes: Some(2000),
+                speed_bps: Some(1_800_000),
+                ..Default::default()
+            },
+        );
+        let area = Rect::new(0, 0, 120, 6);
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let w = buf.area.width as usize;
+        // Row 0 is the header line; find the throughput ↓ there (the host-line ↓
+        // on row 1 is a different, warm-colored marker).
+        let mut arrow = None;
+        for (i, cell) in buf.content().iter().enumerate().take(w) {
+            if cell.symbol() == "\u{2193}" {
+                arrow = Some((i % w, cell.fg));
+            }
+        }
+        let (ax, fg) = arrow.expect("aggregate throughput ↓ should render when speed > 0");
+        assert_eq!(fg, C_DOWNLOADING, "throughput must be download-colored");
+        assert!(
+            ax > w / 2,
+            "throughput should be right-aligned (x={ax}, w={w})"
+        );
+    }
+
     /// `r`/`p`/`c` in the Activity pane act on the leg resolved by
     /// `focused_transfer_md5`, which must follow the pane's HOST-grouped render
     /// order — not the old md5-sorted order, which selected a different leg.

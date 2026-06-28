@@ -1558,9 +1558,9 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
     // Aggregate speed across all live transfers
     let total_speed_bps: u64 = app.transfers.values().filter_map(|t| t.speed_bps).sum();
     let speed_str = if total_speed_bps >= 1_000_000 {
-        format!(" \u{2193} {:.1}MB/s ", total_speed_bps as f64 / 1_000_000.0)
+        format!("\u{2193} {:.1}MB/s", total_speed_bps as f64 / 1_000_000.0)
     } else if total_speed_bps >= 1_000 {
-        format!(" \u{2193} {}KB/s ", total_speed_bps / 1_000)
+        format!("\u{2193} {}KB/s", total_speed_bps / 1_000)
     } else {
         String::new()
     };
@@ -1578,31 +1578,47 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
     } else {
         "space expand"
     };
-    // The stats that follow the green "ACTIVITY" word.
-    let header_stats = if app.activity_expanded {
+    // Left of the line: the counts that follow the green "ACTIVITY" word.
+    let left_stats = if app.activity_expanded {
         format!(
-            "  {} downloading \u{00b7} {} connecting \u{00b7} {} queued{}  {}",
-            downloading_count, connecting_count, queued_count, speed_str, toggle_hint
+            "  {} downloading \u{00b7} {} connecting \u{00b7} {} queued",
+            downloading_count, connecting_count, queued_count
         )
     } else {
         format!(
-            "  {} downloading \u{00b7} {} queued{}  {}",
-            downloading_count, queued_count, speed_str, toggle_hint
+            "  {} downloading \u{00b7} {} queued",
+            downloading_count, queued_count
         )
+    };
+    // Right of the line (pinned to the pane's right edge, in the download color):
+    // the aggregate throughput + the collapse/expand hint.
+    let right_text = if speed_str.is_empty() {
+        toggle_hint.to_string()
+    } else {
+        format!("{}  {}", speed_str, toggle_hint)
     };
     let header_style = if app.focus == Focus::Activity {
         style_normal()
     } else {
         style_muted()
     };
-    // "ACTIVITY" is always green; the arrow + stats follow the focus style.
+    let left_w = crate::textfit::display_width(arrow)
+        + 1
+        + crate::textfit::display_width("ACTIVITY")
+        + crate::textfit::display_width(&left_stats);
+    let right_w = crate::textfit::display_width(&right_text);
+    let pad = (area.width as usize).saturating_sub(left_w + right_w);
+    // "ACTIVITY" is always green; the arrow + counts follow the focus style; the
+    // throughput + hint are right-aligned in the download color.
     let header_line = Line::from(vec![
         Span::styled(format!("{} ", arrow), header_style),
         Span::styled(
             "ACTIVITY",
             Style::default().fg(C_DONE).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(header_stats, header_style),
+        Span::styled(left_stats, header_style),
+        Span::styled(" ".repeat(pad), header_style),
+        Span::styled(right_text, Style::default().fg(C_DOWNLOADING)),
     ]);
 
     if !app.activity_expanded {
