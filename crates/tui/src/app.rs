@@ -3648,11 +3648,25 @@ impl AppState {
     /// (which `r`/`p`/`c` act on) and `build_leg_snapshot_modal` (the `Enter`
     /// snapshot) so the focused leg and the acted-on leg can never diverge.
     fn activity_legs(&self) -> Vec<(&FlatBook, String, &ViewVariation)> {
+        let now = self.now_ms();
         let mut host_groups: std::collections::BTreeMap<String, Vec<(&FlatBook, &ViewVariation)>> =
             std::collections::BTreeMap::new();
         for fb in &self.flat {
             for v in &fb.book.versions {
-                if v.state == "downloading" {
+                if v.state != "downloading" {
+                    continue;
+                }
+                // Mirror the render's per-leg expansion (ui::render_activity) so
+                // `activity_selected` maps to exactly the row the user sees: a
+                // hedged variation contributes one entry per live leg (each under
+                // its own host); otherwise one entry under the variation's host.
+                let legs = self.legs.legs_for(&v.md5, now);
+                if legs.len() > 1 {
+                    for leg in &legs {
+                        let host = leg.host.clone().unwrap_or_else(|| "unknown".to_string());
+                        host_groups.entry(host).or_default().push((fb, v));
+                    }
+                } else {
                     let host = v.host.as_deref().unwrap_or("unknown").to_string();
                     host_groups.entry(host).or_default().push((fb, v));
                 }

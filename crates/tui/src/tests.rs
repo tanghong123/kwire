@@ -2864,6 +2864,94 @@ mod tests {
         );
     }
 
+    /// A hedged variation (two live legs sharing one md5) renders as TWO rows —
+    /// the primary plus an alt-copy row under the SECOND host — driven purely by
+    /// the shared LegTracker's leg_id ordering (earliest start = primary). The
+    /// non-primary leg's title is suffixed "· alt copy" (mock: docs/TUI.md:78).
+    #[test]
+    fn activity_hedge_renders_primary_and_alt_copy() {
+        use libgen_core::queue::Progress;
+        use ratatui::layout::Rect;
+        let backend = TestBackend::new(120, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let md5 = "a".repeat(32);
+        let v = mk_var("Treasure Island", "pdf", "downloading", 40, &md5);
+        app.flat[0].book.versions = vec![v];
+        // Two live legs for the SAME md5: leg 0 (primary) on cdn3, leg 1 (hedge,
+        // alt copy) on libgen.download. Fed straight into the shared tracker.
+        app.legs.note(
+            &Progress::Bytes {
+                md5: md5.clone(),
+                leg_id: 0,
+                is_hedge: false,
+                host: "cdn3.booksdl.lc".into(),
+                bytes_done: 40,
+                total_bytes: Some(100),
+                speed_bps: Some(1_000),
+                eta_secs: Some(60),
+            },
+            0,
+        );
+        app.legs.note(
+            &Progress::Bytes {
+                md5: md5.clone(),
+                leg_id: 1,
+                is_hedge: true,
+                host: "libgen.download".into(),
+                bytes_done: 25,
+                total_bytes: Some(100),
+                speed_bps: Some(500),
+                eta_secs: Some(120),
+            },
+            0,
+        );
+        app.activity_expanded = true;
+        let area = Rect::new(0, 0, 120, 20);
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let buf = buffer_string(&terminal);
+        assert_eq!(
+            buf.matches("alt copy").count(),
+            1,
+            "exactly the non-primary leg is annotated · alt copy: {buf:?}"
+        );
+        assert!(
+            buf.contains("cdn3.booksdl.lc") && buf.contains("libgen.download"),
+            "each leg gets its own host row: {buf:?}"
+        );
+    }
+
+    /// The common (hedges-off) case: a variation with no extra legs renders ONE
+    /// row and NO alt-copy annotation — the existing single-row path is unchanged.
+    #[test]
+    fn activity_single_leg_has_no_alt_copy() {
+        use ratatui::layout::Rect;
+        let backend = TestBackend::new(120, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let md5 = "a".repeat(32);
+        let mut v = mk_var("Treasure Island", "pdf", "downloading", 40, &md5);
+        v.host = Some("cdn3.booksdl.lc".into());
+        app.flat[0].book.versions = vec![v];
+        // No legs fed → legs_for empty → single ViewModel row, no alt copy.
+        app.activity_expanded = true;
+        let area = Rect::new(0, 0, 120, 12);
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let buf = buffer_string(&terminal);
+        assert!(
+            !buf.contains("alt copy"),
+            "a single-leg download must not show · alt copy: {buf:?}"
+        );
+    }
+
     /// The Activity header pins the aggregate throughput (↓ rate) to the right
     /// edge and renders it in the download color.
     #[test]

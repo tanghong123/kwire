@@ -1650,18 +1650,49 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
 
     // Build per-host transfer lines by grouping downloading versions by host.
     // 1. Collect from flat ViewModel (has progress / fmt info from engine).
+    let leg_now = app.now_ms();
     let mut host_groups: BTreeMap<String, Vec<(String, u32, String, Option<u64>)>> =
         BTreeMap::new();
+    // Per-host download rate, summed from the legs/variations placed under each
+    // host. Built here (NOT from app.transfers, which carries only the primary leg
+    // post-hedge) so a hedge host's rate is accurate and a primary-only host's is
+    // unchanged.
+    let mut host_speeds: BTreeMap<String, u64> = BTreeMap::new();
     for fb in &app.flat {
         for v in &fb.book.versions {
-            if v.state == "downloading" {
+            if v.state != "downloading" {
+                continue;
+            }
+            // Expand the variation into its live legs (primary + any hedge alt
+            // copies). >1 leg → one row per leg under its OWN host, the non-primary
+            // ones titled "… · alt copy" (mock: docs/TUI.md:78). 0/1 leg → the
+            // single ViewModel row as before. Per-leg %/eta come from the leg.
+            let legs = app.legs.legs_for(&v.md5, leg_now);
+            if legs.len() > 1 {
+                for leg in &legs {
+                    let host = leg.host.clone().unwrap_or_else(|| "unknown".to_string());
+                    let title = if leg.is_alt {
+                        format!("{} \u{00b7} alt copy", fb.book.title)
+                    } else {
+                        fb.book.title.clone()
+                    };
+                    host_groups.entry(host.clone()).or_default().push((
+                        title,
+                        leg.progress,
+                        v.fmt.clone(),
+                        leg.eta_secs,
+                    ));
+                    *host_speeds.entry(host).or_default() += leg.speed_bps.unwrap_or(0);
+                }
+            } else {
                 let host = v.host.as_deref().unwrap_or("unknown").to_string();
-                host_groups.entry(host).or_default().push((
+                host_groups.entry(host.clone()).or_default().push((
                     fb.book.title.clone(),
                     v.progress,
                     v.fmt.clone(),
                     v.eta_secs,
                 ));
+                *host_speeds.entry(host).or_default() += v.speed_bps.unwrap_or(0);
             }
         }
     }
@@ -1730,13 +1761,8 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
     if !use_telemetry {
         if !host_groups.is_empty() {
             for (host, versions) in &host_groups {
-                // Per-host aggregate speed
-                let host_speed: u64 = app
-                    .transfers
-                    .values()
-                    .filter(|t| &t.host == host)
-                    .filter_map(|t| t.speed_bps)
-                    .sum();
+                // Per-host aggregate speed (summed from the legs under this host).
+                let host_speed: u64 = host_speeds.get(host).copied().unwrap_or(0);
                 // Always show the leg count + rate on the host row, even at 0 B/s
                 // (a host whose only leg just started shouldn't read as rate-less).
                 let host_rest = format!(
