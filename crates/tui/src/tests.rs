@@ -2438,6 +2438,55 @@ mod tests {
     }
 
     #[test]
+    fn longest_common_prefix_basics() {
+        use crate::app::longest_common_prefix;
+        let lcp = |a: &[&str]| {
+            longest_common_prefix(&a.iter().map(|x| x.to_string()).collect::<Vec<_>>())
+        };
+        assert_eq!(lcp(&["import", "in"]), "i");
+        assert_eq!(lcp(&["settings", "start-all"]), "s");
+        assert_eq!(lcp(&["about", "add"]), "a");
+        assert_eq!(lcp(&["import"]), "import");
+        assert_eq!(
+            lcp(&["about", "import"]),
+            "",
+            "divergent first char → empty"
+        );
+        assert_eq!(lcp(&[]), "");
+    }
+
+    #[test]
+    fn tab_multi_match_fills_common_prefix_and_opens_wildmenu() {
+        use std::fs;
+        // A temp dir with two files sharing the prefix "alp".
+        let dir = std::env::temp_dir().join(format!("kwire_compl_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("alpha.md"), "x").unwrap();
+        fs::write(dir.join("alps.md"), "x").unwrap();
+
+        let mut app = AppState::new();
+        // Command mode, an :import path typed up to ".../al" (two files match).
+        app.command_buf = Some(format!("import {}/al", dir.display()));
+        app.on_input(key(KeyCode::Tab));
+
+        let buf = app.command_buf.clone().unwrap();
+        // Filled up to the common prefix ".../alp" — the point the files diverge.
+        assert!(
+            buf.ends_with("/alp"),
+            "Tab should fill to the common prefix, got {buf:?}"
+        );
+        // …and the alternatives are advertised (wildmenu row above the input).
+        assert_eq!(
+            app.completion_candidates.len(),
+            2,
+            "both matching files should be advertised"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn wildmenu_render_contains_candidates() {
         // When the wildmenu is open the rendered buffer must show candidate text.
         let backend = TestBackend::new(120, 30);

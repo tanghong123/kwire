@@ -261,6 +261,34 @@ pub(crate) fn complete_path(arg: &str) -> Vec<String> {
     out
 }
 
+/// The longest common prefix shared by every string in `items` (byte-safe at
+/// char boundaries). Empty for an empty slice or when the items diverge at the
+/// first character. Used by Tab-completion to fill the buffer up to the point the
+/// candidates differ before showing the alternatives.
+pub(crate) fn longest_common_prefix(items: &[String]) -> String {
+    let Some(first) = items.first() else {
+        return String::new();
+    };
+    let mut end = first.len();
+    for it in &items[1..] {
+        let common = first
+            .as_bytes()
+            .iter()
+            .zip(it.as_bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        end = end.min(common);
+        if end == 0 {
+            break;
+        }
+    }
+    // Don't slice through a multi-byte char.
+    while end > 0 && !first.is_char_boundary(end) {
+        end -= 1;
+    }
+    first[..end].to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Focus
 // ---------------------------------------------------------------------------
@@ -3912,7 +3940,18 @@ impl AppState {
                     }
                 }
                 _ => {
-                    // Multiple matches: open the wildmenu at index 0.
+                    // Multiple matches: fill the buffer up to the longest common
+                    // prefix (inline completion to the point the candidates
+                    // diverge), then open the wildmenu so the alternatives show in
+                    // the row above. A no-op extension (lcp == typed token) still
+                    // opens the wildmenu so the user sees the choices.
+                    let lcp = longest_common_prefix(&candidates);
+                    if !lcp.is_empty() {
+                        let filled = Self::completed_buf(&buf, &lcp);
+                        if let Some(ref mut b) = self.command_buf {
+                            *b = filled;
+                        }
+                    }
                     self.completion_candidates = candidates;
                     self.completion_index = 0;
                 }
