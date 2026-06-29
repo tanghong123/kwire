@@ -78,6 +78,20 @@ async fn alice_libgen_tpb() {
         series.members.iter().all(|m| m.md5.is_some()),
         "every libgen member should carry a cover md5"
     );
+    // Every member carries an author (the row's author cell, else the seed) so
+    // the seeded list's libgen query is never title-only.
+    assert!(
+        series
+            .members
+            .iter()
+            .all(|m| m.author.as_deref().map(|a| !a.is_empty()) == Some(true)),
+        "every libgen member should carry an author: {:?}",
+        series
+            .members
+            .iter()
+            .map(|m| (&m.title, &m.author))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
@@ -166,6 +180,21 @@ async fn oz_returns_ordered_members_from_replay() {
             .any(|m| m.title == "Ozma of Oz: The Royal Book"),
         "subtitle members render as 'Title: Subtitle': {:?}",
         series.members.iter().map(|m| &m.title).collect::<Vec<_>>()
+    );
+
+    // Every member inherits the seed author so the seeded list's libgen query
+    // carries author corroboration (never title-only).
+    assert!(
+        series
+            .members
+            .iter()
+            .all(|m| m.author.as_deref() == Some("L. Frank Baum")),
+        "members must inherit the seed author: {:?}",
+        series
+            .members
+            .iter()
+            .map(|m| (&m.title, &m.author))
+            .collect::<Vec<_>>()
     );
 }
 

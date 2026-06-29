@@ -41,8 +41,19 @@ impl Series {
         use crate::model::{BookInput, BookRequest, Group};
         let mut group = Group::new(self.name.clone());
         for m in &self.members {
+            // Carry the member's author into the query metadata — without it the
+            // seeded list would search libgen by TITLE ALONE, losing the author
+            // corroboration that disambiguates same-titled books.
+            let authors: Vec<String> = m
+                .author
+                .as_deref()
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .map(|a| vec![a.to_string()])
+                .unwrap_or_default();
             group.books.push(BookRequest::new(BookInput {
                 title: m.title.clone(),
+                authors,
                 ..Default::default()
             }));
         }
@@ -67,6 +78,13 @@ pub struct SeriesMember {
     pub md5: Option<String>,
     /// Cover image URL, when the source carries one (libgen series pages).
     pub cover_url: Option<String>,
+    /// Author(s) for this member. Sources that expose a per-member author (the
+    /// libgen series page's author cell) fill it directly; the OL/Goodreads
+    /// paths, whose members share the seed book's author, fall back to the seed
+    /// author (see [`fill_member_authors`]). An empty author would make the
+    /// seeded list's libgen query TITLE-ONLY — far less precise — so this is
+    /// propagated into [`Series::to_download_list`]'s `BookInput.authors`.
+    pub author: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -248,10 +266,17 @@ impl SeriesClient {
     /// untagged series from sibling titles (box sets filtered out). See
     /// [`SeriesClient::title_prefix_fallback`].
     pub async fn lookup(&self, title: &str, author: &str) -> Result<Option<Series>> {
-        if let Some(series) = self.lookup_primary(title, author).await? {
-            return Ok(Some(series));
+        let mut series = match self.lookup_primary(title, author).await? {
+            Some(s) => Some(s),
+            None => self.title_prefix_fallback(title, author).await?,
+        };
+        // OL members carry no author in our search responses, so members inherit
+        // the seed book's author (a series is by one author in the OL/prefix
+        // paths). Keeps the seeded list's libgen query from going title-only.
+        if let Some(s) = series.as_mut() {
+            fill_member_authors(s, author);
         }
-        self.title_prefix_fallback(title, author).await
+        Ok(series)
     }
 
     /// The primary lookup: Open Library's explicit `series` field. `Ok(None)`
@@ -1013,7 +1038,7 @@ impl LibgenSeriesClient {
     /// Look up `title` (author unused for the search — appending it can surface
     /// journal-review rows pointing at the wrong `series.php`). `Ok(None)` when
     /// no usable book series is found.
-    pub async fn lookup(&self, title: &str, _author: &str) -> Result<Option<Series>> {
+    pub async fn lookup(&self, title: &str, author: &str) -> Result<Option<Series>> {
         // 1. Search the title; collect candidate series ids from the result rows.
         let search_url = format!(
             "{LIBGEN_BASE}/index.php?req={}&res=25",
@@ -1094,7 +1119,13 @@ impl LibgenSeriesClient {
             }
         }
 
-        Ok(best.map(|(_, _, s)| s))
+        let mut series = best.map(|(_, _, s)| s);
+        // Series-page rows carry a per-member author cell; rows missing one fall
+        // back to the seed author so no member is left author-less.
+        if let Some(s) = series.as_mut() {
+            fill_member_authors(s, author);
+        }
+        Ok(series)
     }
 }
 
@@ -1183,16 +1214,24 @@ fn parse_series_page(html: &str, host: &str) -> (String, Vec<SeriesMember>) {
         if cells.len() < 8 {
             continue;
         }
-        // Wide title cell: the FIRST `td` with `width="20%"` (the title; the
-        // second 20% cell is the author).
-        let title_cell = cells.iter().find(|c| cell_width_is(c, "20%")).copied();
-        let title = match title_cell {
+        // Wide cells: the FIRST `td` with `width="20%"` is the title; the
+        // SECOND is the author.
+        let wide: Vec<_> = cells
+            .iter()
+            .filter(|c| cell_width_is(c, "20%"))
+            .copied()
+            .collect();
+        let title = match wide.first() {
             Some(c) => clean(&c.text().collect::<String>()),
             None => continue,
         };
         if title.is_empty() {
             continue; // Strip-style row with no title — not a book member
         }
+        let author = wide
+            .get(1)
+            .map(|c| clean(&c.text().collect::<String>()))
+            .filter(|a| !a.is_empty());
 
         // Cover md5 from the row's `/comicscovers/…/<md5>.jpg`.
         let cover_href = row
@@ -1226,6 +1265,7 @@ fn parse_series_page(html: &str, host: &str) -> (String, Vec<SeriesMember>) {
                 position: volume,
                 md5,
                 cover_url,
+                author,
             },
         ));
     }
@@ -1357,7 +1397,7 @@ impl GoodreadsClient {
 
     /// Look up the series `title` belongs to on Goodreads. `Ok(None)` when no
     /// match, or the matched book is a standalone.
-    pub async fn lookup(&self, title: &str, _author: &str) -> Result<Option<Series>> {
+    pub async fn lookup(&self, title: &str, author: &str) -> Result<Option<Series>> {
         // 1. Autocomplete → best book id.
         let ac_url = format!(
             "{GOODREADS_BASE}/book/auto_complete?format=json&q={}",
@@ -1384,7 +1424,7 @@ impl GoodreadsClient {
         if members.is_empty() {
             return Ok(None);
         }
-        Ok(Some(Series {
+        let mut series = Series {
             key: format!("goodreads:{series_id}"),
             name: if name.is_empty() {
                 series_name(title)
@@ -1392,7 +1432,11 @@ impl GoodreadsClient {
                 name
             },
             members,
-        }))
+        };
+        // Goodreads members share the seed book's author; fill it in so the
+        // seeded list's libgen query isn't title-only.
+        fill_member_authors(&mut series, author);
+        Ok(Some(series))
     }
 }
 
@@ -1514,6 +1558,7 @@ fn parse_goodreads_series(html: &str) -> (String, Vec<SeriesMember>) {
                         position: Some(num),
                         md5: None,
                         cover_url: None,
+                        author: None,
                     });
                 }
             }
@@ -1621,6 +1666,24 @@ fn search_url_encode(s: &str) -> String {
     url_encode(s)
 }
 
+/// Fill in any member whose `author` is missing/blank with the seed book's
+/// author. Series members share an author in the OL/Goodreads paths (and on
+/// libgen rows that omit the author cell), so this keeps every seeded book from
+/// falling back to a title-only libgen query. A no-op when the seed author is
+/// itself empty.
+fn fill_member_authors(series: &mut Series, seed_author: &str) {
+    let seed = seed_author.trim();
+    if seed.is_empty() {
+        return;
+    }
+    for m in &mut series.members {
+        let has_author = m.author.as_deref().map(|a| !a.trim().is_empty()) == Some(true);
+        if !has_author {
+            m.author = Some(seed.to_string());
+        }
+    }
+}
+
 #[cfg(test)]
 mod libgen_goodreads_tests {
     use super::*;
@@ -1673,6 +1736,11 @@ mod libgen_goodreads_tests {
         assert_eq!(
             m.cover_url.as_deref(),
             Some("https://libgen.li/comicscovers/1121000/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg")
+        );
+        assert_eq!(
+            m.author.as_deref(),
+            Some("Lewis Carroll"),
+            "author from the SECOND width=20% cell"
         );
     }
 
@@ -1807,6 +1875,77 @@ mod tests {
             titles,
             ["The Wonderful Wizard of Oz", "The Marvelous Land of Oz"]
         );
+    }
+
+    #[test]
+    fn to_download_list_carries_member_authors() {
+        // A member WITH an author projects it into the query metadata; a member
+        // WITHOUT one yields empty `authors` (no phantom author).
+        let series = Series {
+            key: "OL123S".into(),
+            name: "Oz".into(),
+            members: vec![
+                SeriesMember {
+                    title: "The Wonderful Wizard of Oz".into(),
+                    author: Some("L. Frank Baum".into()),
+                    ..Default::default()
+                },
+                SeriesMember {
+                    title: "Anonymous Volume".into(),
+                    author: None,
+                    ..Default::default()
+                },
+            ],
+        };
+        let list = series.to_download_list();
+        let books = &list.groups[0].books;
+        assert_eq!(books[0].input.authors, vec!["L. Frank Baum".to_string()]);
+        assert!(
+            books[1].input.authors.is_empty(),
+            "no author → no phantom authors entry"
+        );
+    }
+
+    #[test]
+    fn fill_member_authors_uses_seed_only_when_missing() {
+        let mut series = Series {
+            key: "k".into(),
+            name: "n".into(),
+            members: vec![
+                SeriesMember {
+                    title: "Has Author".into(),
+                    author: Some("Real Author".into()),
+                    ..Default::default()
+                },
+                SeriesMember {
+                    title: "Blank Author".into(),
+                    author: Some("   ".into()),
+                    ..Default::default()
+                },
+                SeriesMember {
+                    title: "No Author".into(),
+                    author: None,
+                    ..Default::default()
+                },
+            ],
+        };
+        fill_member_authors(&mut series, "Seed Author");
+        assert_eq!(series.members[0].author.as_deref(), Some("Real Author"));
+        assert_eq!(series.members[1].author.as_deref(), Some("Seed Author"));
+        assert_eq!(series.members[2].author.as_deref(), Some("Seed Author"));
+
+        // An empty seed never overwrites — leaves members untouched.
+        let mut s2 = Series {
+            key: "k".into(),
+            name: "n".into(),
+            members: vec![SeriesMember {
+                title: "t".into(),
+                author: None,
+                ..Default::default()
+            }],
+        };
+        fill_member_authors(&mut s2, "   ");
+        assert_eq!(s2.members[0].author, None);
     }
 
     #[test]
