@@ -69,12 +69,18 @@ impl SpeedTracker {
 }
 
 /// Estimate seconds remaining for a transfer at `speed_bps` given `downloaded`
-/// of `total` bytes. Returns `None` when the total or speed is unknown/zero, or
-/// the download is already complete (`downloaded >= total`).
+/// of `total` bytes. Returns `Some(0)` once the bytes are all in
+/// (`downloaded >= total`) — 0 download-seconds remain while the file finalizes/
+/// verifies, so the UI shows "0s" rather than "tbd". Returns `None` only when the
+/// total is unknown, or the speed is unknown/zero before completion.
 pub fn eta_secs(downloaded: u64, total: Option<u64>, speed_bps: Option<u64>) -> Option<u64> {
     let total = total?;
+    // Bytes complete: 0 remaining, regardless of the (now meaningless) speed.
+    if downloaded >= total {
+        return Some(0);
+    }
     let speed = speed_bps?;
-    if speed == 0 || downloaded >= total {
+    if speed == 0 {
         return None;
     }
     let remaining = total - downloaded;
@@ -156,8 +162,12 @@ mod tests {
     }
 
     #[test]
-    fn complete_download_has_no_eta() {
-        assert_eq!(eta_secs(1000, Some(1000), Some(100)), None);
-        assert_eq!(eta_secs(1500, Some(1000), Some(100)), None);
+    fn complete_download_eta_is_zero() {
+        // Bytes complete → 0s remaining (finalizing/verifying), never "tbd".
+        assert_eq!(eta_secs(1000, Some(1000), Some(100)), Some(0));
+        assert_eq!(eta_secs(1500, Some(1000), Some(100)), Some(0));
+        // …even when the speed is unknown/zero at the 100% tick.
+        assert_eq!(eta_secs(1000, Some(1000), None), Some(0));
+        assert_eq!(eta_secs(1000, Some(1000), Some(0)), Some(0));
     }
 }
