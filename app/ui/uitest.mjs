@@ -499,6 +499,20 @@ check("variation manager: a candidate's YEAR shows in the meta line (parity with
   if (!/—/.test(html)) throw new Error("a yearless candidate should render an em dash placeholder: " + html);
 });
 
+check("variation manager: a done-but-low-pages copy reads 'Too few pages', not 'Downloaded'", () => {
+  const mk = (low) => ({ id: "bk0", list: "L1", bid: "bk0", title: "Short Book", author: "A", seq: 1,
+    priority: false, discovery: "matched", review: false, recommended_md5: null,
+    versions: [{ md5: "a".repeat(32), fmt: "pdf", state: "done", size: 1, progress: 100,
+      title: "Short Book", author: "A", publisher: "", low_pages: low, counted_pages: 3,
+      output_path: "/x/Short.pdf" }] });
+  const low = ctx.renderVariationManager(mk(true));
+  if (!/Too few pages/.test(low)) throw new Error("done+low_pages must read 'Too few pages': " + low);
+  if (/Downloaded<\/span>/.test(low)) throw new Error("done+low_pages must not read 'Downloaded': " + low);
+  const ok = ctx.renderVariationManager(mk(false));
+  if (!/Downloaded/.test(ok)) throw new Error("a normal done copy must read 'Downloaded': " + ok);
+  if (/Too few pages/.test(ok)) throw new Error("a normal done copy must not read 'Too few pages': " + ok);
+});
+
 check("cover preload: throttled to COVER_CONCURRENCY, rest queued", () => {
   // Reset cover state.
   ctx.COVER_CACHE = {}; ctx.COVER_INFLIGHT = {}; ctx.COVER_FAILS = {};

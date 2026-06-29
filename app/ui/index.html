@@ -784,6 +784,7 @@ var I18N = {
     "status.needs": "Needs you", "status.review": "Check download", "status.cantdl": "Cannot download",
     /* per-variation status cells */
     "vstat.done": "✓ Done",
+    "vstat.too_few_pages": "⚠ Too few pages",
     "vstat.paused": "⏸ Paused",
     "vstat.failed": "⚠ Failed",
     "vstat.queued": "Queued",
@@ -1065,6 +1066,7 @@ var I18N = {
     "status.needs": "待确认", "status.review": "请检查", "status.cantdl": "无法下载",
     /* per-variation status cells */
     "vstat.done": "✓ 已完成",
+    "vstat.too_few_pages": "⚠ 页数过少",
     "vstat.paused": "⏸ 已暂停",
     "vstat.failed": "⚠ 失败",
     "vstat.queued": "等待中",
@@ -2230,6 +2232,8 @@ function downloadPct(bk) {
 /* One variation's status cell. An ANIMATED hourglass = actively downloading; a
    still hourglass = queued/waiting — so the two are visually distinct. */
 function varStatusCell(v) {
+  // A verified-but-too-short copy reads as a warning, not a reassuring "Done".
+  if (v.state === "done" && v.low_pages) return '<span class="vstat" style="color:var(--amber)">' + esc(t("vstat.too_few_pages")) + '</span>';
   if (v.state === "done") return '<span class="vstat" style="color:var(--green)">' + esc(t("vstat.done")) + '</span>';
   if (v.state === "downloading")
     return '<span class="vstat" style="color:var(--accent)"><span class="hourglass run">⏳</span> <span class="vpct">…</span></span>';
@@ -2524,7 +2528,9 @@ function renderVariationManager(bk) {
     var removeBtn = ' <button class="tbtn" data-remove="' + bk.id + ':' + v.md5 +
       '" title="' + esc(t("vm.remove_title")) + '">' + esc(t("vm.remove_btn")) + '</button>';
     if (v.state === "done") {
-      label = '<span class="chip-s s-done">' + esc(t("vm.downloaded")) + '</span>';
+      label = v.low_pages
+        ? '<span class="chip-s s-attn">' + esc(t("vstat.too_few_pages")) + '</span>'
+        : '<span class="chip-s s-done">' + esc(t("vm.downloaded")) + '</span>';
       action = '<button class="tbtn" data-reveal="' + esc(v.output_path || "") + '">' + esc(t("vm.reveal")) + '</button>' +
         '<button class="tbtn" data-dl="' + bk.id + ':' + idx + '">' + esc(t("vm.redownload")) + '</button>' +
         '<button class="tbtn" data-remove="' + bk.id + ':' + v.md5 + '" title="' + esc(t("vm.remove_dl_title")) + '">' + esc(t("vm.remove_trash")) + '</button>';

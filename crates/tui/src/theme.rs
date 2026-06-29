@@ -95,7 +95,9 @@ pub fn style_for_state(state: &str) -> Style {
         "done" => C_DONE,
         "downloading" => C_DOWNLOADING,
         "failed" | "cancelled" | "not_found" => C_FAILED,
-        "paused" | "available" => C_NEEDS_YOU,
+        // A downloaded-but-too-short copy reads as "needs your attention" (amber),
+        // not the reassuring green of a good `done`.
+        "paused" | "available" | "too_few_pages" => C_NEEDS_YOU,
         _ => C_DIM, // queued / unknown
     };
     Style::default().fg(color)

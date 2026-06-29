@@ -1013,9 +1013,12 @@ mod filter_chip_tests {
 /// job states ("downloading", "available", …) and book-level discovery states
 /// ("not_found", "needs_selection", "querying") so every status renders the
 /// same wording everywhere.
-fn state_label(state: &str) -> &str {
+pub(crate) fn state_label(state: &str) -> &str {
     match state {
         "done" => "done",
+        // A verified copy whose page/section count is below the low-page threshold:
+        // displayed as a not-good copy though the underlying job is still Done.
+        "too_few_pages" => "too few pages",
         // No percentage: the progress bar / Activity pane already convey it.
         "downloading" => "dling",
         "available" => "avail",
@@ -1056,9 +1059,21 @@ fn variation_display(v: &libgen_engine::ViewVariation) -> (String, String, Strin
     (
         v.fmt.clone(),
         size,
-        state_label(&v.state).to_string(),
+        state_label(variation_display_state(v)).to_string(),
         v.progress,
     )
+}
+
+/// The DISPLAY state for a variation: a `done` copy flagged `low_pages` reads as
+/// `too_few_pages` (a not-good copy) while the underlying job stays `Done` — so
+/// the Done filter/count and the `o open` affordance, which key off the raw
+/// `v.state`, are unaffected. Otherwise the raw state.
+pub(crate) fn variation_display_state(v: &libgen_engine::ViewVariation) -> &str {
+    if v.state == "done" && v.low_pages {
+        "too_few_pages"
+    } else {
+        v.state.as_str()
+    }
 }
 
 /// One pre-collected library table row (group divider or a body book/sub-row),
@@ -1157,9 +1172,9 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             (
                 f,
                 s,
-                list_state_cell(&armed[0].state, p),
+                list_state_cell(variation_display_state(armed[0]), p),
                 p,
-                armed[0].state.clone(),
+                variation_display_state(armed[0]).to_string(),
             )
         } else if book.versions.is_empty() {
             // No version yet — show the book-level discovery state. The style
@@ -1194,9 +1209,9 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
             (
                 best.fmt.clone(),
                 size_label,
-                list_state_cell(&best.state, best.progress),
+                list_state_cell(variation_display_state(best), best.progress),
                 best.progress,
-                best.state.clone(),
+                variation_display_state(best).to_string(),
             )
         };
 
@@ -1275,8 +1290,8 @@ fn render_book_table(frame: &mut Frame, app: &mut AppState, area: Rect) {
                 let sub_inactive = var_focused && app.focus != Focus::List;
 
                 let (vfmt, vsize, _vstate, vprog) = variation_display(v);
-                let vstate = list_state_cell(&v.state, vprog);
-                let vstate_style = theme::style_for_state(&v.state);
+                let vstate = list_state_cell(variation_display_state(v), vprog);
+                let vstate_style = theme::style_for_state(variation_display_state(v));
                 let vbase_style = if sub_selected {
                     style_selected()
                 } else {
@@ -2857,7 +2872,7 @@ fn render_detail_modal(
             // Shared short labels (see `state_label`) so the detail table and
             // the list view never drift. The ✓/spinner glyphs live in the
             // separate accent column, so this cell is plain text.
-            let state = state_label(&v.state).to_string();
+            let state = state_label(variation_display_state(v)).to_string();
             (fmt, size, mat, state)
         })
         .collect();
@@ -2956,7 +2971,7 @@ fn render_detail_modal(
                 style_sel_accent_dim()
             }
         } else {
-            theme::style_for_state(&v.state)
+            theme::style_for_state(variation_display_state(v))
         };
         let base_style = if sel_active {
             Style::default().bg(C_SELECTED)
@@ -2987,7 +3002,7 @@ fn render_detail_modal(
         let state_style = if sel_active {
             style_selected()
         } else {
-            theme::style_for_state(&v.state)
+            theme::style_for_state(variation_display_state(v))
         };
         let rest = vec![
             (f.clone(), dim_or_sel),

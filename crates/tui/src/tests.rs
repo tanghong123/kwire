@@ -2768,6 +2768,50 @@ mod tests {
         );
     }
 
+    /// A `done` copy flagged `low_pages` displays as "too few pages" (a not-good
+    /// copy) while its raw state stays `done`; a normal done copy is unaffected.
+    #[test]
+    fn done_but_low_pages_relabels_to_too_few_pages() {
+        let mut v = mk_var("Short", "pdf", "done", 100, &"d".repeat(32));
+        v.low_pages = false;
+        assert_eq!(ui::variation_display_state(&v), "done");
+        v.low_pages = true;
+        assert_eq!(ui::variation_display_state(&v), "too_few_pages");
+        assert_eq!(ui::state_label("too_few_pages"), "too few pages");
+        // The relabel is gated on `done`: a low_pages flag on a non-done state
+        // (shouldn't happen) never hijacks the live download status.
+        v.state = "downloading".into();
+        assert_eq!(ui::variation_display_state(&v), "downloading");
+    }
+
+    /// End-to-end: a done+low_pages book renders the "too few" warning in the list
+    /// row (not the reassuring "done"); a normal done book does not.
+    #[test]
+    fn list_row_shows_too_few_pages_for_low_pages_done() {
+        let render = |low: bool| -> String {
+            let backend = TestBackend::new(140, 24);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut app = AppState::new();
+            app.set_view(fixture_vm());
+            app.flat[0].book.discovery = "matched".into();
+            let mut v = mk_var("Short Book", "pdf", "done", 100, &"d".repeat(32));
+            v.low_pages = low;
+            v.counted_pages = Some(3);
+            app.flat[0].book.versions = vec![v];
+            terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+            buffer_string(&terminal)
+        };
+        // "too few" survives mild column truncation of "too few pages".
+        assert!(
+            render(true).contains("too few"),
+            "a done+low_pages row must surface the too-few-pages warning"
+        );
+        assert!(
+            !render(false).contains("too few"),
+            "a normal done row must not show the too-few-pages warning"
+        );
+    }
+
     /// The Activity header shows only the aggregate bandwidth on the right — the
     /// "space collapse/expand" hotkey hint lives in the bottom footer row, not here.
     #[test]
