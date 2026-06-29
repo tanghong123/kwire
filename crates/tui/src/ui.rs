@@ -1521,6 +1521,26 @@ fn fmt_eta(secs: u64) -> String {
     }
 }
 
+/// The ETA to DISPLAY for a download leg: the engine's value when it supplied
+/// one, else derived from the live speed and remaining bytes. `None` only when
+/// it genuinely can't be known (speed is zero, or the total size is unknown) —
+/// the UI renders that as "tbd". Fixes the "progressing but no ETA" case where
+/// the engine reported speed+total but no eta on a given tick.
+fn effective_eta(
+    eta_secs: Option<u64>,
+    speed_bps: Option<u64>,
+    bytes_done: Option<u64>,
+    total_bytes: Option<u64>,
+) -> Option<u64> {
+    if let Some(e) = eta_secs {
+        return Some(e);
+    }
+    match (speed_bps, bytes_done, total_bytes) {
+        (Some(sp), Some(done), Some(total)) if sp > 0 && total > done => Some((total - done) / sp),
+        _ => None,
+    }
+}
+
 /// color (filled bright, remainder faint) so the pane reads at a glance. `base`
 /// styles the format + ETA fields; when `sel_bg` is set the selection background
 /// is layered over every field so a selected leg still highlights.
@@ -1528,6 +1548,7 @@ fn activity_status_spans(
     fmt: &str,
     pct: u32,
     eta_secs: Option<u64>,
+    speed_bps: u64,
     base: Style,
     sel_bg: Option<Color>,
 ) -> Vec<Span<'static>> {
@@ -1537,9 +1558,9 @@ fn activity_status_spans(
     };
     let dl = bg(Style::default().fg(C_DOWNLOADING));
     let base = bg(base);
-    // Fixed-width columns so format / % / bar / ETA line up across legs (the whole
-    // block is pinned to the right edge by `activity_leg_line`). The ETA column is
-    // reserved even when a leg has no ETA, so its absence doesn't shift the bar.
+    // Fixed-width columns so format / % / bar / rate / ETA line up across legs
+    // (the whole block is pinned to the right edge by `activity_leg_line`). The
+    // rate + ETA columns are reserved even when empty so they never shift the bar.
     let mut spans = Vec::new();
     if !fmt.is_empty() {
         spans.push(Span::styled(format!("{fmt:<4}  "), base));
@@ -1548,7 +1569,11 @@ fn activity_status_spans(
     for s in theme::progress_bar_spans(pct, 6) {
         spans.push(Span::styled(s.content, bg(s.style)));
     }
-    let eta_str = eta_secs.map(fmt_eta).unwrap_or_default();
+    // Per-leg throughput (always shown, even at 0 B/s, so a just-started leg
+    // doesn't read as rate-less — matches the host-row rate policy).
+    spans.push(Span::styled(format!("  {:>8}", fmt_rate(speed_bps)), dl));
+    // ETA — "tbd" when it can't be known yet (no speed / unknown total).
+    let eta_str = eta_secs.map(fmt_eta).unwrap_or_else(|| "tbd".to_string());
     spans.push(Span::styled(format!("  {eta_str:>6}"), base));
     spans
 }
@@ -1651,7 +1676,8 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
     // Build per-host transfer lines by grouping downloading versions by host.
     // 1. Collect from flat ViewModel (has progress / fmt info from engine).
     let leg_now = app.now_ms();
-    let mut host_groups: BTreeMap<String, Vec<(String, u32, String, Option<u64>)>> =
+    // Per host: (title, pct, fmt, effective_eta, speed_bps) for each leg row.
+    let mut host_groups: BTreeMap<String, Vec<(String, u32, String, Option<u64>, u64)>> =
         BTreeMap::new();
     // Per-host download rate, summed from the legs/variations placed under each
     // host. Built here (NOT from app.transfers, which carries only the primary leg
@@ -1676,23 +1702,30 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                     } else {
                         fb.book.title.clone()
                     };
+                    let speed = leg.speed_bps.unwrap_or(0);
+                    let eta =
+                        effective_eta(leg.eta_secs, leg.speed_bps, leg.bytes_done, leg.total_bytes);
                     host_groups.entry(host.clone()).or_default().push((
                         title,
                         leg.progress,
                         v.fmt.clone(),
-                        leg.eta_secs,
+                        eta,
+                        speed,
                     ));
-                    *host_speeds.entry(host).or_default() += leg.speed_bps.unwrap_or(0);
+                    *host_speeds.entry(host).or_default() += speed;
                 }
             } else {
                 let host = v.host.as_deref().unwrap_or("unknown").to_string();
+                let speed = v.speed_bps.unwrap_or(0);
+                let eta = effective_eta(v.eta_secs, v.speed_bps, v.downloaded_bytes, v.total_bytes);
                 host_groups.entry(host.clone()).or_default().push((
                     fb.book.title.clone(),
                     v.progress,
                     v.fmt.clone(),
-                    v.eta_secs,
+                    eta,
+                    speed,
                 ));
-                *host_speeds.entry(host).or_default() += v.speed_bps.unwrap_or(0);
+                *host_speeds.entry(host).or_default() += speed;
             }
         }
     }
@@ -1778,7 +1811,7 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                 ]));
                 leg_map.push(None); // host label — not a selectable leg
 
-                for (title, pct, fmt, eta_secs) in versions {
+                for (title, pct, fmt, eta_secs, speed) in versions {
                     let is_leg_sel = activity_active && leg_idx == sel_leg;
                     let is_leg_dim = !activity_active && leg_idx == sel_leg;
                     let (marker, marker_style, title_style, status_base, sel_bg) = if is_leg_sel {
@@ -1806,8 +1839,9 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                             None,
                         )
                     };
-                    // Pinned-right STATUS: fmt · % · bar · eta (% + bar colored).
-                    let status = activity_status_spans(fmt, *pct, *eta_secs, status_base, sel_bg);
+                    // Pinned-right STATUS: fmt · % · bar · rate · eta (% + bar colored).
+                    let status =
+                        activity_status_spans(fmt, *pct, *eta_secs, *speed, status_base, sel_bg);
                     let status_w: usize = status
                         .iter()
                         .map(|s| crate::textfit::display_width(s.content.as_ref()))
@@ -1851,7 +1885,7 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                 Span::styled(host_rest, Style::default().fg(C_WARM)),
             ]));
             leg_map.push(None); // host label — not a selectable leg
-            for (title, pct, _) in transfers {
+            for (title, pct, speed) in transfers {
                 let is_leg_sel = activity_active && leg_idx == sel_leg;
                 let is_leg_dim = !activity_active && leg_idx == sel_leg;
                 let (marker, marker_style, title_style, status_base, sel_bg) = if is_leg_sel {
@@ -1879,8 +1913,10 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                         None,
                     )
                 };
-                // Pinned-right STATUS: % · bar (no fmt/eta in the telemetry path).
-                let status = activity_status_spans("", (*pct).into(), None, status_base, sel_bg);
+                // Pinned-right STATUS: % · bar · rate (no fmt; eta unknown → "tbd"
+                // since the telemetry path has no total to derive from).
+                let status =
+                    activity_status_spans("", (*pct).into(), None, *speed, status_base, sel_bg);
                 let status_w: usize = status
                     .iter()
                     .map(|s| crate::textfit::display_width(s.content.as_ref()))
@@ -5251,9 +5287,9 @@ mod hint_wrap_tests {
                 .map(|s| display_width(s.content.as_ref()))
                 .sum()
         };
-        let a = activity_status_spans("epub", 6, Some(171), Style::default(), None);
-        let b = activity_status_spans("pdf", 100, None, Style::default(), None);
-        let c = activity_status_spans("epub", 89, Some(1), Style::default(), None);
+        let a = activity_status_spans("epub", 6, Some(171), 1_800_000, Style::default(), None);
+        let b = activity_status_spans("pdf", 100, None, 0, Style::default(), None);
+        let c = activity_status_spans("epub", 89, Some(1), 396_000, Style::default(), None);
         assert_eq!(
             width(&a),
             width(&b),
@@ -5264,5 +5300,42 @@ mod hint_wrap_tests {
             width(&c),
             "status width must be constant across legs"
         );
+        // The rate column renders the per-leg throughput; a missing ETA reads "tbd".
+        let joined =
+            |spans: &[Span]| -> String { spans.iter().map(|s| s.content.to_string()).collect() };
+        assert!(
+            joined(&a).contains("1.8 MB/s"),
+            "rate column shown: {}",
+            joined(&a)
+        );
+        assert!(
+            joined(&c).contains("396 KB/s"),
+            "rate column shown: {}",
+            joined(&c)
+        );
+        assert!(
+            joined(&b).contains("tbd"),
+            "missing ETA reads tbd: {}",
+            joined(&b)
+        );
+    }
+
+    #[test]
+    fn effective_eta_derives_when_engine_omits_it() {
+        // Engine supplied an ETA → use it verbatim.
+        assert_eq!(
+            effective_eta(Some(42), Some(1000), Some(0), Some(1000)),
+            Some(42)
+        );
+        // No ETA but progressing with a known total → derive remaining/speed.
+        // (1000 total - 200 done) / 100 B/s = 8s.
+        assert_eq!(
+            effective_eta(None, Some(100), Some(200), Some(1000)),
+            Some(8)
+        );
+        // Zero speed → can't derive → None ("tbd").
+        assert_eq!(effective_eta(None, Some(0), Some(200), Some(1000)), None);
+        // Unknown total → None ("tbd").
+        assert_eq!(effective_eta(None, Some(100), Some(200), None), None);
     }
 }
