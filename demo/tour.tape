@@ -3,7 +3,7 @@
 # Produces a high-resolution screenshot set + video of the whole app flow:
 # empty first-run -> import a list -> browse/detail/help/picker -> a second
 # list -> the aggregate "All" view -> a manual add -> filters -> activity ->
-# delete confirm.
+# delete confirm -> the about panel.
 #
 # PREREQUISITES
 #   brew install vhs
@@ -193,3 +193,11 @@ Screenshot "demo/out/12-delete-confirm.png"
 # decline the delete
 Type "n"
 Sleep 2s
+
+# ---- 13 about panel (ends the tour) ----
+Type ":about"
+Sleep 1s
+Enter
+Sleep 2s
+Screenshot "demo/out/13-about.png"
+Sleep 1s

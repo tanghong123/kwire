@@ -49,7 +49,7 @@ and the live activity pane below:
 | ![Empty first run](docs/media/01-empty-first-run.png) | ![Import a list](docs/media/02-import-command.png) |
 | ![Context-paged help](docs/media/05-help.png) | ![A second list](docs/media/07-second-list.png) |
 | ![Manual add](docs/media/09-manual-add.png) | ![Done filter](docs/media/10-filter-done.png) |
-| ![Delete-list confirm](docs/media/12-delete-confirm.png) | |
+| ![Delete-list confirm](docs/media/12-delete-confirm.png) | ![About](docs/media/13-about.png) |
 
 </details>
 
