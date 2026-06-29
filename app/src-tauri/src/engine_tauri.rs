@@ -12,15 +12,24 @@ use libgen_core::orchestrator::Event;
 
 use libgen_engine::{BookStatePayload, EngineEmitter};
 
+use libgen_engine::LegTracker;
+
 use crate::bridge;
-use crate::commands::{ProgressPayload, QueryStagePayload};
+use crate::commands::{LegProjection, ProgressEnvelope, ProgressPayload, QueryStagePayload};
 use crate::state::AppState;
 
 /// The production emitter: forwards engine events to the front end as the same
 /// `query://book` / `download://progress` events the UI already consumes, plus
 /// `engine://book` for per-book state.
+///
+/// Owns the shared [`LegTracker`] (the single source of truth for download legs):
+/// every `Download` event is fed into it, and the affected md5's projected legs
+/// ride along on the `download://progress` payload so the frontend renders the
+/// primary/alt-copy split without reconstructing leg state in JavaScript.
 struct TauriEmitter {
     app: AppHandle,
+    legs: std::sync::Mutex<LegTracker>,
+    clock: std::time::Instant,
 }
 
 impl EngineEmitter for TauriEmitter {
@@ -45,8 +54,20 @@ impl EngineEmitter for TauriEmitter {
                 );
             }
             Event::Download(p) => {
+                // Feed the shared tracker (sees EVERY variant incl. keep-alives /
+                // LegEnded), then attach the affected md5's projected legs so the
+                // UI renders the primary/alt-copy split without its own JS state.
+                let now_ms = self.clock.elapsed().as_millis() as u64;
+                let mut tracker = self.legs.lock().unwrap();
+                tracker.note(p, now_ms);
                 if let Some(payload) = ProgressPayload::from_progress(p) {
-                    let _ = self.app.emit("download://progress", payload);
+                    let legs = payload
+                        .md5()
+                        .map(|md5| LegProjection::project(&tracker, md5, now_ms))
+                        .unwrap_or_default();
+                    let _ = self
+                        .app
+                        .emit("download://progress", ProgressEnvelope { payload, legs });
                 }
             }
             Event::Done => {
@@ -82,7 +103,11 @@ pub fn spawn(app: AppHandle) {
         }
         state.engine_handles()
     };
-    let emitter = TauriEmitter { app };
+    let emitter = TauriEmitter {
+        app,
+        legs: std::sync::Mutex::new(LegTracker::new()),
+        clock: std::time::Instant::now(),
+    };
     // Spawn on Tauri's managed async runtime — this runs from the `setup` hook,
     // which is NOT inside a Tokio runtime context, so a bare `tokio::spawn` would
     // panic ("no reactor running"). `tauri::async_runtime::spawn` works from any

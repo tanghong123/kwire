@@ -305,7 +305,13 @@ check("active panel: two books sharing one md5 render ONE row, not two (no flick
   if (rows !== 1) throw new Error("expected 1 deduped active row for the shared md5, got " + rows);
 });
 
-check("active panel: hedge legs render as separate, badged lines (primary + hedge)", () => {
+// The leg STATE MACHINE (identity by leg_id, host-change coalescing, leg_ended
+// promotion, TTL) now lives in Rust (libgen_engine::LegTracker, unit-tested in
+// crates/engine/src/legs.rs). The frontend just STORES the backend's projected
+// `legs` list (primary first; `hedge` set on alt copies) and renders it. These
+// cases therefore feed a download://progress envelope's `legs` and assert the
+// RENDER — the projection that the Rust tracker produces.
+check("active panel: projected hedge legs render as separate, badged lines (primary + alt copy)", () => {
   ctx.LEGS = {};
   const md5 = "a".repeat(32);
   const bk = { id: "bk0", list: "L1", bid: "bk0", title: "Sisters", author: "X", seq: 1,
@@ -314,22 +320,24 @@ check("active panel: hedge legs render as separate, badged lines (primary + hedg
       downloaded_bytes: 30, total_bytes: 100, speed_bps: 1000 }] };
   ctx.LISTS = [{ id: "L1", title: "L", groups: [{ name: "G", collapsed: false, books: [bk] }] }];
   ctx.CURRENT = "L1"; ctx.ACTIVE_COLLAPSED = false;
-  // Primary = leg 0; a real hedge = leg 1 (distinct leg_id).
-  ctx.noteLeg({ kind: "bytes", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", bytes_done: 30, total_bytes: 100, speed_bps: 1000 });
-  ctx.noteLeg({ kind: "bytes", md5, leg_id: 1, is_hedge: true, host: "cdn5.booksdl.lc", bytes_done: 10, total_bytes: 100, speed_bps: 800 });
+  // Projection: primary first, the alt copy with hedge:true.
+  ctx.noteLeg({ kind: "bytes", md5, legs: [
+    { host: "cdn2.booksdl.lc", bytes: 30, total: 100, speed: 1000, eta: 60, progress: 30, hedge: false },
+    { host: "cdn5.booksdl.lc", bytes: 10, total: 100, speed: 800, eta: 120, progress: 10, hedge: true },
+  ] });
   ctx.renderActivePanel();
   const html = els["apBody"].innerHTML;
   const rows = (html.match(/class="ap-row"/g) || []).length;
-  if (rows !== 2) throw new Error("expected 2 leg rows (primary + hedge), got " + rows);
+  if (rows !== 2) throw new Error("expected 2 leg rows (primary + alt copy), got " + rows);
   if ((html.match(/hedge-badge/g) || []).length !== 1) throw new Error("expected exactly one hedge badge");
   if (!/cdn2\.booksdl\.lc/.test(html) || !/cdn5\.booksdl\.lc/.test(html)) throw new Error("both leg hosts should appear");
-  // A terminal event clears the legs (race over).
-  ctx.noteLeg({ kind: "done", md5 });
+  // A terminal event projects an empty list (race over) → legs cleared.
+  ctx.noteLeg({ kind: "done", md5, legs: [] });
   if (ctx.LEGS[md5]) throw new Error("legs should be cleared on done");
   ctx.LEGS = {};
 });
 
-check("active panel: a host change within ONE leg (failover / cdn edge-rotation) stays ONE line", () => {
+check("active panel: a single projected leg (host-coalesced) renders ONE unbadged line", () => {
   ctx.LEGS = {};
   const md5 = "f".repeat(32);
   const bk = { id: "bk0", list: "L1", bid: "bk0", title: "Sisters", author: "X", seq: 1,
@@ -338,20 +346,20 @@ check("active panel: a host change within ONE leg (failover / cdn edge-rotation)
       downloaded_bytes: 42, total_bytes: 100, speed_bps: 900 }] };
   ctx.LISTS = [{ id: "L1", title: "L", groups: [{ name: "G", collapsed: false, books: [bk] }] }];
   ctx.CURRENT = "L1"; ctx.ACTIVE_COLLAPSED = false;
-  // ONE leg (leg_id 0) whose host moves cdn2→cdn3: first via failover, then a bare
-  // host change (cdn edge-rotation emits no failing_over). Same leg_id → one line.
-  ctx.noteLeg({ kind: "bytes", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", bytes_done: 40, total_bytes: 100, speed_bps: 1000 });
-  ctx.noteLeg({ kind: "failing_over", md5, leg_id: 0, is_hedge: false, from_host: "cdn2.booksdl.lc" });
-  ctx.noteLeg({ kind: "bytes", md5, leg_id: 0, is_hedge: false, host: "cdn3.booksdl.lc", bytes_done: 42, total_bytes: 100, speed_bps: 900 });
+  // The backend coalesces a host change (failover / cdn edge-rotation) into ONE
+  // leg, so the projection is a single leg on its current host — one line, no badge.
+  ctx.noteLeg({ kind: "bytes", md5, legs: [
+    { host: "cdn3.booksdl.lc", bytes: 42, total: 100, speed: 900, eta: 30, progress: 42, hedge: false },
+  ] });
   ctx.renderActivePanel();
   const html = els["apBody"].innerHTML;
-  if ((html.match(/class="ap-row"/g) || []).length !== 1) throw new Error("a host change within one leg must stay ONE line, not two");
-  if (/hedge-badge/.test(html)) throw new Error("a single leg changing host must NOT be badged as hedge");
+  if ((html.match(/class="ap-row"/g) || []).length !== 1) throw new Error("a single projected leg must render ONE line");
+  if (/hedge-badge/.test(html)) throw new Error("a single leg must NOT be badged as hedge");
   if (!/cdn3\.booksdl\.lc/.test(html)) throw new Error("the leg's current host should be shown");
   ctx.LEGS = {};
 });
 
-check("active panel: primary leg_ended promotes the surviving hedge to primary", () => {
+check("active panel: after primary leg_ended, the promoted-survivor projection has no badge", () => {
   ctx.LEGS = {};
   const md5 = "c".repeat(32);
   const bk = { id: "bk0", list: "L1", bid: "bk0", title: "Sisters", author: "X", seq: 1,
@@ -360,10 +368,11 @@ check("active panel: primary leg_ended promotes the surviving hedge to primary",
       downloaded_bytes: 30, total_bytes: 100, speed_bps: 1000 }] };
   ctx.LISTS = [{ id: "L1", title: "L", groups: [{ name: "G", collapsed: false, books: [bk] }] }];
   ctx.CURRENT = "L1"; ctx.ACTIVE_COLLAPSED = false;
-  ctx.noteLeg({ kind: "bytes", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", bytes_done: 30, total_bytes: 100, speed_bps: 1000 });
-  ctx.noteLeg({ kind: "bytes", md5, leg_id: 1, is_hedge: true, host: "cdn5.booksdl.lc", bytes_done: 60, total_bytes: 100, speed_bps: 2000 });
-  // The primary (leg 0) ends; leg 1 survives and must become the primary (no badge).
-  ctx.noteLeg({ kind: "leg_ended", md5, leg_id: 0 });
+  // The backend promotes the survivor to index 0 (hedge:false) after the primary's
+  // leg_ended; the projection following that event carries just the one survivor.
+  ctx.noteLeg({ kind: "leg_ended", md5, legs: [
+    { host: "cdn5.booksdl.lc", bytes: 60, total: 100, speed: 2000, eta: 20, progress: 60, hedge: false },
+  ] });
   ctx.renderActivePanel();
   const html = els["apBody"].innerHTML;
   if ((html.match(/class="ap-row"/g) || []).length !== 1) throw new Error("after primary leg_ended, exactly one leg should remain");
@@ -372,7 +381,7 @@ check("active panel: primary leg_ended promotes the surviving hedge to primary",
   ctx.LEGS = {};
 });
 
-check("active panel: a stalled-but-silent leg (no bytes) is kept alive, not dropped", () => {
+check("active panel: a projected stalled-but-silent leg (no bytes) still renders one line", () => {
   ctx.LEGS = {};
   const md5 = "d".repeat(32);
   const bk = { id: "bk0", list: "L1", bid: "bk0", title: "Sisters", author: "X", seq: 1,
@@ -381,11 +390,12 @@ check("active panel: a stalled-but-silent leg (no bytes) is kept alive, not drop
       downloaded_bytes: 0, total_bytes: 100, speed_bps: 0 }] };
   ctx.LISTS = [{ id: "L1", title: "L", groups: [{ name: "G", collapsed: false, books: [bk] }] }];
   ctx.CURRENT = "L1"; ctx.ACTIVE_COLLAPSED = false;
-  // A leg that only reports liveness (resolved then stalled, never bytes) must still
-  // be tracked + shown — the keep-alive that the 60s TTL is just a backstop for.
-  ctx.noteLeg({ kind: "resolved", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", total_bytes: 100 });
-  ctx.noteLeg({ kind: "stalled", md5, leg_id: 0, is_hedge: false, host: "cdn2.booksdl.lc", bytes_done: 0, speed_bps: 0 });
-  if (!ctx.LEGS[md5] || !ctx.LEGS[md5].byLeg[0]) throw new Error("a stalled/resolved leg must be tracked (keep-alive)");
+  // A leg that only reports liveness (resolved/stalled, never bytes) is kept alive by
+  // the backend; its projection has no speed/eta but still renders one line.
+  ctx.noteLeg({ kind: "stalled", md5, legs: [
+    { host: "cdn2.booksdl.lc", bytes: 0, total: 100, speed: null, eta: null, progress: 0, hedge: false },
+  ] });
+  if (!ctx.LEGS[md5] || ctx.LEGS[md5].length !== 1) throw new Error("the projected leg must be stored");
   ctx.renderActivePanel();
   if ((els["apBody"].innerHTML.match(/class="ap-row"/g) || []).length !== 1) throw new Error("a stalled-but-alive leg should render one line");
   ctx.LEGS = {};

@@ -1547,6 +1547,82 @@ impl ProgressPayload {
             Progress::Note { .. } => return None,
         })
     }
+
+    /// The md5 this payload concerns, or `None` for the run-wide [`AllDone`].
+    /// Used to look up the affected md5's projected legs for the envelope.
+    pub(crate) fn md5(&self) -> Option<&str> {
+        match self {
+            ProgressPayload::Resolved { md5, .. }
+            | ProgressPayload::Resuming { md5, .. }
+            | ProgressPayload::Bytes { md5, .. }
+            | ProgressPayload::Stalled { md5, .. }
+            | ProgressPayload::Retrying { md5, .. }
+            | ProgressPayload::FailingOver { md5, .. }
+            | ProgressPayload::Done { md5, .. }
+            | ProgressPayload::Failed { md5, .. }
+            | ProgressPayload::Paused { md5, .. }
+            | ProgressPayload::Cancelled { md5, .. }
+            | ProgressPayload::LegEnded { md5, .. } => Some(md5),
+            ProgressPayload::AllDone => None,
+        }
+    }
+}
+
+/// One projected download leg, the JSON shape the frontend's active panel renders
+/// directly (field names match the UI's leg object). Computed by the shared
+/// [`libgen_engine::LegTracker`] — the single source of truth for the
+/// primary/alt-copy split (lowest live `leg_id` = primary). See `docs/LEG_LIFECYCLE.md`.
+#[derive(Debug, Clone, Serialize)]
+pub struct LegProjection {
+    pub host: Option<String>,
+    pub bytes: Option<u64>,
+    pub total: Option<u64>,
+    pub speed: Option<u64>,
+    pub eta: Option<u64>,
+    pub progress: u32,
+    /// `true` for a non-primary (alt-copy) leg — the UI badges these. This is the
+    /// DISPLAY hedge flag (start-order: a promoted survivor reads as primary), not
+    /// the engine's internal `is_hedge`.
+    pub hedge: bool,
+}
+
+impl LegProjection {
+    fn from_view(v: &libgen_engine::LegView) -> Self {
+        LegProjection {
+            host: v.host.clone(),
+            bytes: v.bytes_done,
+            total: v.total_bytes,
+            speed: v.speed_bps,
+            eta: v.eta_secs,
+            progress: v.progress,
+            hedge: v.is_alt,
+        }
+    }
+
+    /// Project the live legs of `md5` from the tracker into the UI shape (primary
+    /// first). Empty once the md5's race is over (terminal cleared its legs).
+    pub(crate) fn project(
+        tracker: &libgen_engine::LegTracker,
+        md5: &str,
+        now_ms: u64,
+    ) -> Vec<LegProjection> {
+        tracker
+            .legs_for(md5, now_ms)
+            .iter()
+            .map(LegProjection::from_view)
+            .collect()
+    }
+}
+
+/// The `download://progress` event sent to the frontend: the flat [`ProgressPayload`]
+/// (so the UI still reads `kind`/`md5`/… directly) PLUS `legs`, the affected md5's
+/// projected legs from the shared tracker. The UI stores `legs` and renders from
+/// it instead of reconstructing leg state in JavaScript.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProgressEnvelope {
+    #[serde(flatten)]
+    pub payload: ProgressPayload,
+    pub legs: Vec<LegProjection>,
 }
 
 /// **Start** the targeted list(s): set goal = `Complete` so the execution engine

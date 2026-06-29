@@ -2329,81 +2329,40 @@ function fmtEta(secs) {
 /* The bottom panel: everything in flight right now — books being queried, and
    variations being downloaded (with progress, speed, ETA). Collapsible. */
 /* Per-leg live download state for the active panel. One variation (md5) may run
-   several LEGS at once — the primary plus speculative hedge legs. Each per-leg
-   event carries an authoritative `leg_id` (primary=0, hedges 1,2,… in start order)
-   and `is_hedge`, so we key by leg_id — NOT host. A leg that changes host (failover
-   or cdn edge-rotation) keeps its leg_id → stays ONE line; only a real hedge adds
-   one. A leg is removed on its explicit `leg_ended`; the whole md5 clears on a
-   terminal (done/failed/cancelled). LEG_TTL is a 60s BACKSTOP only — every per-leg
-   event (incl. liveness: stalled/retrying/resuming) refreshes the leg, so an
-   alive-but-silent leg (TTFB) is never dropped. See docs/LEG_LIFECYCLE.md. */
-var LEGS = {};                 // md5 -> { byLeg: { leg_id -> leg } }
-var LEG_TTL = 60000;           // ms; pure backstop for a lost leg_ended (not a liveness timer)
+   several LEGS at once — the primary plus speculative hedge legs. The leg state
+   machine (identity by leg_id, host-change coalescing, explicit leg_ended removal,
+   the 60s TTL backstop, and the lowest-live-leg_id = primary rule) now lives ONCE
+   in Rust: libgen_engine::LegTracker, fed by engine_tauri's TauriEmitter. Each
+   `download://progress` event carries that md5's already-projected `legs` (primary
+   first, `hedge`=non-primary), so the UI just STORES the projection and renders it
+   — no reconstruction here. See docs/LEG_LIFECYCLE.md. */
+var LEGS = {};                 // md5 -> [ {host,bytes,total,speed,eta,progress,hedge}, … ] (primary first)
 
 function noteLeg(p) {
   if (!p.md5) return;
-  // Whole-download terminals clear every leg for the md5.
-  if (p.kind === "done" || p.kind === "failed" || p.kind === "cancelled") { delete LEGS[p.md5]; return; }
-  // One specific leg ended → remove just it; survivors remain (a lower one ending
-  // promotes the next as primary by leg_id order).
-  if (p.kind === "leg_ended") {
-    var Le = LEGS[p.md5];
-    if (Le) { delete Le.byLeg[p.leg_id]; if (!Object.keys(Le.byLeg).length) delete LEGS[p.md5]; }
-    return;
-  }
-  // Every other per-leg event carries leg_id and acts as a keep-alive. `failing_over`
-  // has no new host (only from_host), so it just refreshes the leg until the next
-  // `resolved` lands the new host on the SAME leg_id.
-  if (p.leg_id == null) return;
-  var L = LEGS[p.md5] || (LEGS[p.md5] = { byLeg: {} });
-  var prev = L.byLeg[p.leg_id];
-  var prog = (p.total_bytes != null && p.bytes_done != null)
-    ? Math.min(100, Math.round(100 * p.bytes_done / p.total_bytes))
-    : (prev ? prev.progress : 0);
-  L.byLeg[p.leg_id] = {
-    leg_id: p.leg_id,
-    host: (p.host != null ? p.host : (prev ? prev.host : null)),
-    bytes: (p.bytes_done != null ? p.bytes_done : (prev ? prev.bytes : null)),
-    total: (p.total_bytes != null ? p.total_bytes : (prev ? prev.total : null)),
-    speed: (p.kind === "bytes" ? (p.speed_bps != null ? p.speed_bps : null) : (prev ? prev.speed : null)),
-    eta: (p.kind === "bytes" ? (p.eta_secs != null ? p.eta_secs : null) : (prev ? prev.eta : null)),
-    is_hedge: (p.is_hedge != null ? p.is_hedge : (prev ? prev.is_hedge : false)),
-    progress: prog,
-    ts: Date.now(),
-  };
+  // The backend projects the md5's live legs onto every event; an empty list (or a
+  // terminal that cleared the race) means no legs to show.
+  if (p.legs && p.legs.length) LEGS[p.md5] = p.legs;
+  else delete LEGS[p.md5];
 }
 
-/* The legs to show for a downloading variation: live per-leg state when we have it,
-   else ONE leg synthesized from the viewmodel (no events yet). Legs are ordered by
-   leg_id (= start order); the lowest LIVE leg_id is the PRIMARY, the rest badged
-   hedge — so when the primary's leg ends, the next-earliest survivor promotes. */
+/* The legs to show for a downloading variation: the backend's projected legs when
+   present, else ONE leg synthesized from the viewmodel (no events yet). Projected
+   legs are already primary-first with `hedge` set on the alt copies. */
 function legsFor(v) {
-  var L = LEGS[v.md5], now = Date.now();
-  if (L) {
-    var ids = Object.keys(L.byLeg).map(Number)
-      .filter(function (id) { return (now - (L.byLeg[id].ts || 0)) < LEG_TTL; })
-      .sort(function (a, b) { return a - b; });
-    if (ids.length) {
-      return ids.map(function (id, i) { var leg = L.byLeg[id]; leg.hedge = i > 0; return leg; });
-    }
-  }
+  var legs = LEGS[v.md5];
+  if (legs && legs.length) return legs;
   return [{ host: v.host, bytes: v.downloaded_bytes, total: v.total_bytes,
     speed: v.speed_bps, eta: v.eta_secs, progress: v.progress, hedge: false }];
 }
 
-/* The PRIMARY leg for an md5 = the live leg with the lowest leg_id (earliest start).
-   The variation's headline progress tracks the primary, so it never flips to a
-   hedge; when the primary's leg ends, the next-earliest survivor takes over.
-   Returns null if no live legs. */
+/* The PRIMARY leg for an md5 = the first projected leg (lowest live leg_id, earliest
+   start). The variation's headline progress tracks it, so it never flips to a hedge;
+   when the primary's leg ends, the backend promotes the next-earliest survivor to
+   index 0. Returns null if no live legs. */
 function primaryLeg(md5) {
-  var L = LEGS[md5]; if (!L) return null;
-  var now = Date.now(), best = null;
-  Object.keys(L.byLeg).forEach(function (k) {
-    var leg = L.byLeg[k];
-    if ((now - (leg.ts || 0)) >= LEG_TTL) return;
-    if (!best || leg.leg_id < best.leg_id) best = leg;
-  });
-  return best;
+  var legs = LEGS[md5];
+  return (legs && legs.length) ? legs[0] : null;
 }
 
 function renderActivePanel() {
@@ -3639,7 +3598,7 @@ function wireProgress() {
       document.getElementById("runBtn").textContent = t("toolbar.start_all");
       refresh(); return;
     }
-    noteLeg(p); // track per-leg (md5+host) state so hedge legs get their own panel line
+    noteLeg(p); // store the backend's projected legs for this md5 (primary + alt copies)
     everyBook().forEach(function (b) {
       (b.versions || []).forEach(function (v) {
         if (v.md5 !== p.md5) return;
