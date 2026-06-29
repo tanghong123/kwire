@@ -361,6 +361,14 @@ check("active panel: leg ETA is derived when the engine omits it, else reads 'tb
   ctx.renderActivePanel();
   html = els["apBody"].innerHTML;
   if (!/tbd/.test(html)) throw new Error("an unknowable ETA must read 'tbd': " + html);
+  // 100% (bytes complete) → 0s, never "tbd", even when the engine drops the eta.
+  ctx.noteLeg({ kind: "bytes", md5, legs: [
+    { host: "cdn1.booksdl.lc", bytes: 1000, total: 1000, speed: 100, eta: null, progress: 100, hedge: false },
+  ] });
+  ctx.renderActivePanel();
+  html = els["apBody"].innerHTML;
+  if (/tbd/.test(html)) throw new Error("a 100% leg must NOT read 'tbd': " + html);
+  if (!/0s/.test(html)) throw new Error("a 100% leg should read 0s: " + html);
   ctx.LEGS = {};
 });
 

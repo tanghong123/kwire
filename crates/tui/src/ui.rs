@@ -1521,17 +1521,26 @@ fn fmt_eta(secs: u64) -> String {
     }
 }
 
-/// The ETA to DISPLAY for a download leg: the engine's value when it supplied
-/// one, else derived from the live speed and remaining bytes. `None` only when
-/// it genuinely can't be known (speed is zero, or the total size is unknown) —
-/// the UI renders that as "tbd". Fixes the "progressing but no ETA" case where
-/// the engine reported speed+total but no eta on a given tick.
+/// The ETA to DISPLAY for a download leg. The engine sends no `eta_secs` when
+/// speed isn't measurable yet (the first tick / right after a resume or failover)
+/// or when the bytes are all in (`done >= total`), so a clearly-progressing leg
+/// would otherwise read "tbd".
+///
+/// Resolution order: bytes complete (100%) → `0s` (still finalizing, 0 remain);
+/// else the engine's own ETA; else derive from the live speed + remaining bytes.
+/// `None` only when it truly can't be known (no speed and not complete, or the
+/// total size is unknown) — the UI renders that as "tbd".
 fn effective_eta(
     eta_secs: Option<u64>,
     speed_bps: Option<u64>,
     bytes_done: Option<u64>,
     total_bytes: Option<u64>,
 ) -> Option<u64> {
+    if let (Some(done), Some(total)) = (bytes_done, total_bytes) {
+        if total > 0 && done >= total {
+            return Some(0);
+        }
+    }
     if let Some(e) = eta_secs {
         return Some(e);
     }
@@ -1577,6 +1586,10 @@ fn activity_status_spans(
     spans.push(Span::styled(format!("  {eta_str:>6}"), base));
     spans
 }
+
+/// One Activity download-leg row, grouped under its host: `(title, pct, fmt,
+/// effective_eta, speed_bps)`.
+type ActivityLegRow = (String, u32, String, Option<u64>, u64);
 
 pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
     // Count download states.
@@ -1676,9 +1689,8 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
     // Build per-host transfer lines by grouping downloading versions by host.
     // 1. Collect from flat ViewModel (has progress / fmt info from engine).
     let leg_now = app.now_ms();
-    // Per host: (title, pct, fmt, effective_eta, speed_bps) for each leg row.
-    let mut host_groups: BTreeMap<String, Vec<(String, u32, String, Option<u64>, u64)>> =
-        BTreeMap::new();
+    // Per host: one ActivityLegRow per leg.
+    let mut host_groups: BTreeMap<String, Vec<ActivityLegRow>> = BTreeMap::new();
     // Per-host download rate, summed from the legs/variations placed under each
     // host. Built here (NOT from app.transfers, which carries only the primary leg
     // post-hedge) so a hedge host's rate is accurate and a primary-only host's is
@@ -5333,9 +5345,19 @@ mod hint_wrap_tests {
             effective_eta(None, Some(100), Some(200), Some(1000)),
             Some(8)
         );
-        // Zero speed → can't derive → None ("tbd").
+        // Zero speed mid-download → can't derive → None ("tbd").
         assert_eq!(effective_eta(None, Some(0), Some(200), Some(1000)), None);
         // Unknown total → None ("tbd").
         assert_eq!(effective_eta(None, Some(100), Some(200), None), None);
+        // 100% (bytes complete) → 0s, never "tbd", even with no speed/eta…
+        assert_eq!(
+            effective_eta(None, Some(0), Some(1000), Some(1000)),
+            Some(0)
+        );
+        // …and the 100% case overrides any stale engine ETA.
+        assert_eq!(
+            effective_eta(Some(42), Some(0), Some(1000), Some(1000)),
+            Some(0)
+        );
     }
 }

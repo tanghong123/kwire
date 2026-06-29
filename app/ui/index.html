@@ -2325,11 +2325,14 @@ function fmtEta(secs) {
   if (secs >= 60) return Math.floor(secs / 60) + "m " + (secs % 60) + "s";
   return secs + "s";
 }
-/* The ETA to DISPLAY for a leg: the engine's value when present, else derived
-   from the live speed and remaining bytes. null only when it can't be known
-   (no speed / unknown total) → fmtEta renders that as "tbd". Mirrors the TUI's
-   effective_eta so both frontends agree (and fixes "progressing but no ETA"). */
+/* The ETA to DISPLAY for a leg. The engine omits eta when speed isn't measurable
+   yet (first tick / post-resume / post-failover) or when the bytes are all in
+   (done >= total), so a clearly-progressing leg would read "tbd". Order: 100% →
+   0s; else the engine's eta; else derive from speed + remaining. null only when
+   truly unknown (no speed AND not complete, or unknown total). Mirrors the TUI's
+   effective_eta so both frontends agree. */
 function effEta(leg) {
+  if (leg.bytes != null && leg.total != null && leg.total > 0 && leg.bytes >= leg.total) return 0;
   if (leg.eta != null) return leg.eta;
   if (leg.speed != null && leg.speed > 0 && leg.bytes != null && leg.total != null && leg.total > leg.bytes) {
     return Math.floor((leg.total - leg.bytes) / leg.speed);

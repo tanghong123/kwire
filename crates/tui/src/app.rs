@@ -1294,9 +1294,19 @@ impl AppState {
                 if is_primary {
                     t.host = host.clone();
                     t.bytes_done = *bytes_done;
-                    t.total_bytes = *total_bytes;
-                    t.speed_bps = *speed_bps;
-                    t.eta_secs = *eta_secs;
+                    // Carry forward total/speed/eta when the engine omits them on a
+                    // tick (it drops the total on some ticks, and speed/eta until
+                    // measurable — first tick / post-resume / post-failover) so an
+                    // advancing transfer doesn't lose its total or blank to "tbd".
+                    if total_bytes.is_some() {
+                        t.total_bytes = *total_bytes;
+                    }
+                    if speed_bps.is_some() {
+                        t.speed_bps = *speed_bps;
+                    }
+                    if eta_secs.is_some() {
+                        t.eta_secs = *eta_secs;
+                    }
                 }
                 // Populate title from the current ViewModel, falling back to the
                 // GLOBAL md5→title map (covers a transfer whose book isn't in the
@@ -1344,8 +1354,10 @@ impl AppState {
     /// Live-patch the matching downloading copy's progress in the projected
     /// `app.flat` (by md5) from a `Progress::Bytes` tick, so the list rows and the
     /// Activity ViewModel path advance between `Refresh` events instead of freezing
-    /// at the start-of-download %. The `%` is recomputed only when the total size
-    /// is known; bytes/host/speed/eta are always updated.
+    /// at the start-of-download %. Total/speed/eta are CARRIED FORWARD when a tick
+    /// omits them (the engine drops the total on some ticks and drops speed/eta
+    /// until measurable), so a known total never reverts to unknown — otherwise the
+    /// ETA derivation loses its total and the row shows a stale % with "tbd".
     fn update_flat_progress(
         &mut self,
         md5: &str,
@@ -1355,22 +1367,28 @@ impl AppState {
         eta_secs: Option<u64>,
         host: &str,
     ) {
-        let pct = match total_bytes {
-            Some(total) if total > 0 => {
-                Some((((bytes_done as f64 / total as f64) * 100.0).round() as u32).min(100))
-            }
-            _ => None,
-        };
         for fb in &mut self.flat {
             for v in &mut fb.book.versions {
                 if v.md5 == md5 {
-                    if let Some(p) = pct {
-                        v.progress = p;
+                    if total_bytes.is_some() {
+                        v.total_bytes = total_bytes;
                     }
-                    v.total_bytes = total_bytes;
                     v.downloaded_bytes = Some(bytes_done);
-                    v.speed_bps = speed_bps;
-                    v.eta_secs = eta_secs;
+                    // % from the effective (carried-forward) total, so a no-total
+                    // tick still advances the bar instead of freezing it.
+                    if let Some(total) = v.total_bytes {
+                        if total > 0 {
+                            v.progress = (((bytes_done as f64 / total as f64) * 100.0).round()
+                                as u32)
+                                .min(100);
+                        }
+                    }
+                    if speed_bps.is_some() {
+                        v.speed_bps = speed_bps;
+                    }
+                    if eta_secs.is_some() {
+                        v.eta_secs = eta_secs;
+                    }
                     if !host.is_empty() {
                         v.host = Some(host.to_string());
                     }
