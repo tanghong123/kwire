@@ -1,11 +1,18 @@
 # kwire — EXTENDED guided tour tape for VHS (separate from the proven tour.tape).
 #
 # A longer, story-driven run:
-#   import Jeremy (showcasing :import Tab-completion) -> scroll the books ->
-#   a book detail -> import Avery -> the download pane (scroll the legs) ->
-#   manually add Pride and Prejudice -> needs-you: choose a copy ->
-#   check-download: choose a copy -> Jeremy / all 40 -> Ozma of Oz detail ->
-#   S = download series -> delete-list confirm -> the about panel.
+#   import Jeremy (showcasing :import Tab-completion) -> browse the books (arrow
+#   keys) -> a book detail -> the download pane (scroll the legs) -> manually
+#   add Pride and Prejudice -> import Avery (loaded LATE so Jeremy's downloads
+#   settle first) -> page-scroll the combined ★ All list (Shift-J / Shift-K) ->
+#   needs-you: choose a copy -> check-download: choose a copy ->
+#   Jeremy / all 20 -> Ozma of Oz detail -> S = download series ->
+#   delete-list confirm -> the about panel.
+#
+# Uses TRIMMED demo copies of the reading lists (demo/lists/*.md, 20 books each
+# instead of 40) so the live downloads settle quickly enough on camera for the
+# needs-you / check-download / series beats to land. The full fixtures under
+# fixtures/ are left untouched.
 #
 # Live network downloads drive the progress shown; several beats depend on live
 # results settling in time, so the Sleeps are generous. Outputs to demo/out/
@@ -30,7 +37,7 @@ Type "export PS1='$ '"
 Enter
 Type "rm -rf /tmp/kwire-demo-home && mkdir -p /tmp/kwire-demo-home/Downloads"
 Enter
-Type "mkdir -p /tmp/kwire-demo && cp fixtures/jeremy_public_domain_list.md /tmp/kwire-demo/jeremy.md && cp fixtures/avery_public_domain_list.md /tmp/kwire-demo/avery.md"
+Type "mkdir -p /tmp/kwire-demo && cp demo/lists/jeremy.md /tmp/kwire-demo/jeremy.md && cp demo/lists/avery.md /tmp/kwire-demo/avery.md"
 Enter
 Type "clear"
 Enter
@@ -61,22 +68,25 @@ Tab
 Sleep 1500ms
 Screenshot "demo/out/full-03-import-completed.png"
 Enter
+# (+5s after #2)
+Sleep 5s
 
 # ---- 03 Jeremy populated (let books resolve & download) ----
 Sleep 25s
 Screenshot "demo/out/full-04-jeremy.png"
+# (+10s after #3)
+Sleep 10s
 
-# ---- 04 scroll the list of books ----
-Type "J"
-Sleep 1s
-Type "J"
+# ---- 04 walk down the book list and back (keyboard) ----
+# The trimmed 20-book list fits on one screen, so this travels the selection
+# highlight down through the groups and back rather than scrolling a viewport.
+Down 8
 Sleep 1s
 Screenshot "demo/out/full-05-scroll.png"
-# back to the top
-Type "K"
-Sleep 600ms
-Type "K"
+Up 8
 Sleep 1s
+# (+5s after #4)
+Sleep 5s
 
 # ---- 05 a book detail ----
 Down
@@ -88,82 +98,105 @@ Sleep 3s
 Screenshot "demo/out/full-06-detail.png"
 Escape
 Sleep 1500ms
-
-# ---- 06 import Avery (Tab-complete the unique "a" match) ----
-Type ":import /tmp/kwire-demo/a"
-Sleep 800ms
-Tab
-Sleep 1s
-Enter
-Sleep 12s
-Screenshot "demo/out/full-07-avery.png"
+# (+5s after #5)
+Sleep 5s
 
 # ---- 07 the download pane: focus Activity, scroll the legs ----
 Tab
 Sleep 2s
-Screenshot "demo/out/full-08-activity.png"
+Screenshot "demo/out/full-07-activity.png"
 Down
 Sleep 500ms
 Down
 Sleep 500ms
 Down
 Sleep 500ms
-Screenshot "demo/out/full-09-activity-scroll.png"
+Screenshot "demo/out/full-08-activity-scroll.png"
 # return focus to the book list (Activity -> Header -> List)
 Tab
 Sleep 400ms
 Tab
 Sleep 600ms
+# (+5s after the original #7)
+Sleep 5s
 
 # ---- 08 manually add Pride and Prejudice ----
 Type ":add Pride and Prejudice, Jane Austen"
 Sleep 1s
 Enter
 Sleep 8s
-Screenshot "demo/out/full-10-manual-add.png"
+Screenshot "demo/out/full-09-manual-add.png"
+# (the 20s "let states settle" sleep is intentionally removed)
 
-# let needs-you + check-download states settle across the lists
-Sleep 20s
+# ---- 06 import Avery (loaded LATE so Jeremy finishes first) ----
+# Tab-complete the unique "a" match.
+Type ":import /tmp/kwire-demo/a"
+Sleep 800ms
+Tab
+Sleep 1s
+Enter
+Sleep 12s
+Screenshot "demo/out/full-10-avery.png"
 
-# ---- 09 needs-you: choose a copy ----
-# From Manual, ']' lands on the ★ All aggregate; filter (2) shows needs-you books.
+# ---- 06b page-scroll the combined list (Shift-J / Shift-K) ----
+# Jump to the ★ All aggregate (Jeremy + Manual + Avery = 41 books, taller than
+# the viewport) and page through it. Shift-J / Shift-K act on the BOOK LIST pane
+# ONLY, so the list must be the active pane first: ']' switches the list (focus
+# stays on the list, where it already is after the import) and '1' (All filter)
+# puts the selection at the top.
 Type "]"
-Sleep 2s
+Sleep 1s
+Type "1"
+Sleep 1500ms
+Type "J"
+Sleep 1500ms
+Screenshot "demo/out/full-11-page-scroll.png"
+Type "J"
+Sleep 1500ms
+Type "K"
+Sleep 1500ms
+Type "K"
+Sleep 1500ms
+
+# ---- 09 needs-you: choose a copy (already on the ★ All aggregate) ----
+# filter (2) shows the needs-you books across all lists.
 Type "2"
 Sleep 3s
-Screenshot "demo/out/full-11-needs-you-list.png"
-# open the first needs-you book (needs_selection -> Picker), pick the 2nd copy
+Screenshot "demo/out/full-12-needs-you-list.png"
+# Open a needs-you book and pick its 2nd copy. Which of the (few) needs-you books
+# lands here depends on live timing — any of them is a fine demo of the Picker.
 Down
 Sleep 1s
 Enter
 Sleep 3s
-Screenshot "demo/out/full-12-needs-you-picker.png"
+Screenshot "demo/out/full-13-needs-you-picker.png"
 Down
 Sleep 800ms
 Enter
 Sleep 2s
 
-# give A Wonder-Book (Jeremy #20) time to reach the front of the download queue,
-# finish, and be page-count-verified — only then is it flagged "too few pages"
-# (check-download). Downloads are throttled, so this needs a generous wait.
-Sleep 60s
+# wait for A Wonder-Book (Jeremy #10) to finish and be page-count-verified — only
+# then is it flagged "too few pages" (check-download). Downloads are heavily
+# throttled, so even with the trimmed list this takes a while to reach book #10.
+# This wait is the one knob to turn if full-14 shows an empty Check-download
+# filter: bump it up.
+Sleep 90s
 
 # ---- 10 check-download: open A Wonder-Book, choose the 2nd variation ----
-# Filter (3) leaves the (single) flagged book selected, so press Enter DIRECTLY
-# to open its detail — no Down first (a Down on a 1-row filter would cross into
-# the Activity pane and steal focus). In the detail, Down to the 2nd variation
-# and `d` to choose it (the detail stays open), then Esc to dismiss (safe — the
-# modal is open) and `1` back to the full list.
+# Filter (3) clamps the selection to whatever row index carried over, so press K
+# (page-up) to land deterministically on the FIRST flagged book — A Wonder-Book
+# for Girls and Boys (lowest list position). K clamps at row 0 and never crosses
+# up into the header, so this is robust whether 1 or 2 books are flagged. Enter
+# opens its detail; Down to the 2nd variation, `d` to choose it (the detail stays
+# open), Esc to dismiss, `1` back to the full list.
 Type "3"
 Sleep 3s
-Screenshot "demo/out/full-13-check-download-list.png"
-# the filter leaves the LAST flagged book (The Heroes) selected; step up to the
-# first one, A Wonder-Book for Girls and Boys, then open it.
-Up
+Screenshot "demo/out/full-14-check-download-list.png"
+Type "K"
 Sleep 800ms
 Enter
 Sleep 3s
-Screenshot "demo/out/full-14-check-download-detail.png"
+Screenshot "demo/out/full-15-check-download-detail.png"
 # choose the second variation (the alternate copy)
 Down
 Sleep 800ms
@@ -173,50 +206,40 @@ Escape
 Sleep 1s
 Type "1"
 Sleep 1s
+# (+5s after #10)
+Sleep 5s
 
-# ---- 11 Jeremy / all 40 -> Ozma of Oz (14th book) -> detail -> S = series ----
-# ']' from the ★ All aggregate lands on a concrete list (Jeremy); show all 40.
+# ---- 11 Jeremy / all 20 -> Ozma of Oz -> detail -> S = series ----
+# ']' from the ★ All aggregate lands on a concrete list (Jeremy); show all 20.
 Type "]"
 Sleep 2s
 Type "1"
 Sleep 1s
-Screenshot "demo/out/full-15-jeremy-all.png"
-# Ozma of Oz is the 14th book (group 1's 10 + Fantasy & Wonder #4). The `1`
-# filter just reset the selection to the top (book 1), so Down x13 lands exactly
-# on Ozma — no `K` first (a `K` at the top overshoots up into the header and
-# throws the count off by one).
+Screenshot "demo/out/full-16-jeremy-all.png"
+# Ozma of Oz is the 9th book (group 1's 5 + Fantasy & Wonder #4). The `1` filter
+# just reset the selection to the top (book 1), so Down x8 lands exactly on Ozma.
 Down
-Sleep 120ms
+Sleep 150ms
 Down
-Sleep 120ms
+Sleep 150ms
 Down
-Sleep 120ms
+Sleep 150ms
 Down
-Sleep 120ms
+Sleep 150ms
 Down
-Sleep 120ms
+Sleep 150ms
 Down
-Sleep 120ms
+Sleep 150ms
 Down
-Sleep 120ms
+Sleep 150ms
 Down
-Sleep 120ms
-Down
-Sleep 120ms
-Down
-Sleep 120ms
-Down
-Sleep 120ms
-Down
-Sleep 120ms
-Down
-Sleep 120ms
+Sleep 150ms
 Sleep 1s
-Screenshot "demo/out/full-16-ozma-selected.png"
+Screenshot "demo/out/full-17-ozma-selected.png"
 # open the detail, then S to download the whole series
 Enter
 Sleep 3s
-Screenshot "demo/out/full-17-ozma-detail.png"
+Screenshot "demo/out/full-18-ozma-detail.png"
 Type "S"
 # The Open Library series lookup takes a while — wait for the
 # "<series> (series)" list to be created and switched to.
@@ -226,7 +249,9 @@ Sleep 25s
 # the delete/about beats below a clean (no-modal) starting state.
 Escape
 Sleep 2s
-Screenshot "demo/out/full-18-series.png"
+Screenshot "demo/out/full-19-series.png"
+# (+5s after #11)
+Sleep 5s
 
 # ---- 12 delete-list confirm (kept from the proven tape) ----
 # get to List focus, walk up to the list strip, then D.
@@ -256,15 +281,18 @@ Up
 Sleep 200ms
 Type "D"
 Sleep 2s
-Screenshot "demo/out/full-19-delete-confirm.png"
+Screenshot "demo/out/full-20-delete-confirm.png"
 # decline the delete
 Type "n"
 Sleep 2s
+# (+5s after #12)
+Sleep 5s
 
 # ---- 13 about panel (ends the tour) ----
 Type ":about"
 Sleep 1s
 Enter
 Sleep 2s
-Screenshot "demo/out/full-20-about.png"
-Sleep 1s
+Screenshot "demo/out/full-21-about.png"
+# (+5s after #13)
+Sleep 5s
