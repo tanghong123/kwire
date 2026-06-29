@@ -1591,6 +1591,10 @@ fn activity_status_spans(
 /// effective_eta, speed_bps)`.
 type ActivityLegRow = (String, u32, String, Option<u64>, u64);
 
+/// One Activity row in the live-telemetry fallback: `(title, pct, effective_eta,
+/// speed_bps)` — no fmt (telemetry carries none).
+type TelemetryRow = (String, u8, Option<u64>, u64);
+
 pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect) {
     // Count download states.
     let downloading_count = app
@@ -1742,9 +1746,9 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
         }
     }
 
-    // 2. Fallback to live telemetry if ViewModel has nothing.
+    // 2. Fallback to live telemetry if ViewModel has nothing. (title, pct, eta, speed)
     let use_telemetry = host_groups.is_empty() && !app.transfers.is_empty();
-    let mut telemetry_groups: BTreeMap<String, Vec<(String, u8, u64)>> = BTreeMap::new();
+    let mut telemetry_groups: BTreeMap<String, Vec<TelemetryRow>> = BTreeMap::new();
     if use_telemetry {
         for t in app.transfers.values() {
             let pct = match (t.bytes_done, t.total_bytes) {
@@ -1759,10 +1763,14 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                 t.title.clone()
             };
             let speed = t.speed_bps.unwrap_or(0);
+            // Derive the ETA from the live transfer's bytes/total/speed (the engine
+            // omits eta on some ticks) so a progressing transfer in the telemetry
+            // fallback shows an ETA instead of a permanent "tbd".
+            let eta = effective_eta(t.eta_secs, t.speed_bps, Some(t.bytes_done), t.total_bytes);
             telemetry_groups
                 .entry(t.host.clone())
                 .or_default()
-                .push((title, pct, speed));
+                .push((title, pct, eta, speed));
         }
     }
 
@@ -1885,7 +1893,7 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
         }
     } else {
         for (host, transfers) in &telemetry_groups {
-            let host_speed: u64 = transfers.iter().map(|(_, _, s)| s).sum();
+            let host_speed: u64 = transfers.iter().map(|(_, _, _, s)| s).sum();
             let host_rest = format!(
                 " {}   {}↓ \u{00b7} {}",
                 host,
@@ -1897,7 +1905,7 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                 Span::styled(host_rest, Style::default().fg(C_WARM)),
             ]));
             leg_map.push(None); // host label — not a selectable leg
-            for (title, pct, speed) in transfers {
+            for (title, pct, eta, speed) in transfers {
                 let is_leg_sel = activity_active && leg_idx == sel_leg;
                 let is_leg_dim = !activity_active && leg_idx == sel_leg;
                 let (marker, marker_style, title_style, status_base, sel_bg) = if is_leg_sel {
@@ -1925,10 +1933,10 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
                         None,
                     )
                 };
-                // Pinned-right STATUS: % · bar · rate (no fmt; eta unknown → "tbd"
-                // since the telemetry path has no total to derive from).
+                // Pinned-right STATUS: % · bar · rate · eta (no fmt). ETA derived
+                // from the live transfer's bytes/total/speed above.
                 let status =
-                    activity_status_spans("", (*pct).into(), None, *speed, status_base, sel_bg);
+                    activity_status_spans("", (*pct).into(), *eta, *speed, status_base, sel_bg);
                 let status_w: usize = status
                     .iter()
                     .map(|s| crate::textfit::display_width(s.content.as_ref()))
