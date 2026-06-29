@@ -2768,6 +2768,44 @@ mod tests {
         );
     }
 
+    /// The Activity header shows only the aggregate bandwidth on the right — the
+    /// "space collapse/expand" hotkey hint lives in the bottom footer row, not here.
+    #[test]
+    fn activity_header_has_no_toggle_hint() {
+        use ratatui::layout::Rect;
+        let backend = TestBackend::new(120, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.flat[0].book.discovery = "matched".into();
+        let mut v = mk_var("Treasure Island", "pdf", "downloading", 42, &"e".repeat(32));
+        v.host = Some("cdn4.booksdl.lc".into());
+        app.flat[0].book.versions = vec![v];
+
+        // Expanded header.
+        app.activity_expanded = true;
+        let area = Rect::new(0, 0, 120, 14);
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let expanded = buffer_string(&terminal);
+        assert!(
+            !expanded.contains("space collapse") && !expanded.contains("space expand"),
+            "Activity header must not carry the collapse/expand hint:\n{expanded}"
+        );
+
+        // Collapsed header (only the header line renders).
+        app.activity_expanded = false;
+        terminal
+            .draw(|f| ui::render_activity(f, &mut app, area))
+            .unwrap();
+        let collapsed = buffer_string(&terminal);
+        assert!(
+            !collapsed.contains("space collapse") && !collapsed.contains("space expand"),
+            "collapsed Activity header must not carry the toggle hint:\n{collapsed}"
+        );
+    }
+
     /// A host whose only leg is at 0% still shows its leg count + rate on the
     /// host row (never blank), even with no measured speed.
     #[test]

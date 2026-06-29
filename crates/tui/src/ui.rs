@@ -1633,13 +1633,6 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
     } else {
         "\u{25b8}"
     };
-    // `space` toggles collapse/expand from anywhere in the main view, so the
-    // hint is shown regardless of which pane is focused.
-    let toggle_hint = if app.activity_expanded {
-        "space collapse"
-    } else {
-        "space expand"
-    };
     // Left of the line: the counts that follow the green "ACTIVITY" word.
     let left_stats = if app.activity_expanded {
         format!(
@@ -1653,12 +1646,9 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
         )
     };
     // Right of the line (pinned to the pane's right edge, in the download color):
-    // the aggregate throughput + the collapse/expand hint.
-    let right_text = if speed_str.is_empty() {
-        toggle_hint.to_string()
-    } else {
-        format!("{}  {}", speed_str, toggle_hint)
-    };
+    // the aggregate throughput only. The collapse/expand hotkey lives in the
+    // bottom footer hint row, not here.
+    let right_text = speed_str;
     let header_style = if app.focus == Focus::Activity {
         style_normal()
     } else {
@@ -1671,7 +1661,7 @@ pub(crate) fn render_activity(frame: &mut Frame, app: &mut AppState, area: Rect)
     let right_w = crate::textfit::display_width(&right_text);
     let pad = (area.width as usize).saturating_sub(left_w + right_w);
     // "ACTIVITY" is always green; the arrow + counts follow the focus style; the
-    // throughput + hint are right-aligned in the download color.
+    // aggregate throughput is right-aligned in the download color.
     let header_line = Line::from(vec![
         Span::styled(format!("{} ", arrow), header_style),
         Span::styled(
@@ -2220,14 +2210,19 @@ fn global_hint_text(app: &AppState) -> String {
             }
         }
         Focus::Activity => {
+            // The collapse/expand hotkey lives here in the footer (not in the
+            // Activity header); reflect the current state.
+            let toggle = if app.activity_expanded {
+                "space collapse"
+            } else {
+                "space expand"
+            };
             // p/c/r act on the focused download leg — only show them when a leg
             // exists; otherwise just the pane/collapse keys.
             if app.activity_has_legs() {
-                format!(
-                    "p pause \u{00b7} c cancel \u{00b7} r retry \u{00b7} space collapse{GLOBALS}"
-                )
+                format!("p pause \u{00b7} c cancel \u{00b7} r retry \u{00b7} {toggle}{GLOBALS}")
             } else {
-                format!("tab pane \u{00b7} space collapse{GLOBALS}")
+                format!("tab pane \u{00b7} {toggle}{GLOBALS}")
             }
         }
     }
