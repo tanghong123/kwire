@@ -143,15 +143,34 @@ Sleep 800ms
 Enter
 Sleep 2s
 
-# ---- 10 check-download: the books the engine flags for review ----
-# Showcase the filtered list only. Do NOT navigate into a book here: with live
-# data the count varies (often a single low-pages "done" copy), and a stray Down
-# on a short list crosses into the Activity pane — which would steal focus and
-# break the later list navigation. Keeping it to the list view preserves List
-# focus for the Ozma beat below.
+# give A Wonder-Book (Jeremy #20) time to reach the front of the download queue,
+# finish, and be page-count-verified — only then is it flagged "too few pages"
+# (check-download). Downloads are throttled, so this needs a generous wait.
+Sleep 60s
+
+# ---- 10 check-download: open A Wonder-Book, choose the 2nd variation ----
+# Filter (3) leaves the (single) flagged book selected, so press Enter DIRECTLY
+# to open its detail — no Down first (a Down on a 1-row filter would cross into
+# the Activity pane and steal focus). In the detail, Down to the 2nd variation
+# and `d` to choose it (the detail stays open), then Esc to dismiss (safe — the
+# modal is open) and `1` back to the full list.
 Type "3"
 Sleep 3s
 Screenshot "demo/out/full-13-check-download-list.png"
+# the filter leaves the LAST flagged book (The Heroes) selected; step up to the
+# first one, A Wonder-Book for Girls and Boys, then open it.
+Up
+Sleep 800ms
+Enter
+Sleep 3s
+Screenshot "demo/out/full-14-check-download-detail.png"
+# choose the second variation (the alternate copy)
+Down
+Sleep 800ms
+Type "d"
+Sleep 2s
+Escape
+Sleep 1s
 Type "1"
 Sleep 1s
 
@@ -162,12 +181,10 @@ Sleep 2s
 Type "1"
 Sleep 1s
 Screenshot "demo/out/full-15-jeremy-all.png"
-# Ozma of Oz is the 14th book (group 1's 10 + Fantasy & Wonder #4). Go to the top,
-# then Down to the 14th selectable book.
-Type "K"
-Sleep 400ms
-Type "K"
-Sleep 600ms
+# Ozma of Oz is the 14th book (group 1's 10 + Fantasy & Wonder #4). The `1`
+# filter just reset the selection to the top (book 1), so Down x13 lands exactly
+# on Ozma — no `K` first (a `K` at the top overshoots up into the header and
+# throws the count off by one).
 Down
 Sleep 120ms
 Down
