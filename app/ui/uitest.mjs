@@ -483,6 +483,22 @@ check("variation manager: a downloading variation shows its .part path + Reveal"
   if (/partpath/.test(ctx.renderVariationManager(done))) throw new Error("a done variation must not show a .part path");
 });
 
+check("variation manager: a candidate's YEAR shows in the meta line (parity with the TUI picker)", () => {
+  const bk = { id: "bk0", list: "L1", bid: "bk0", title: "Millions of Cats", author: "Wanda Gág", seq: 1,
+    priority: false, discovery: "needs_selection", review: false, recommended_md5: null,
+    versions: [
+      { md5: "a".repeat(32), fmt: "epub", state: "available", size: 2, year: 1928,
+        title: "Millions of Cats", author: "Wanda Gág", publisher: "Coward-McCann", score: 0.7 },
+      // A candidate with no year renders an em dash, never a blank slot.
+      { md5: "b".repeat(32), fmt: "pdf", state: "available", size: 4,
+        title: "Millions of Cats", author: "Wanda Gág", publisher: "", score: 0.6 },
+    ],
+  };
+  const html = ctx.renderVariationManager(bk);
+  if (!/1928/.test(html)) throw new Error("candidate year (1928) must show in the choose-a-copy meta line: " + html);
+  if (!/—/.test(html)) throw new Error("a yearless candidate should render an em dash placeholder: " + html);
+});
+
 check("cover preload: throttled to COVER_CONCURRENCY, rest queued", () => {
   // Reset cover state.
   ctx.COVER_CACHE = {}; ctx.COVER_INFLIGHT = {}; ctx.COVER_FAILS = {};
