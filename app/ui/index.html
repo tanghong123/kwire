@@ -2320,10 +2320,21 @@ function fmtBytes(n) {
 }
 function fmtSpeed(bps) { return bps == null ? "—" : fmtBytes(bps) + "/s"; }
 function fmtEta(secs) {
-  if (secs == null) return "—";
+  if (secs == null) return "tbd";
   if (secs >= 3600) return Math.floor(secs / 3600) + "h " + Math.floor((secs % 3600) / 60) + "m";
   if (secs >= 60) return Math.floor(secs / 60) + "m " + (secs % 60) + "s";
   return secs + "s";
+}
+/* The ETA to DISPLAY for a leg: the engine's value when present, else derived
+   from the live speed and remaining bytes. null only when it can't be known
+   (no speed / unknown total) → fmtEta renders that as "tbd". Mirrors the TUI's
+   effective_eta so both frontends agree (and fixes "progressing but no ETA"). */
+function effEta(leg) {
+  if (leg.eta != null) return leg.eta;
+  if (leg.speed != null && leg.speed > 0 && leg.bytes != null && leg.total != null && leg.total > leg.bytes) {
+    return Math.floor((leg.total - leg.bytes) / leg.speed);
+  }
+  return null;
 }
 
 /* The bottom panel: everything in flight right now — books being queried, and
@@ -2460,7 +2471,7 @@ function renderActivePanel() {
       stats = t("ap.paused_stat");
     } else if (legTransferring(v, leg)) {
       pct = leg.progress || 0;
-      stats = fmtSpeed(leg.speed) + " · " + fmtEta(leg.eta);
+      stats = fmtSpeed(leg.speed) + " · " + fmtEta(effEta(leg));
     } else {
       // Not transferring yet: resolving the mirror, following the 307, rotating edges.
       // A partial already on disk (a resume) shows its %, never a 0% restart bar.

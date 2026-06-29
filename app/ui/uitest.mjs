@@ -337,6 +337,33 @@ check("active panel: projected hedge legs render as separate, badged lines (prim
   ctx.LEGS = {};
 });
 
+check("active panel: leg ETA is derived when the engine omits it, else reads 'tbd'", () => {
+  ctx.LEGS = {};
+  const md5 = "b".repeat(32);
+  const bk = { id: "bk0", list: "L1", bid: "bk0", title: "Sisters", author: "X", seq: 1,
+    discovery: "matched", review: false,
+    versions: [{ md5, fmt: "epub", state: "downloading", host: "cdn1.booksdl.lc", progress: 20,
+      downloaded_bytes: 200, total_bytes: 1000, speed_bps: 100 }] };
+  ctx.LISTS = [{ id: "L1", title: "L", groups: [{ name: "G", collapsed: false, books: [bk] }] }];
+  ctx.CURRENT = "L1"; ctx.ACTIVE_COLLAPSED = false;
+  // Progressing (speed + known total) but NO engine ETA → derive (1000-200)/100 = 8s.
+  ctx.noteLeg({ kind: "bytes", md5, legs: [
+    { host: "cdn1.booksdl.lc", bytes: 200, total: 1000, speed: 100, eta: null, progress: 20, hedge: false },
+  ] });
+  ctx.renderActivePanel();
+  let html = els["apBody"].innerHTML;
+  if (!/8s/.test(html)) throw new Error("missing ETA should be derived from speed+remaining (8s): " + html);
+  if (/tbd/.test(html)) throw new Error("a derivable ETA must NOT read 'tbd'");
+  // Stalled (speed 0, unknown remaining) → ETA truly unknown → 'tbd'.
+  ctx.noteLeg({ kind: "bytes", md5, legs: [
+    { host: "cdn1.booksdl.lc", bytes: 200, total: 1000, speed: 0, eta: null, progress: 20, hedge: false },
+  ] });
+  ctx.renderActivePanel();
+  html = els["apBody"].innerHTML;
+  if (!/tbd/.test(html)) throw new Error("an unknowable ETA must read 'tbd': " + html);
+  ctx.LEGS = {};
+});
+
 check("active panel: a single projected leg (host-coalesced) renders ONE unbadged line", () => {
   ctx.LEGS = {};
   const md5 = "f".repeat(32);
