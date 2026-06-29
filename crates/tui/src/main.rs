@@ -448,9 +448,16 @@ async fn run_loop(
                     }
                     EngineEvent::Refresh => {
                         refresh_active_view(app, &handles).await;
+                        // Keep the per-list run-state (▸ running / ⏸ paused) live:
+                        // Refresh fires on state transitions (StatusChanged/Done/
+                        // book-state), not per byte, so recomputing the list-strip
+                        // summaries here is cheap and stops the indicator from
+                        // going stale while downloads start/pause/finish.
+                        refresh_all_list_summaries(app, &handles).await;
                     }
                     EngineEvent::Status(msg) => {
                         refresh_active_view(app, &handles).await;
+                        refresh_all_list_summaries(app, &handles).await;
                         app.status_msg = Some(msg);
                     }
                 }

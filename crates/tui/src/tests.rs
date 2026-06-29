@@ -2861,6 +2861,49 @@ mod tests {
         );
     }
 
+    /// The list strip shows the per-list run-state glyph: ▸ for a list with an
+    /// in-flight download, ⏸ for a list with paused (and no running) transfers.
+    #[test]
+    fn list_strip_shows_run_state_glyphs() {
+        use crate::app::ListSummary;
+        let backend = TestBackend::new(160, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.all_lists = vec![
+            ListSummary {
+                id: "L1".into(),
+                title: "Running List".into(),
+                done: 1,
+                total: 5,
+                downloading: 2,
+                paused: 0,
+                is_manual: false,
+            },
+            ListSummary {
+                id: "L2".into(),
+                title: "Paused List".into(),
+                done: 0,
+                total: 3,
+                downloading: 0,
+                paused: 1,
+                is_manual: false,
+            },
+        ];
+        app.active_list_idx = 0;
+        app.all_active = false;
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let s = buffer_string(&terminal);
+        assert!(
+            s.contains('\u{25b8}'),
+            "a downloading list must show the ▸ running glyph:\n{s}"
+        );
+        assert!(
+            s.contains('\u{23f8}'),
+            "a paused list must show the ⏸ paused glyph:\n{s}"
+        );
+    }
+
     /// The Activity header shows only the aggregate bandwidth on the right — the
     /// "space collapse/expand" hotkey hint lives in the bottom footer row, not here.
     #[test]
