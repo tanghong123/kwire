@@ -2034,17 +2034,18 @@ async fn ensure_series_list(
     let list = series.to_download_list();
     let count = list.groups.iter().map(|g| g.books.len()).sum();
 
-    // Persist via de-dupe-by-title (a re-run refreshes the same list).
+    // Persist via de-dupe-by-title. If a list with this title already exists we
+    // SWITCH to it (preserving its download progress) and re-drive its goals
+    // below — we deliberately do NOT `upsert_list`, which would DELETE the whole
+    // existing tree (books, candidates, jobs, progress) and rewrite it. Re-running
+    // "download series" must never clobber an existing list.
     let (store_id, existed) = {
         let mut store = open_store(&cfg).map_err(|e| e.to_string())?;
         match store
             .list_id_by_title(&list.title)
             .map_err(|e| e.to_string())?
         {
-            Some(id) => {
-                store.upsert_list(id, &list).map_err(|e| e.to_string())?;
-                (id, true)
-            }
+            Some(id) => (id, true),
             None => (store.insert_list(&list).map_err(|e| e.to_string())?, false),
         }
     };

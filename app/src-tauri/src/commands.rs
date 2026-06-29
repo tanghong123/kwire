@@ -1722,16 +1722,17 @@ pub async fn download_series(
 
     let list = series.to_download_list();
 
-    // Persist via the SAME path as `load_list`: de-dupe by title (re-running
-    // refreshes the same list instead of duplicating it), attach a fresh orch.
+    // Persist by de-dupe-by-title. If a list with this title already exists
+    // (a re-run from the same seed, or from another book that resolves to the
+    // same series name) we SWITCH to it and re-drive its goals below — we do
+    // NOT `upsert_list`, which would DELETE that list's whole tree (books,
+    // candidates, jobs, download progress) and rewrite it from scratch.
+    // Re-running "download series" must never clobber an existing list.
     let cfg = state.config.lock().expect("config mutex poisoned").clone();
     let mut store = open_store(&cfg)?;
     let search = build_search(&cfg)?;
     let store_id = match store.list_id_by_title(&list.title).map_err(err)? {
-        Some(existing) => {
-            store.upsert_list(existing, &list).map_err(err)?;
-            existing
-        }
+        Some(existing) => existing,
         None => store.insert_list(&list).map_err(err)?,
     };
     let store2 = open_store(&cfg)?;
