@@ -3175,9 +3175,21 @@ impl Orchestrator {
                             && job.host.as_deref() != Some(host.as_str());
                         job.bytes_done = *bytes_done;
                         job.host = Some(host.clone());
-                        job.total_bytes = *total_bytes;
-                        job.speed_bps = *speed_bps;
-                        job.eta_secs = *eta_secs;
+                        // Carry total/speed/eta forward when a tick omits them: the
+                        // engine drops the total on some ticks and reports no
+                        // speed/eta until it's measurable (the first tick, or right
+                        // after a resume/failover restarts the speed tracker).
+                        // Clobbering a known total to None loses the ETA derivation
+                        // and freezes the row at a stale % with "tbd".
+                        if total_bytes.is_some() {
+                            job.total_bytes = *total_bytes;
+                        }
+                        if speed_bps.is_some() {
+                            job.speed_bps = *speed_bps;
+                        }
+                        if eta_secs.is_some() {
+                            job.eta_secs = *eta_secs;
+                        }
                         if new_edge {
                             event = Some((
                                 "downloading",

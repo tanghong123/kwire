@@ -170,9 +170,17 @@ impl LegTracker {
             leg.total_bytes = upd.total_bytes;
         }
         // speed/eta only ride on Bytes events; other events leave them as-is.
+        // Even on a Bytes event the engine omits them until speed is measurable
+        // (the first tick, or just after a resume/failover that restarts the
+        // speed tracker) — carry the last known value forward rather than blanking
+        // an actively-progressing leg back to "tbd".
         if let Some((speed, eta)) = upd.speed_eta {
-            leg.speed_bps = speed;
-            leg.eta_secs = eta;
+            if speed.is_some() {
+                leg.speed_bps = speed;
+            }
+            if eta.is_some() {
+                leg.eta_secs = eta;
+            }
         }
         leg.last_seen_ms = now_ms;
     }
@@ -478,6 +486,38 @@ mod tests {
         // Next Resolved lands the new host on the SAME leg.
         t.note(&resolved(0, false, "host-c", Some(100)), 300);
         assert_eq!(t.legs_for(MD5, 300)[0].host.as_deref(), Some("host-c"));
+    }
+
+    #[test]
+    fn bytes_tick_without_speed_eta_keeps_last_known() {
+        // The engine omits speed/eta on a Bytes tick until measurable (first tick /
+        // post-resume / post-failover). Such a tick must NOT blank an actively-
+        // progressing leg back to no-speed/no-eta ("tbd").
+        let mut t = LegTracker::new();
+        t.note(&bytes(0, false, "host-a", 10, 100), 0);
+        assert_eq!(t.primary(MD5, 0).unwrap().speed_bps, Some(1_000));
+        // A later Bytes tick advances bytes but carries no speed/eta.
+        t.note(
+            &Progress::Bytes {
+                md5: MD5.to_string(),
+                leg_id: 0,
+                is_hedge: false,
+                host: "host-a".to_string(),
+                bytes_done: 20,
+                total_bytes: Some(100),
+                speed_bps: None,
+                eta_secs: None,
+            },
+            10,
+        );
+        let leg = t.primary(MD5, 10).unwrap();
+        assert_eq!(leg.bytes_done, Some(20), "bytes still advance");
+        assert_eq!(
+            leg.speed_bps,
+            Some(1_000),
+            "speed carried forward, not blanked"
+        );
+        assert_eq!(leg.eta_secs, Some(10), "eta carried forward, not blanked");
     }
 
     #[test]
