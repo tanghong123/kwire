@@ -1,7 +1,18 @@
 # Speculative / Hedged Download: race a stalled mirror against a fresh one
 
-Status: **design (for review)** — extends `docs/EXECUTION_MODEL.md` (the
-goal-driven engine + per-host `Scheduler`). No source change beyond this doc.
+Status: **partially implemented; hedging default-OFF** — extends
+`docs/EXECUTION_MODEL.md` (the goal-driven engine + per-host `Scheduler`).
+
+What has LANDED in `crates/core/src/queue.rs`: the per-leg model — `Progress`
+carries `leg_id` (start-order: primary = 0, hedges 1,2,…) + `is_hedge`, the
+`LegEnded` variant + its RAII Drop guard, `RaceGroup.next_leg_id`, the stall
+monitor, and the hedge controller. The UI consumes legs through the shared
+`LegTracker` (alt-copy rows; see `docs/LEG_LIFECYCLE.md`).
+
+What is GATED OFF: actually *launching* a hedge. `HedgeConfig::enabled` defaults
+`false` (`queue.rs`), so no speculative leg is spawned in production yet — pending
+field validation that racing a second mirror is a net win on real (slow) libgen
+downloads. Flip `enabled` to exercise the full path; the plumbing + UI are ready.
 
 ## 0. TL;DR
 

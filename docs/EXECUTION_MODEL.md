@@ -68,6 +68,12 @@ without losing the file.
 `Idle < Match < Complete`. A goal never *kills* in-flight work; lowering the goal
 to `Idle` (Stop) pauses downloads via the scheduler; raising it resumes.
 
+> **UI run-state indicator.** Both frontends surface each list's run state from
+> this per-list goal/job state: a leading **▸ running** (any variation
+> downloading) / **⏸ paused** (some paused, none running) marker — desktop sidebar
+> dot, TUI list strip (`crates/tui/src/ui.rs` `render_lists`, ~L526). There is no
+> separate global running flag; the strip reflects per-list state directly.
+
 ### Resolved UX (per user)
 
 - **Per-list control + a clarified global.** Start / Stop / Re-query are

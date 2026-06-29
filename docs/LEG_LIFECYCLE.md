@@ -1,6 +1,15 @@
 # Download legs & the active-downloads panel — lifecycle design
 
-Status: **accepted, implementing**. Owners: download/queue + UI.
+Status: **implemented**. Owners: download/queue + UI.
+
+> **Single source of truth (2026-06-29):** the leg state machine described below
+> now lives ONCE, in Rust — `libgen_engine::legs::LegTracker`
+> (`crates/engine/src/legs.rs`), consumed by **both** frontends. The TUI calls it
+> directly; the Tauri desktop feeds it in `engine_tauri.rs` and ships the projected
+> legs on the `download://progress` payload. The desktop's former JavaScript
+> reconstruction (`LEGS`/`noteLeg`/`legsFor`/`primaryLeg` in `app/ui/index.html`)
+> is **deleted** — the JS now just stores and renders the projection. §6 documents
+> the shared module; it supersedes the old per-frontend reconstruction.
 
 This doc specifies how the active-downloads panel models concurrent **legs** of a
 single download (the primary plus any speculative **hedge** legs), and how legs
@@ -107,32 +116,48 @@ done), `Failed{md5,error}` (whole download gave up), `Cancelled{md5,…}`,
   `LegEnded` after `Done`/`Cancelled` is harmless — the UI has already cleared the
   md5, so it is a no-op.
 
-## 6. UI state machine (`index.html`)
+## 6. The shared state machine (`libgen_engine::legs::LegTracker`)
 
+```rust
+LegTracker { by_md5: HashMap<md5, BTreeMap<leg_id, Leg>> }
+Leg { leg_id, host, bytes_done, total_bytes, speed_bps, eta_secs, is_hedge, last_seen_ms }
+LEG_TTL_MS = 60_000   // backstop only
 ```
-LEGS: { [md5]: { byLeg: { [leg_id]: Leg }, } }
-Leg:  { leg_id, host, bytes, total, speed, eta, is_hedge, ts }   // ts = last keep-alive
-LEG_TTL = 60_000   // backstop only
-```
 
-`noteLeg(p)` transitions:
+`note(&Progress, now_ms)` transitions (`now_ms` is a caller-supplied monotonic
+clock, so the tracker holds no `Instant` and tests are deterministic):
 
-| event kind | action |
+| `Progress` variant | action |
 |---|---|
-| `resolved`,`bytes`,`stalled`,`retrying`,`resuming` | upsert `byLeg[leg_id]`; set `host`, refresh `ts` (keep-alive); `bytes`/`resolved` also update progress fields |
-| `failing_over` | same leg (`leg_id`) changes host; update `host`, refresh `ts` — **no drop** |
-| `leg_ended` | delete `byLeg[leg_id]` (remove just this leg; survivors remain) |
-| `done`,`failed`,`cancelled` | delete `LEGS[md5]` (whole race over) |
+| `Resolved`,`Bytes`,`Stalled`,`Retrying`,`Resuming`,`FailingOver` | upsert `by_md5[md5][leg_id]`; carry forward fields the event omits; refresh `last_seen_ms` (keep-alive). `Bytes` also sets speed/eta; `FailingOver` carries no new host, so it keeps the leg until the next `Resolved` lands the new host on the SAME `leg_id` |
+| `LegEnded` | remove just `by_md5[md5][leg_id]` (survivors remain; drop the md5 entry if it was the last) |
+| `Done`,`Failed`,`Cancelled` | remove `by_md5[md5]` (whole race over) |
+| `Note` | ignored (history-only diagnostic) |
 
-`legsFor(v)`: legs of `LEGS[md5].byLeg`, **sorted by `leg_id`**, dropping any whose
-`ts` is older than `LEG_TTL` (backstop). The **lowest live `leg_id` = primary**
-(`hedge=false` for display); the rest are badged hedge. `leg_id` order *is* start
-order, so this gives "earliest start = primary" and promotes the survivor when a
-lower leg is `LegEnded`. Fallback (no live legs / pre-events): synthesize one leg
-from the viewmodel as today.
+`legs_for(md5, now_ms) -> Vec<LegView>`: the md5's legs (a `BTreeMap`, so already
+`leg_id`-ascending), dropping any whose `last_seen_ms` is older than `LEG_TTL_MS`.
+The **lowest live `leg_id` = primary** (`is_alt = false`); the rest are `is_alt =
+true`. `leg_id` order *is* start order, so this gives "earliest start = primary"
+and promotes the survivor when a lower leg is `LegEnded`. Returns empty when there
+are no live legs — each **frontend** then synthesizes one leg from its viewmodel.
 
-The variation's headline `progress` follows the **primary (lowest live leg_id)**,
-which subsumes the leading-leg patch.
+`primary(md5, now_ms)`: the lowest live `leg_id`. The variation's headline
+`progress` follows it, which subsumes the old leading-leg patch.
+
+`LegView` is the read-side projection (`is_alt` + a derived `progress` %). Each
+frontend maps it to its own render:
+
+- **TUI** (`crates/tui/src/app.rs` + `ui.rs`): `AppState` holds a `LegTracker`,
+  fed in `apply_progress`; `render_activity` expands each downloading variation via
+  `legs_for`, emitting one row per leg under its own host, the non-primary ones
+  titled "· alt copy".
+- **Desktop** (`app/src-tauri/src/engine_tauri.rs` + `commands.rs`): the
+  `TauriEmitter` owns a `LegTracker` and ships the affected md5's projected legs as
+  `ProgressEnvelope { ..payload, legs }` on `download://progress`; `index.html`
+  stores `p.legs` and renders them (badging `hedge` = `is_alt`).
+
+`is_hedge` is carried for diagnostics but the *displayed* primary/alt split is
+purely the start-order rule — a promoted survivor reads as primary.
 
 ## 7. Failure modes
 
@@ -145,17 +170,18 @@ which subsumes the leading-leg patch.
 | primary dies, hedge survives | `LegEnded(primary)` → next-lowest live `leg_id` becomes primary |
 | whole download ends | `Done`/`Failed`/`Cancelled` clears the md5 |
 
-## 8. Implementation plan
+## 8. Implementation (done)
 
 1. **queue.rs** — `Progress` fields + `LegEnded`; `RaceGroup.next_leg_id`;
-   `LegCtx.leg_id`; stamp every emit; `LegEndGuard`. Unit test: a leg run emits
-   `LegEnded` once, on every exit path (incl. race-group cancel).
-2. **bridge.rs** — carry `leg_id`/`is_hedge` and a `leg_ended` kind into the
-   `download://progress` payload.
-3. **index.html** — `LEGS` by `leg_id`; `noteLeg` table above; `legsFor` by
-   `leg_id`; `LEG_TTL=60s`; honor keep-alives. Remove the host-order + leading-leg
-   heuristics they replace. UI harness coverage for: edge-rotation = one leg, hedge
-   = two legs, primary `LegEnded` promotes the hedge.
+   `LegCtx.leg_id`; stamp every emit; `LegEndGuard`. ✓
+2. **`libgen_engine::legs`** — the shared `LegTracker` (§6): `note`/`legs_for`/
+   `primary`, the 60s TTL backstop, carry-forward upsert. Unit tests mirror §9. ✓
+3. **TUI** — `AppState` holds the tracker, fed in `apply_progress`; headline `%`
+   follows the primary; `render_activity` renders per-leg rows + "· alt copy".
+   `TestBackend` coverage for the hedge + single-leg cases. ✓
+4. **Desktop** — `engine_tauri` owns the tracker and projects legs onto
+   `download://progress` (`ProgressEnvelope`); `index.html` drops the JS
+   reconstruction and renders the projection; `uitest.mjs` asserts against it. ✓
 
 ## 9. Test plan
 

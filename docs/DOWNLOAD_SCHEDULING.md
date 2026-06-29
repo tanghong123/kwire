@@ -1,6 +1,15 @@
 # Design: pull-based download scheduling (honest state + balanced hosts)
 
-Status: **draft for review** (2026-06-22). No code changed yet.
+Status: **implemented** (design 2026-06-22; landed since). The honest-state +
+balanced-host scheduling described below is in `crates/core/src/queue.rs`. Two
+follow-on changes the original draft didn't cover:
+- **The hedging-gated fast path was removed.** The scheduler now *always* runs the
+  progress poll loop while a transfer streams (a lightweight ~200ms `.part`-size
+  poll, no extra network), so `%`/ETA/bar advance in real time for every download —
+  not just when hedging is on. A hedge *launch* is still gated on `hedge.enabled`
+  (default `false`; see `docs/SPECULATIVE_DOWNLOAD.md`).
+- Per-leg `Progress` now carries `leg_id`/`is_hedge` and a `LegEnded` variant
+  (consumed by the shared `LegTracker`; see `docs/LEG_LIFECYCLE.md`).
 
 ## 1. Problem (observed in the running app)
 

@@ -54,6 +54,14 @@ carries cover thumbnails too (Part 2).
 catch-all that also guarantees downloadable members. We could promote libgen first
 for comics/graphic-novel topics later.)
 
+### Series → list (shared in core)
+The projection from a resolved `Series` to a `DownloadList`, and Manual-list
+creation, live in **libgen-core** so the desktop and the TUI build identical
+lists: `Series::to_download_list` (`crates/core/src/series.rs`) and
+`DownloadList::manual` / `MANUAL_LIST_TITLE` (`crates/core/src/model.rs`). Both
+frontends call these instead of reconstructing the shape — the same
+single-source-of-truth pattern as the shared `LegTracker` (`docs/LEG_LIFECYCLE.md`).
+
 ### Tests
 Record fixtures for: Oz (OL, 14), Alice (libgen 364379 — search page +
 series page), a non-series book (none). Assert member counts + ordering + that

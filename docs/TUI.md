@@ -322,6 +322,16 @@ loop {
 }
 ```
 
+**Repaint throttle behind modals.** A high-frequency `Download` progress tick is
+always *applied* to `AppState`, but it only forces a repaint when the progress is
+actually visible — `AppState::progress_visible()` is true when no modal overlays
+the main view, or when the Detail modal (which draws its own per-book bar) is on
+top. Under any other modal (Settings/Help/Picker), a progress tick updates state
+and skips the whole-frame redraw until the modal closes or the 120ms tick fires.
+This mirrors the desktop's targeted-render throttle (only the active panel + counts
+update on a byte event, never a full re-render). See `docs/LEG_LIFECYCLE.md` for the
+per-leg state those ticks carry.
+
 ## 4 · Layout & the docked Activity pane
 
 The main screen is one `Layout` split vertically. The Activity pane is **not a popup** — it

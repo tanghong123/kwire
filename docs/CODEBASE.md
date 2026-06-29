@@ -113,6 +113,19 @@ kwire/
 │       └── orchestrator.rs     # ties the pipeline together behind a command/event API
 │   └── tests/                  # headless integration tests + golden files
 │
+├── crates/engine/              # UI-AGNOSTIC DRIVER (libgen-engine) — shared by both frontends
+│   └── src/
+│       ├── engine.rs           # the concurrency driver loop (spawn_with) + EngineEmitter trait
+│       ├── viewmodel.rs        # JSON-friendly projection of the library (ViewModel/ViewVariation)
+│       ├── state.rs            # AppState/Config/Library shared between desktop + TUI
+│       └── legs.rs             # ⭐ shared LegTracker: per-leg download state (see docs/LEG_LIFECYCLE.md)
+│
+├── crates/tui/                 # THE TUI FRONTEND (libgen-tui, binary `kwire`)
+│   └── src/
+│       ├── app.rs              # AppState + input/event handling (holds the LegTracker)
+│       ├── ui.rs               # ratatui render (the Activity pane renders per-leg "· alt copy" rows)
+│       └── theme.rs            # the "quiet" truecolor palette + shared widgets
+│
 ├── crates/cli/                 # THE HARNESSES (libgen-cli, binary named `libgen`)
 │   └── src/
 │       ├── main.rs             # wires up the subcommands
