@@ -1,6 +1,6 @@
 [package]
 name = "libgen-app"
-version = "2.1.1"
+version = "2.3.0"
 edition = "2021"
 license = "MIT"
 description = "Tauri v2 desktop front end for Kwire, over the libgen-core engine."

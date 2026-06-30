@@ -26,30 +26,30 @@ The terminal UI driven end to end — import a reading list, auto-match and down
 confident copies, open a book's detail, pick among copies when a match is
 ambiguous, and manage the whole queue:
 
-[![Kwire — guided tour](docs/media/kwire-tour.gif)](https://github.com/tanghong123/kwire/releases/download/v2.1.1/kwire-tour.mp4)
+[![Kwire — guided tour](docs/media/kwire-tour.gif)](https://github.com/tanghong123/kwire/releases/download/v2.3.0/kwire-tour.mp4)
 
-> ▶ The preview above is sped up — [watch the full-quality video](https://github.com/tanghong123/kwire/releases/download/v2.1.1/kwire-tour.mp4) (also attached to the [v2.1.1 release](https://github.com/tanghong123/kwire/releases/tag/v2.1.1)).
+> ▶ The preview above is sped up — [watch the full-quality video](https://github.com/tanghong123/kwire/releases/download/v2.3.0/kwire-tour.mp4) (also attached to the [v2.3.0 release](https://github.com/tanghong123/kwire/releases/tag/v2.3.0)).
 
 **The main library** — lists across the top, books with their format/size/status,
 and the live activity pane below:
 
-![Kwire main library view](docs/media/03-list-populated.png)
+![Kwire main library view](docs/media/04-jeremy.jpg)
 
 | Book detail — variations + history | Choose a copy — ambiguous match |
 |:---:|:---:|
-| ![Book detail](docs/media/04-book-detail.png) | ![Choose a copy](docs/media/06-picker.png) |
+| ![Book detail](docs/media/06-detail.jpg) | ![Choose a copy](docs/media/13-needs-you-picker.jpg) |
 | **All lists merged** | **Live activity** |
-| ![All aggregate view](docs/media/08-all-aggregate.png) | ![Activity pane](docs/media/11-activity-pane.png) |
+| ![All aggregate view](docs/media/11-page-scroll.jpg) | ![Activity pane](docs/media/07-activity.jpg) |
 
 <details>
-<summary><b>More views</b> — empty first run, import, context help, second list, manual add, filters, delete</summary>
+<summary><b>More views</b> — empty first run, import, check-download, second list, manual add, series, delete, about</summary>
 
 | | |
 |:---:|:---:|
-| ![Empty first run](docs/media/01-empty-first-run.png) | ![Import a list](docs/media/02-import-command.png) |
-| ![Context-paged help](docs/media/05-help.png) | ![A second list](docs/media/07-second-list.png) |
-| ![Manual add](docs/media/09-manual-add.png) | ![Done filter](docs/media/10-filter-done.png) |
-| ![Delete-list confirm](docs/media/12-delete-confirm.png) | ![About](docs/media/13-about.png) |
+| ![Empty first run](docs/media/01-empty.jpg) | ![Import a list](docs/media/02-import-complete.jpg) |
+| ![Check-download — too few pages](docs/media/14-check-download-list.jpg) | ![A second list](docs/media/10-avery.jpg) |
+| ![Manual add](docs/media/09-manual-add.jpg) | ![Series download](docs/media/19-series.jpg) |
+| ![Delete-list confirm](docs/media/20-delete-confirm.jpg) | ![About](docs/media/21-about.jpg) |
 
 </details>
 

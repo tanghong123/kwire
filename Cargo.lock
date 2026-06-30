@@ -2629,7 +2629,7 @@ dependencies = [
 
 [[package]]
 name = "libgen-app"
-version = "2.1.1"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -2650,7 +2650,7 @@ dependencies = [
 
 [[package]]
 name = "libgen-cli"
-version = "2.1.1"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2666,7 +2666,7 @@ dependencies = [
 
 [[package]]
 name = "libgen-core"
-version = "2.1.1"
+version = "2.3.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -2696,7 +2696,7 @@ dependencies = [
 
 [[package]]
 name = "libgen-engine"
-version = "2.1.1"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -2710,7 +2710,7 @@ dependencies = [
 
 [[package]]
 name = "libgen-tui"
-version = "2.1.1"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "clap",
