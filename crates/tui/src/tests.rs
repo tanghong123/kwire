@@ -250,6 +250,48 @@ mod tests {
     }
 
     #[test]
+    fn series_status_renders_in_detail_modal_footer_and_clears() {
+        use crate::app::DetailSubFocus;
+        use std::time::{Duration, Instant};
+        let mut app = AppState::new();
+        app.set_view(fixture_vm());
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+        app.status_msg = Some("Searching Open Library for series info\u{2026}".into());
+
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        assert!(
+            buffer_string(&terminal).contains("Searching Open Library"),
+            "the series cue must render inside the open Detail modal"
+        );
+
+        // After the TTL it auto-clears and the modal's key hints come back.
+        let t0 = Instant::now();
+        app.expire_status(t0);
+        app.expire_status(t0 + Duration::from_secs(11));
+        assert!(
+            app.status_msg.is_none(),
+            "series cue auto-clears after ~10s"
+        );
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let after = buffer_string(&terminal);
+        assert!(
+            !after.contains("Searching Open Library"),
+            "series cue is gone once it clears"
+        );
+        assert!(
+            after.contains("esc back"),
+            "the modal key hints return once the status clears"
+        );
+    }
+
+    #[test]
     fn j_moves_selection_down() {
         let mut app = AppState::new();
         app.set_view(fixture_vm());

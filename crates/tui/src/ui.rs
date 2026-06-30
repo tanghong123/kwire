@@ -2275,11 +2275,15 @@ fn hint_bar_lines(app: &AppState, width: u16) -> Vec<Line<'static>> {
     }
 
     if let Some(ref msg) = app.status_msg {
-        // Transient status message — shown until the next keypress.
-        return vec![Line::from(Span::styled(
-            crate::i18n::decode(msg),
-            Style::default().fg(C_BRIGHT),
-        ))];
+        // Transient status message — shown until the next keypress / TTL. When the
+        // Detail modal is open it renders the message in its OWN footer (so series
+        // cues land where the user is looking), so don't duplicate it here.
+        if !matches!(app.modal, Some(Modal::Detail { .. })) {
+            return vec![Line::from(Span::styled(
+                crate::i18n::decode(msg),
+                Style::default().fg(C_BRIGHT),
+            ))];
+        }
     }
 
     wrap_hint_lines(&global_hint_text(app), width)
@@ -3146,10 +3150,21 @@ fn render_detail_modal(
     render_rule(frame, split[8]);
 
     // Context-aware hint footer — wraps to as many lines as `hint_h` reserved.
-    frame.render_widget(
-        Paragraph::new(wrap_hint_lines(detail_hint, split[9].width)).style(style_hint()),
-        split[9],
-    );
+    // A live transient status message (e.g. download-series' "Searching Open
+    // Library…" cue and its result) takes over the footer so it surfaces inside
+    // the modal the user is looking at, not just on the main hint bar below. It
+    // auto-clears (~10s, see `App::expire_status`), after which the keys return.
+    if let Some(ref msg) = app.status_msg {
+        frame.render_widget(
+            Paragraph::new(crate::i18n::decode(msg)).style(Style::default().fg(C_BRIGHT)),
+            split[9],
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(wrap_hint_lines(detail_hint, split[9].width)).style(style_hint()),
+            split[9],
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
