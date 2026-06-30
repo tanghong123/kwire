@@ -166,9 +166,12 @@ Sleep 1500ms
 Type "2"
 Sleep 3s
 Screenshot "demo/out/12-needs-you-list.png"
-# Open a needs-you book and pick its 2nd copy. Which of the (few) needs-you books
-# lands here depends on live timing — any of them is a fine demo of the Picker.
-Down
+# Open the FIRST needs-you book and pick its 2nd copy. K (page-up) lands
+# deterministically on row 0 and CLAMPS there — unlike Down, which overshoots into
+# the Activity pane (opening a stray leg popup) when only one book is flagged, as
+# happens now that the matching fixes auto-match most copies. Enter opens its
+# Picker; Down moves to the 2nd copy; Enter chooses it.
+Type "K"
 Sleep 1s
 Enter
 Sleep 3s
