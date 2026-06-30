@@ -2208,8 +2208,10 @@ fn global_hint_text(app: &AppState) -> String {
     match app.focus {
         Focus::Header => {
             // Header focus owns the LIST ops (re-search / pause / start / delete).
+            // The ←/→ arrows (filter-chip / list-strip nav) are universal and were
+            // dropped from the hint row to declutter — the keys still work.
             format!(
-                "\u{2190}\u{2192} filter  r re-search \u{00b7} p pause \u{00b7} s start \u{00b7} D delete  [ ] list \u{00b7} {toggle}{GLOBALS}"
+                "r re-search \u{00b7} p pause \u{00b7} s start \u{00b7} D delete  [ ] list \u{00b7} {toggle}{GLOBALS}"
             )
         }
         Focus::List => {

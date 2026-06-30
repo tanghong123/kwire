@@ -6183,7 +6183,7 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_header_focus_shows_filter_and_quit() {
+    fn hint_bar_header_focus_drops_arrows_keeps_ops() {
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();
@@ -6191,7 +6191,13 @@ mod tests {
         app.focus = Focus::Header;
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let buf = buffer_string(&terminal);
-        assert!(buf.contains("filter"), "header hint must include 'filter'");
+        // The ←→ filter hint is dropped (arrow nav is universal); the list ops and
+        // quit remain.
+        assert!(
+            !buf.contains("\u{2190}\u{2192} filter"),
+            "the ←→ filter hint must be gone from the header row"
+        );
+        assert!(buf.contains("re-search"), "header hint keeps the list ops");
         assert!(buf.contains("q quit"), "header hint must include 'q quit'");
         // ⏎ must NOT appear in main hint bar (only in Help).
         assert!(
