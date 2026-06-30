@@ -26,9 +26,9 @@ The terminal UI driven end to end — import a reading list, auto-match and down
 confident copies, open a book's detail, pick among copies when a match is
 ambiguous, and manage the whole queue:
 
-[![Kwire — guided tour](docs/media/kwire-tour.gif)](https://github.com/tanghong123/kwire/releases/download/v2.3.0/kwire-tour.mp4)
+[![Kwire — guided tour](docs/media/kwire-tour.gif)](https://github.com/tanghong123/kwire/releases/download/v2.3.1/kwire-tour.mp4)
 
-> ▶ The preview above is sped up — [watch the full-quality video](https://github.com/tanghong123/kwire/releases/download/v2.3.0/kwire-tour.mp4) (also attached to the [v2.3.0 release](https://github.com/tanghong123/kwire/releases/tag/v2.3.0)).
+> ▶ The preview above is sped up — [watch the full-quality video](https://github.com/tanghong123/kwire/releases/download/v2.3.1/kwire-tour.mp4) (also attached to the [v2.3.1 release](https://github.com/tanghong123/kwire/releases/tag/v2.3.1)).
 
 **The main library** — lists across the top, books with their format/size/status,
 and the live activity pane below:
@@ -53,8 +53,8 @@ and the live activity pane below:
 
 </details>
 
-> Screenshots/video are generated from [`demo/tour.tape`](demo/tour.tape) — run
-> `vhs demo/tour.tape` to regenerate them.
+> Screenshots/video are generated from [`demo/tour-full-2.tape`](demo/tour-full-2.tape) —
+> run `vhs demo/tour-full-2.tape` to regenerate them.
 
 ## The name
 
