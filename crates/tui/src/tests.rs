@@ -2059,6 +2059,56 @@ mod tests {
         );
     }
 
+    /// A completed download flagged for review ("too few pages") belongs to
+    /// Check-download ONLY — never Done. The two are mutually exclusive.
+    #[test]
+    fn too_few_pages_book_is_check_download_not_done() {
+        let acq = || {
+            Some(libgen_engine::ViewAcquisition {
+                requested: 1,
+                done: 1,
+                active: 0,
+                failed: 0,
+            })
+        };
+        let make = |review: bool| {
+            let mut b = book_with_version_states(&["done"]);
+            b.acquisition = acq();
+            b.review = review;
+            b
+        };
+
+        // Counts: the review book is Check, the plain one is Done — no overlap.
+        let mut app = AppState::new();
+        app.set_view(vm_with_books(vec![make(true), make(false)]));
+        let c = app.status_counts();
+        assert_eq!(c.check, 1, "the review book counts under Check-download");
+        assert_eq!(
+            c.done, 1,
+            "only the non-review completed book counts as Done"
+        );
+
+        // Done filter excludes the review book.
+        let mut app = AppState::new();
+        app.filter = StatusFilter::Done;
+        app.set_view(vm_with_books(vec![make(true), make(false)]));
+        assert_eq!(app.flat.len(), 1, "Done shows only the non-review book");
+        assert!(
+            !app.flat[0].book.review,
+            "the review book is excluded from Done"
+        );
+
+        // Check-download filter includes the review book.
+        let mut app = AppState::new();
+        app.filter = StatusFilter::Check;
+        app.set_view(vm_with_books(vec![make(true), make(false)]));
+        assert_eq!(app.flat.len(), 1, "Check-download shows the review book");
+        assert!(
+            app.flat[0].book.review,
+            "the review book is in Check-download"
+        );
+    }
+
     /// The Queued filter predicate (via rebuild_flat) keeps exactly the
     /// queued-no-active books.
     #[test]

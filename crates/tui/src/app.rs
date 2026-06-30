@@ -4114,11 +4114,16 @@ impl AppState {
                     && !book.versions.iter().any(|v| v.state == "downloading")
             }
             StatusFilter::InProgress => book.versions.iter().any(|v| v.state == "downloading"),
-            StatusFilter::Done => book
-                .acquisition
-                .as_ref()
-                .map(|a| a.done >= 1 && a.active == 0)
-                .unwrap_or(false),
+            // A book flagged for review ("too few pages" → Check-download) is NOT
+            // Done: Done and Check-download are mutually exclusive.
+            StatusFilter::Done => {
+                !book.review
+                    && book
+                        .acquisition
+                        .as_ref()
+                        .map(|a| a.done >= 1 && a.active == 0)
+                        .unwrap_or(false)
+            }
         }
     }
 
@@ -4154,11 +4159,14 @@ impl AppState {
                 if book.versions.iter().any(|v| v.state == "queued") && !in_progress {
                     c.queued += 1;
                 }
-                let done = book
-                    .acquisition
-                    .as_ref()
-                    .map(|a| a.done >= 1 && a.active == 0)
-                    .unwrap_or(false);
+                // Mutually exclusive with Check-download: a review ("too few
+                // pages") book is counted under Check, never Done.
+                let done = !book.review
+                    && book
+                        .acquisition
+                        .as_ref()
+                        .map(|a| a.done >= 1 && a.active == 0)
+                        .unwrap_or(false);
                 if done {
                     c.done += 1;
                 }
