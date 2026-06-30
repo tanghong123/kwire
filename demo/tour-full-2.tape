@@ -178,41 +178,42 @@ Sleep 800ms
 Enter
 Sleep 2s
 
-# ---- 10a fill the wait by touring the lists ([ ]) and the filter chips (/) ----
+# ---- 10a fill the wait by touring the filter chips (/) then the lists ([ ]) ----
 # A Wonder-Book (Jeremy #10) must finish downloading and be page-verified before
-# its "too few pages" check-download flag appears — that takes a while on the
-# throttled downloads. Rather than wait statically, tour the UI with the GLOBAL
-# hotkeys (no pane focus needed, so the List focus is never disturbed): [ ] cycle
-# the 3 lists (+ the ★ All stop), / cycles the 7 filter chips. Steps are spaced
-# ~8s apart so the download has time to land; we finish on ★ All + Check-download.
-
-# cycle the lists with ] : All -> Jeremy -> Manual -> Avery -> back to ★ All
+# its "too few pages" check-download flag appears. Rather than wait statically,
+# tour the UI with the GLOBAL hotkeys (no pane focus needed, so the List focus is
+# never disturbed). From the post-needs-you state (★ All aggregate, filter =
+# Needs you), steps spaced 3s apart:
+#   (a) 6 × /  cycles the filter chips round to All
+#       (Needs you -> Check -> Can't -> Queued -> In prog -> Done -> All),
+#   (b) 4 × ]  cycles the 3 lists and lands back on ★ All
+#       (All -> Jeremy -> Manual -> Avery -> All),
+#   (c) 2 × /  steps All -> Needs you -> Check download (the END state the
+#       following K -> A Wonder-Book beat needs).
+Type "/"
+Sleep 3s
+Type "/"
+Sleep 3s
+Type "/"
+Sleep 3s
+Type "/"
+Sleep 3s
+Type "/"
+Sleep 3s
+Type "/"
+Sleep 3s
 Type "]"
-Sleep 8s
+Sleep 3s
 Type "]"
-Sleep 8s
+Sleep 3s
 Type "]"
-Sleep 8s
+Sleep 3s
 Type "]"
-Sleep 8s
-# cycle the 7 filter chips with / (currently on Needs you): Check, Can't, Queued,
-# In prog, Done, All, Needs you, Check — visiting every chip, ending on Check.
+Sleep 3s
 Type "/"
-Sleep 8s
+Sleep 3s
 Type "/"
-Sleep 8s
-Type "/"
-Sleep 8s
-Type "/"
-Sleep 8s
-Type "/"
-Sleep 8s
-Type "/"
-Sleep 8s
-Type "/"
-Sleep 8s
-Type "/"
-Sleep 8s
+Sleep 3s
 
 # ---- 10 check-download: open A Wonder-Book, choose the 2nd variation ----
 # The / tour ended on the Check-download filter. K (page-up) lands on the FIRST
