@@ -2303,7 +2303,7 @@ fn hint_bar_lines(app: &AppState, width: u16) -> Vec<Line<'static>> {
 }
 
 /// Context-aware Detail-modal footer hint, varying by sub-focus and the
-/// selected variation's state. `m` reads "mark unavailable"; `S`
+/// selected variation's state. `m` reads "none correct" (mark not-found); `S`
 /// (download-series) is live across the whole detail context. Uses ` · ` hint
 /// boundaries so [`wrap_hint`] can wrap it (#8).
 fn detail_hint_text(
@@ -2324,20 +2324,20 @@ fn detail_hint_text(
                 // A book under review ("too few pages" / a better match exists)
                 // gets the "A accept" affordance up front to keep the copy as-is.
                 "done" if fb.book.review => {
-                    "A accept \u{00b7} o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                    "A accept \u{00b7} o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m none correct \u{00b7} S series \u{00b7} esc back"
                 }
                 "done" => {
-                    "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                    "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m none correct \u{00b7} S series \u{00b7} esc back"
                 }
                 "downloading" => {
-                    "e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                    "e edit \u{00b7} x remove \u{00b7} m none correct \u{00b7} S series \u{00b7} esc back"
                 }
                 "failed" | "cancelled" => {
-                    "r retry  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                    "r retry  e edit \u{00b7} x remove \u{00b7} m none correct \u{00b7} S series \u{00b7} esc back"
                 }
                 _ => {
                     // available / queued
-                    "d download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                    "d download  e edit \u{00b7} x remove \u{00b7} m none correct \u{00b7} S series \u{00b7} esc back"
                 }
             }
         }
@@ -5228,7 +5228,7 @@ mod hint_wrap_tests {
     #[test]
     fn wrap_loses_no_hint_token() {
         // The longest footer (detail "done" row) at a narrow modal width.
-        let s = "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back";
+        let s = "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m none correct \u{00b7} S series \u{00b7} esc back";
         let before = hint_tokens(s);
         let lines = wrap_hint(s, 40);
         assert!(lines.len() >= 2, "expected wrap at 40");

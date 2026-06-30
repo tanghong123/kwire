@@ -8506,10 +8506,10 @@ mod tests {
         );
     }
 
-    /// Detail modal: the not-found hotkey now reads the verb "mark unavailable",
-    /// and the dead p/c chips are gone.
+    /// Detail modal: the not-found hotkey reads "none correct" (matching the
+    /// picker), and the dead p/c chips are gone.
     #[test]
-    fn detail_hint_relabels_not_found_to_mark_unavailable() {
+    fn detail_hint_relabels_not_found_to_none_correct() {
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();
@@ -8523,8 +8523,12 @@ mod tests {
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let s = buffer_string(&terminal);
         assert!(
-            s.contains("mark unavailable"),
-            "detail hint relabels not-found → mark unavailable"
+            s.contains("none correct"),
+            "detail hint relabels not-found → none correct"
+        );
+        assert!(
+            !s.contains("mark unavailable"),
+            "the old 'mark unavailable' label must be gone"
         );
         assert!(
             !s.contains("not-found"),
