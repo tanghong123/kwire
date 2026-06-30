@@ -2197,11 +2197,19 @@ fn selected_book_hint_state(app: &AppState) -> &'static str {
 fn global_hint_text(app: &AppState) -> String {
     // ⏎ is universal (shown only in the Help screen per #70) — never in the hint bar.
     const GLOBALS: &str = "  : command \u{00b7} ? help \u{00b7} q quit";
+    // Space expands/collapses the Activity pane from ANY pane, but that's not
+    // obvious — surface it on every hint row (the Activity focus shows it inline
+    // below, so it's only appended for the Header and List focuses here).
+    let toggle = if app.activity_expanded {
+        "space collapse"
+    } else {
+        "space expand"
+    };
     match app.focus {
         Focus::Header => {
             // Header focus owns the LIST ops (re-search / pause / start / delete).
             format!(
-                "\u{2190}\u{2192} filter  r re-search \u{00b7} p pause \u{00b7} s start \u{00b7} D delete  [ ] list{GLOBALS}"
+                "\u{2190}\u{2192} filter  r re-search \u{00b7} p pause \u{00b7} s start \u{00b7} D delete  [ ] list \u{00b7} {toggle}{GLOBALS}"
             )
         }
         Focus::List => {
@@ -2214,15 +2222,14 @@ fn global_hint_text(app: &AppState) -> String {
             } else {
                 ""
             };
-            match state {
-                "needs_selection" => format!("choose  d detail{manual}{GLOBALS}"),
-                "failed" => format!("r retry  d detail{manual}{GLOBALS}"),
-                "done" => format!("d detail \u{00b7} o open{manual}{GLOBALS}"),
-                "downloading" => {
-                    format!("p pause \u{00b7} c cancel  d detail{manual}{GLOBALS}")
-                }
-                _ => format!("d detail{manual}{GLOBALS}"),
-            }
+            let base = match state {
+                "needs_selection" => "choose  d detail",
+                "failed" => "r retry  d detail",
+                "done" => "d detail \u{00b7} o open",
+                "downloading" => "p pause \u{00b7} c cancel  d detail",
+                _ => "d detail",
+            };
+            format!("{base}{manual} \u{00b7} {toggle}{GLOBALS}")
         }
         Focus::Activity => {
             // The collapse/expand hotkey lives here in the footer (not in the

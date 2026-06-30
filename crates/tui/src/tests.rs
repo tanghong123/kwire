@@ -2179,6 +2179,25 @@ mod tests {
         }
     }
 
+    /// The Space (open/fold Activity) hotkey is global, so the hint row surfaces it
+    /// in the List and Header focuses, not only when the Activity pane is focused.
+    #[test]
+    fn space_activity_toggle_hint_shows_in_list_and_header() {
+        for focus in [Focus::List, Focus::Header] {
+            let backend = TestBackend::new(120, 30);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let mut app = AppState::new();
+            app.set_view(fixture_vm());
+            app.focus = focus;
+            terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+            let buf = buffer_string(&terminal);
+            assert!(
+                buf.contains("space expand") || buf.contains("space collapse"),
+                "the Space activity-toggle hotkey must show on the hint row in {focus:?} focus"
+            );
+        }
+    }
+
     /// The Queued filter predicate (via rebuild_flat) keeps exactly the
     /// queued-no-active books.
     #[test]
