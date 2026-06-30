@@ -6302,7 +6302,7 @@ mod tests {
     }
 
     #[test]
-    fn hint_bar_list_needs_selection_shows_choose() {
+    fn hint_bar_list_needs_selection_drops_bare_choose() {
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = AppState::new();
@@ -6316,9 +6316,14 @@ mod tests {
         app.selected = 0;
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let buf = buffer_string(&terminal);
+        // The keyless "choose" label is gone; the hint still offers a real key.
         assert!(
-            buf.contains("choose"),
-            "needs_selection hint must include 'choose'"
+            !buf.contains("choose"),
+            "the bare keyless 'choose' hint must be dropped"
+        );
+        assert!(
+            buf.contains("d detail"),
+            "needs_selection hint still shows the detail key"
         );
     }
 

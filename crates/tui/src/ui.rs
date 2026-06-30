@@ -2225,7 +2225,11 @@ fn global_hint_text(app: &AppState) -> String {
                 ""
             };
             let base = match state {
-                "needs_selection" => "choose  d detail",
+                // "choose" was a bare label with no key — the action is Enter
+                // (opens the copy picker), and ⏎ is intentionally hidden from the
+                // main hint bar (#70). Drop it so no label is keyless, matching the
+                // other states (which likewise don't spell out their Enter action).
+                "needs_selection" => "d detail",
                 "failed" => "r retry  d detail",
                 "done" => "d detail \u{00b7} o open",
                 "downloading" => "p pause \u{00b7} c cancel  d detail",
