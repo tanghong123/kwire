@@ -340,10 +340,17 @@ fn book_confidence(input: &BookInput, cand: &Candidate) -> f32 {
         }
     }
 
-    let title_sim = title_match_strength(
+    // Use the STRONGER of the raw and author-stripped title match. Stripping the
+    // request author from the candidate title helps when the author merely pads the
+    // title ("Alice… by Carroll"), but HURTS when the author name is itself a title
+    // word ("Aesop" in "The Aesop for Children") — stripping it mangles an exact
+    // title into a near-miss and wrongly forces a "Needs you". The max keeps the
+    // strip's upside without its downside (it can only raise the score; the
+    // containment rule already absorbs genuine author padding).
+    let title_sim = title_match_strength(&input.title, &cand.title).max(title_match_strength(
         &input.title,
         &strip_request_author(&cand.title, &input.authors),
-    );
+    ));
 
     if input.authors.is_empty() {
         return title_sim;
@@ -1005,6 +1012,66 @@ mod tests {
 
     fn settings() -> ListSettings {
         ListSettings::default()
+    }
+
+    /// Regression: the request author ("Aesop") is ALSO a word in the title ("The
+    /// Aesop for Children"), and every candidate carries an extra illustrator in the
+    /// author field. Stripping the author from the title used to mangle the exact
+    /// title into a near-miss, capping book-confidence below the auto gate and
+    /// forcing a needless "Needs you". Every candidate is the SAME book, so the best
+    /// copy must auto-match.
+    #[test]
+    fn same_book_with_author_in_title_auto_matches() {
+        let inp = input("The Aesop for Children", &["Aesop"]);
+        // All four candidates score a perfect book-confidence now (the raw title is
+        // an exact match even though stripping "Aesop" would damage it).
+        for (t, a) in [
+            ("The Aesop for Children", "Aesop, Milo Winter"),
+            (
+                "The Aesop for Children",
+                "Aesop / With pictures by Milo Winter",
+            ),
+            ("The Aesop for Children", "epubBooks Classics"),
+            (
+                "The Aesop for children",
+                "Aesop, ill. Winter Milo, 1888-1956",
+            ),
+        ] {
+            let c = cand(t, &[a], Some(Format::Epub));
+            assert!(
+                book_confidence(&inp, &c) >= 0.9,
+                "exact-title same-book copy must keep high confidence: {t:?} / {a:?} = {}",
+                book_confidence(&inp, &c)
+            );
+        }
+        let cands = vec![
+            cand(
+                "The Aesop for Children",
+                &["Aesop, Milo Winter"],
+                Some(Format::Pdf),
+            ),
+            cand(
+                "The Aesop for Children",
+                &["Aesop / With pictures by Milo Winter"],
+                Some(Format::Epub),
+            ),
+            cand(
+                "The Aesop for Children",
+                &["epubBooks Classics"],
+                Some(Format::Epub),
+            ),
+            cand(
+                "The Aesop for children",
+                &["Aesop, ill. Winter Milo, 1888-1956"],
+                Some(Format::Epub),
+            ),
+        ];
+        let out = evaluate(&inp, cands, &settings());
+        assert_eq!(
+            out.status,
+            RequestStatus::Matched,
+            "a same-book set must auto-match the best copy, not ask"
+        );
     }
 
     #[test]
