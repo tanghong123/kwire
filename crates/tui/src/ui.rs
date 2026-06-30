@@ -2308,6 +2308,11 @@ fn detail_hint_text(
                 .map(|v| v.state.as_str())
                 .unwrap_or("available");
             match var_state {
+                // A book under review ("too few pages" / a better match exists)
+                // gets the "A accept" affordance up front to keep the copy as-is.
+                "done" if fb.book.review => {
+                    "A accept \u{00b7} o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
+                }
                 "done" => {
                     "o open \u{00b7} R reveal \u{00b7} r re-download  e edit \u{00b7} x remove \u{00b7} m mark unavailable \u{00b7} S series \u{00b7} esc back"
                 }

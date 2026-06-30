@@ -2474,6 +2474,24 @@ impl AppState {
                             }
                             Intent::Redraw
                         }
+                        // Accept the already-downloaded copy AS-IS for a book under
+                        // review ("too few pages" / a better match exists): clears the
+                        // flag so it leaves Check-download and reads as Done. Only
+                        // meaningful while the book is flagged, so it's a no-op (and
+                        // hidden from the footer) otherwise.
+                        KeyCode::Char('A') => {
+                            if let Some(fb) = self.flat.get(flat_index) {
+                                if fb.book.review {
+                                    let intent = Intent::AcceptReview {
+                                        group_path: vec![fb.group_index],
+                                        book_index: fb.book_index_in_group,
+                                    };
+                                    self.modal = None;
+                                    return intent;
+                                }
+                            }
+                            Intent::Redraw
+                        }
                         // #53 download-series — ONLY available in the detail (book)
                         // context. Reuses the `:download-series` handler, which acts
                         // on the list-selected book. Keep the detail modal open so the

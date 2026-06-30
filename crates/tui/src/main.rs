@@ -605,6 +605,12 @@ async fn dispatch_intent(
         } => {
             mark_not_found(app, handles, group_path, book_index).await;
         }
+        Intent::AcceptReview {
+            group_path,
+            book_index,
+        } => {
+            accept_review(app, handles, group_path, book_index).await;
+        }
         Intent::PauseTransfer { md5 } => {
             pause_transfer(app, handles, md5).await;
         }
@@ -2296,4 +2302,33 @@ async fn mark_not_found(
     }
     refresh_active_view(app, handles).await;
     app.status_msg = Some("Marked as not found".into());
+}
+
+/// Accept a book's already-downloaded copy as-is, clearing its review ("check
+/// download") flag so it leaves Check-download and reads as Done. Mirrors the
+/// desktop's "Accept current copy".
+async fn accept_review(
+    app: &mut AppState,
+    handles: &EngineHandles,
+    group_path: Vec<usize>,
+    book_index: usize,
+) {
+    let Some((orch_arc, group_path)) = resolve_book_orch(app, handles, &group_path).await else {
+        app.status_msg = Some("No active list".into());
+        return;
+    };
+    {
+        let mut guard = orch_arc.lock().await;
+        match guard.accept_review(&group_path, book_index) {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("accept_review: {e}");
+                app.status_msg = Some(format!("Accept failed: {e}"));
+                return;
+            }
+        }
+    }
+    refresh_active_view(app, handles).await;
+    refresh_all_list_summaries(app, handles).await;
+    app.status_msg = Some("Accepted the downloaded copy".into());
 }

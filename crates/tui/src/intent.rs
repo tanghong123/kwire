@@ -106,6 +106,14 @@ pub enum Intent {
         book_index: usize,
     },
 
+    /// Accept a book's already-downloaded copy as-is, clearing the "check
+    /// download" / review flag (the user is happy with the low-page / lesser
+    /// match). Mirrors the desktop's "Accept current copy".
+    AcceptReview {
+        group_path: Vec<usize>,
+        book_index: usize,
+    },
+
     /// Pause a specific in-flight transfer by md5 (Activity pane `p`).
     PauseTransfer { md5: String },
 

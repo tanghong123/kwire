@@ -2109,6 +2109,76 @@ mod tests {
         );
     }
 
+    fn done_review_book(review: bool) -> libgen_engine::ViewBook {
+        let mut b = book_with_version_states(&["done"]);
+        b.acquisition = Some(libgen_engine::ViewAcquisition {
+            requested: 1,
+            done: 1,
+            active: 0,
+            failed: 0,
+        });
+        b.review = review;
+        b
+    }
+
+    fn open_detail(app: &mut AppState) {
+        use crate::app::DetailSubFocus;
+        app.modal = Some(Modal::Detail {
+            book_flat_index: 0,
+            selected: 0,
+            sub_focus: DetailSubFocus::Variations,
+            history_selected: 0,
+        });
+    }
+
+    /// `A` in the detail view of a book under review dispatches AcceptReview and
+    /// closes the modal; on a non-review book it is a no-op.
+    #[test]
+    fn accept_key_dispatches_only_for_review_books() {
+        let mut app = AppState::new();
+        app.set_view(vm_with_books(vec![done_review_book(true)]));
+        open_detail(&mut app);
+        let intent = app.on_input(key(KeyCode::Char('A')));
+        assert_eq!(
+            intent,
+            Intent::AcceptReview {
+                group_path: vec![0],
+                book_index: 0,
+            },
+            "A on a review book dispatches AcceptReview"
+        );
+        assert!(app.modal.is_none(), "detail modal closes after accepting");
+
+        let mut app = AppState::new();
+        app.set_view(vm_with_books(vec![done_review_book(false)]));
+        open_detail(&mut app);
+        let intent = app.on_input(key(KeyCode::Char('A')));
+        assert_eq!(
+            intent,
+            Intent::Redraw,
+            "A is a no-op for a book not under review"
+        );
+        assert!(app.modal.is_some(), "the modal stays open");
+    }
+
+    /// The detail footer shows the "A accept" affordance only for a review book.
+    #[test]
+    fn detail_footer_shows_accept_only_when_under_review() {
+        for (review, want) in [(true, true), (false, false)] {
+            let mut app = AppState::new();
+            app.set_view(vm_with_books(vec![done_review_book(review)]));
+            open_detail(&mut app);
+            let backend = TestBackend::new(120, 30);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+            assert_eq!(
+                buffer_string(&terminal).contains("A accept"),
+                want,
+                "review={review}: footer accept-hint visibility"
+            );
+        }
+    }
+
     /// The Queued filter predicate (via rebuild_flat) keeps exactly the
     /// queued-no-active books.
     #[test]
