@@ -780,9 +780,18 @@ pub struct AppState {
     /// Index of the highlighted candidate within `completion_candidates`.
     pub completion_index: usize,
 
-    /// Transient one-shot status message (shown in the hint bar until the
-    /// next keypress, then cleared automatically in `on_input`).
+    /// Transient one-shot status message (shown in the hint bar). Cleared on the
+    /// next keypress (in `on_input`) and, failing that, auto-expired ~10 s after
+    /// it appears (in `expire_status`) so it never lingers during an idle stretch.
     pub status_msg: Option<String>,
+
+    /// When the current `status_msg` was first observed, for the auto-expiry in
+    /// [`App::expire_status`]. Tracked separately so the ~60 `status_msg` set-sites
+    /// don't each have to stamp a time.
+    status_set_at: Option<std::time::Instant>,
+    /// The last `status_msg` value [`App::expire_status`] saw — used to detect a
+    /// freshly-set message and (re)start its TTL clock.
+    status_last_seen: Option<String>,
 
     /// Whether mouse capture is currently enabled.
     /// Toggled by `:mouse`; the event loop acts on the change.
@@ -982,6 +991,8 @@ impl AppState {
             completion_candidates: Vec::new(),
             completion_index: 0,
             status_msg: None,
+            status_set_at: None,
+            status_last_seen: None,
             mouse_capture: true,
             cmd_history: Vec::new(),
             cmd_history_cursor: None,
@@ -3394,6 +3405,30 @@ impl AppState {
 
     pub fn on_tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
+        self.expire_status(std::time::Instant::now());
+    }
+
+    /// How long a transient `status_msg` stays on screen before auto-clearing.
+    const STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Detect a freshly-set `status_msg` and start its TTL clock, then clear the
+    /// message once [`Self::STATUS_TTL`] has elapsed. Called every redraw tick
+    /// with `Instant::now()`; `now` is passed in so tests can fast-forward time.
+    pub fn expire_status(&mut self, now: std::time::Instant) {
+        // Any change to status_msg (set / cleared / replaced) restarts the clock.
+        if self.status_msg != self.status_last_seen {
+            self.status_last_seen = self.status_msg.clone();
+            self.status_set_at = self.status_msg.as_ref().map(|_| now);
+        }
+        if let Some(set_at) = self.status_set_at {
+            if self.status_msg.is_some()
+                && now.saturating_duration_since(set_at) >= Self::STATUS_TTL
+            {
+                self.status_msg = None;
+                self.status_last_seen = None;
+                self.status_set_at = None;
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

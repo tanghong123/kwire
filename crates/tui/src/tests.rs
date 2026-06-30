@@ -221,6 +221,35 @@ mod tests {
     }
 
     #[test]
+    fn status_msg_auto_expires_after_ttl() {
+        use std::time::{Duration, Instant};
+        let mut app = AppState::new();
+        app.status_msg = Some("Imported 20 book(s) from \"Jeremy's …\"".into());
+
+        // First tick registers the message and starts its TTL clock.
+        let t0 = Instant::now();
+        app.expire_status(t0);
+        assert!(
+            app.status_msg.is_some(),
+            "message present right after it is set"
+        );
+
+        // Still within the TTL window — unchanged.
+        app.expire_status(t0 + Duration::from_secs(9));
+        assert!(
+            app.status_msg.is_some(),
+            "message persists before the TTL elapses"
+        );
+
+        // Past the TTL — auto-cleared even though no key was pressed.
+        app.expire_status(t0 + Duration::from_secs(11));
+        assert!(
+            app.status_msg.is_none(),
+            "message auto-clears ~10s after appearing"
+        );
+    }
+
+    #[test]
     fn j_moves_selection_down() {
         let mut app = AppState::new();
         app.set_view(fixture_vm());
