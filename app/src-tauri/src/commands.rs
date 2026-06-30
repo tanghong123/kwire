@@ -1042,13 +1042,6 @@ pub struct SettingsPayload {
     pub near_threshold: f32,
     pub seq_per_group: bool,
     pub keep_top: usize,
-    /// Title-match confidence to auto-download (defaulted for older front ends).
-    #[serde(default = "default_title_match")]
-    pub title_match_threshold: f32,
-}
-
-fn default_title_match() -> f32 {
-    0.9
 }
 
 /// Replace the whole per-list [`ListSettings`] for a list (defaults to the
@@ -1090,7 +1083,6 @@ pub async fn set_settings(
         near_threshold: settings.near_threshold.clamp(0.0, 1.0),
         seq_per_group: settings.seq_per_group,
         keep_top: settings.keep_top.max(1),
-        title_match_threshold: settings.title_match_threshold.clamp(0.0, 1.0),
         is_manual,
     };
     orch.lock().await.update_settings(s).map_err(err)?;

@@ -307,8 +307,10 @@ fn decide(
     }
 
     // Strong, unambiguous title (+author) match → auto-pick the best variation,
-    // regardless of how many formats/sizes exist.
-    if top_conf >= settings.title_match_threshold {
+    // regardless of how many formats/sizes exist. Gated on the single user-facing
+    // `auto_threshold` (the same value the freeform path and the picker advertise),
+    // so "auto needs one copy ≥ X" in the UI is the real cutoff.
+    if top_conf >= settings.auto_threshold {
         // Guard against a genuine ambiguity: a DIFFERENT-titled candidate scored
         // essentially as high (two different books, both plausible). If such a rival
         // exists, ask instead of guessing which book.
@@ -370,8 +372,11 @@ fn book_confidence(input: &BookInput, cand: &Candidate) -> f32 {
     // pulls it down (so "right title, wrong author" stays out of the auto band).
     let combined = 0.8 * title_sim + 0.2 * author_sim;
     // A clearly wrong author caps confidence below the auto band even with a
-    // perfect title (two different books can share a title).
-    if author_sim < 0.3 {
+    // perfect title (two different books can share a title). The cap floor is
+    // tuned to the unified `auto_threshold` (0.85): the author-similarity floor for
+    // a disjoint name is ~0.33, which a perfect title would otherwise lift to ~0.87
+    // — above 0.85 — so anything below a real author match (<0.4) is held down.
+    if author_sim < 0.4 {
         combined.min(0.7)
     } else {
         combined

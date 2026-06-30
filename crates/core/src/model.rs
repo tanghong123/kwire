@@ -763,19 +763,16 @@ pub struct ListSettings {
     /// Filename template, e.g. "{seq:02} - {authors} - {title}.{ext}".
     #[serde(default = "default_naming_template")]
     pub naming_template: String,
-    /// Confidence at/above which a single best candidate auto-downloads.
+    /// Confidence at/above which the top candidate auto-downloads its best
+    /// variation without asking — even when several formats/sizes exist (those are
+    /// auto-ranked). The SINGLE auto-match cutoff, used by both the structured
+    /// (title+author) and freeform paths and shown verbatim in the copy picker.
+    /// Below this (but above `near_threshold`) the request goes to `NeedsSelection`.
     #[serde(default = "default_auto_threshold")]
     pub auto_threshold: f32,
     /// Confidence below which nothing is offered (treated as not-found).
     #[serde(default = "default_near_threshold")]
     pub near_threshold: f32,
-    /// "Right book" confidence (title + author) at/above which the top candidate
-    /// auto-matches and its best variation is downloaded without asking — even when
-    /// several formats/sizes exist (those are auto-ranked). Below this (but above
-    /// `near_threshold`) the request goes to `NeedsSelection`. Keyed on how sure we
-    /// are it's the correct book, not on variation ambiguity.
-    #[serde(default = "default_title_match_threshold")]
-    pub title_match_threshold: f32,
     /// Sequence numbering scope: true = per-group, false = per-list.
     #[serde(default = "default_true")]
     pub seq_per_group: bool,
@@ -807,12 +804,6 @@ fn default_auto_threshold() -> f32 {
 fn default_near_threshold() -> f32 {
     0.45
 }
-fn default_title_match_threshold() -> f32 {
-    // ~0.9: a strong title match (or full request-title containment) plus a
-    // reasonable author. Tuned so "right title, only format/size differs"
-    // auto-matches, while a different-but-similar book still asks.
-    0.9
-}
 fn default_true() -> bool {
     true
 }
@@ -828,7 +819,6 @@ impl Default for ListSettings {
             naming_template: default_naming_template(),
             auto_threshold: default_auto_threshold(),
             near_threshold: default_near_threshold(),
-            title_match_threshold: default_title_match_threshold(),
             seq_per_group: true,
             keep_top: default_keep_top(),
             is_manual: false,
