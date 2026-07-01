@@ -26,9 +26,9 @@ The terminal UI driven end to end — import a reading list, auto-match and down
 confident copies, open a book's detail, pick among copies when a match is
 ambiguous, and manage the whole queue:
 
-[![Kwire — guided tour](docs/media/kwire-tour.gif)](https://github.com/tanghong123/kwire/releases/download/v2.3.1/kwire-tour.mp4)
+[![Kwire — guided tour](docs/media/kwire-tour.gif)](https://github.com/tanghong123/kwire/releases/download/v2.3.2/kwire-tour.mp4)
 
-> ▶ The preview above is sped up — [watch the full-quality video](https://github.com/tanghong123/kwire/releases/download/v2.3.1/kwire-tour.mp4) (also attached to the [v2.3.1 release](https://github.com/tanghong123/kwire/releases/tag/v2.3.1)).
+> ▶ The preview above is sped up — [watch the full-quality video](https://github.com/tanghong123/kwire/releases/download/v2.3.2/kwire-tour.mp4) (also attached to the [v2.3.2 release](https://github.com/tanghong123/kwire/releases/tag/v2.3.2)).
 
 **The main library** — lists across the top, books with their format/size/status,
 and the live activity pane below:
