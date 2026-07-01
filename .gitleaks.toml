@@ -1,0 +1,31 @@
+# gitleaks configuration for kwire (this repo is public).
+#
+# Extends the built-in rule set and adds narrow allowlists so the pre-commit
+# hook and CI scan don't false-positive on known-safe strings. Keep allowlists
+# as specific as possible — a broad allowlist can hide a real leak.
+#
+# Scan manually:   gitleaks git   --config .gitleaks.toml        # full history
+#                  gitleaks dir   --config .gitleaks.toml        # working tree
+title = "kwire gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Build artifacts and synthetic test fixtures (not real secrets)"
+
+# Never scan build output or vendored crate metadata (git-ignored anyway, but
+# a manual `gitleaks dir` walks the filesystem and would otherwise flag them).
+paths = [
+  '''^target/''',
+  '''\.rmeta$''',
+]
+
+# Match the allowlist regexes against the whole line, not just the token.
+regexTarget = "line"
+regexes = [
+  # Synthetic libgen `get.php?md5=...&key=...` download URLs in the download.rs
+  # unit tests. The `key=` here is a made-up, short-lived value used to assert
+  # the link parser — not a credential.
+  '''get\.php\?md5=[a-z0-9]+&key=[A-Za-z0-9]+''',
+]

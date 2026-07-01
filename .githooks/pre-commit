@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# kwire pre-commit hook — block secrets/credentials from entering this public repo.
+#
+# Enable (once per clone):   git config core.hooksPath .githooks
+# Bypass in an emergency:    git commit --no-verify   (avoid; fix the finding instead)
+#
+# Scans only the STAGED changes, so it's fast and only judges what you're about
+# to commit. Uses the repo's .gitleaks.toml allowlist.
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  cat >&2 <<'MSG'
+✗ pre-commit: gitleaks is not installed, so staged changes were NOT scanned for secrets.
+  Install it:  brew install gitleaks
+  Then retry the commit (or, if you understand the risk, use: git commit --no-verify).
+MSG
+  exit 1
+fi
+
+if ! gitleaks git --staged --config .gitleaks.toml --redact --no-banner; then
+  cat >&2 <<'MSG'
+
+✗ pre-commit: gitleaks found a potential secret in your staged changes (shown above, redacted).
+  • If it's a real credential: remove it, rotate it, and re-stage.
+  • If it's a false positive (e.g. a test fixture): add a narrow allowlist entry
+    to .gitleaks.toml, or append a  # gitleaks:allow  comment on that line.
+MSG
+  exit 1
+fi
