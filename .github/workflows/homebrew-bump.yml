@@ -1,0 +1,104 @@
+name: Bump Homebrew tap
+
+# When a GitHub release is published, update the tanghong123/homebrew-kwire tap
+# so `brew upgrade` tracks the new version automatically:
+#   - Casks/kwire.rb       -> version + sha256 of Kwire_universal.app.tar.gz
+#   - Formula/kwire-cli.rb -> version + sha256 of the source tarball
+#
+# Requires a repo secret HOMEBREW_TAP_TOKEN: a PAT (fine-grained, Contents:
+# read/write on tanghong123/homebrew-kwire) — the default GITHUB_TOKEN can't
+# push to another repo. The job no-ops (with a clear message) if it's unset.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to bump to (e.g. v2.3.2)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    name: Bump cask + formula
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard — tap token present
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set — cannot push to the tap. Add it in repo Settings ▸ Secrets ▸ Actions."
+            exit 1
+          fi
+
+      - name: Resolve tag + version
+        id: v
+        env:
+          TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        run: |
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"        >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Compute asset + source SHA-256
+        id: sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Universal desktop .app tarball (name discovered from the release, so
+          # this survives a rename of the tauri artifact).
+          ASSET=$(gh release view "$TAG" --repo "${{ github.repository }}" \
+            --json assets -q '.assets[].name' | grep -E 'universal\.app\.tar\.gz$' | head -1)
+          if [ -z "$ASSET" ]; then
+            echo "::error::No *universal.app.tar.gz asset on $TAG"; exit 1
+          fi
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern "$ASSET" --dir /tmp/asset
+          APP_SHA=$(shasum -a 256 "/tmp/asset/$ASSET" | cut -d' ' -f1)
+          # Source tarball GitHub auto-generates for the tag (used by the formula).
+          curl -sSfL "https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz" -o /tmp/src.tar.gz
+          SRC_SHA=$(shasum -a 256 /tmp/src.tar.gz | cut -d' ' -f1)
+          echo "asset=$ASSET"     >> "$GITHUB_OUTPUT"
+          echo "app_sha=$APP_SHA" >> "$GITHUB_OUTPUT"
+          echo "src_sha=$SRC_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: tanghong123/homebrew-kwire
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Rewrite cask + formula
+        working-directory: tap
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          APP_SHA: ${{ steps.sha.outputs.app_sha }}
+          SRC_SHA: ${{ steps.sha.outputs.src_sha }}
+        run: |
+          set -euo pipefail
+          # Bump only the version + sha256 lines; the url templates use #{version}.
+          sed -i -E "s/^(  version )\"[^\"]+\"/\1\"$VERSION\"/" Casks/kwire.rb
+          sed -i -E "s/^(  sha256 )\"[^\"]+\"/\1\"$APP_SHA\"/"  Casks/kwire.rb
+          sed -i -E "s/^(  version )\"[^\"]+\"/\1\"$VERSION\"/" Formula/kwire-cli.rb
+          sed -i -E "s/^(  sha256 )\"[^\"]+\"/\1\"$SRC_SHA\"/"  Formula/kwire-cli.rb
+          echo "---- Casks/kwire.rb ----";      grep -E 'version|sha256|url' Casks/kwire.rb
+          echo "---- Formula/kwire-cli.rb ----"; grep -E 'version|sha256|url' Formula/kwire-cli.rb
+
+      - name: Commit + push
+        working-directory: tap
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Tap already at $VERSION — nothing to do."; exit 0
+          fi
+          git commit -am "kwire $VERSION: bump cask (.app) + formula source (shas)"
+          git push

@@ -50,45 +50,44 @@ jobs:
           fi
 
   release:
-    name: Build & draft (${{ matrix.target }})
+    name: Build & draft (universal macOS)
     needs: detect
     if: needs.detect.outputs.should_release == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14 # Apple Silicon
-            target: aarch64-apple-darwin
-          - runner: macos-13 # Intel
-            target: x86_64-apple-darwin
-    runs-on: ${{ matrix.runner }}
+    # One Apple-Silicon runner cross-builds both arches and lipos them into a
+    # single universal artifact. This replaces the old per-arch matrix, which
+    # also removed a race where two jobs uploaded to the same draft (and the
+    # "immutable release" upload conflict once the draft was published).
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
+          key: release-universal
 
-      # Standalone terminal binary (`kwire`). libgen-tui doesn't depend on the
-      # Tauri app crate, so this is a light build.
-      - name: Build TUI binary
-        run: cargo build --release -p libgen-tui --bin kwire --target ${{ matrix.target }}
-
-      - name: Stage TUI binary
+      # Standalone terminal binary (`kwire`) as a UNIVERSAL Mach-O: build each
+      # arch, then lipo them together. libgen-tui doesn't depend on the Tauri app
+      # crate, so these are light builds.
+      - name: Build TUI binary (universal)
         run: |
+          cargo build --release -p libgen-tui --bin kwire --target aarch64-apple-darwin
+          cargo build --release -p libgen-tui --bin kwire --target x86_64-apple-darwin
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/kwire" "dist/kwire-${{ matrix.target }}"
+          lipo -create -output dist/kwire-universal-apple-darwin \
+            target/aarch64-apple-darwin/release/kwire \
+            target/x86_64-apple-darwin/release/kwire
+          lipo -info dist/kwire-universal-apple-darwin
 
-      # Build the Kwire desktop bundles into a DRAFT v<version> release. The first
-      # matrix job creates the draft; the second reuses it. Draft (not published)
-      # so assets can still be attached under immutable releases. No frontend
-      # build step: tauri.conf ships the prebuilt static app/ui (frontendDist
-      # "../ui"). Bundles are UNSIGNED.
-      - name: Build & draft desktop app
+      # Build the Kwire desktop app into a DRAFT v<version> release as a UNIVERSAL
+      # .app (tauri lipos the two arches for `universal-apple-darwin`). Draft (not
+      # published) so assets can still be attached under immutable releases. No
+      # frontend build step: tauri.conf ships the prebuilt static app/ui
+      # (frontendDist "../ui"). Bundle is UNSIGNED and .app-only (no flaky DMG).
+      - name: Build & draft desktop app (universal)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -99,10 +98,10 @@ jobs:
           releaseBody: Automated build for v${{ needs.detect.outputs.version }}. Finalize by attaching kwire-tour.mp4 and publishing.
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: --target universal-apple-darwin
 
-      # Attach the TUI binary to the same draft (distinct filename per arch).
+      # Attach the universal TUI binary to the same draft.
       - name: Upload TUI binary to the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "v${{ needs.detect.outputs.version }}" "dist/kwire-${{ matrix.target }}" --clobber
+        run: gh release upload "v${{ needs.detect.outputs.version }}" "dist/kwire-universal-apple-darwin" --clobber
