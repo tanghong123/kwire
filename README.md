@@ -16,6 +16,19 @@ a self-contained web UI.
 > discovery or browsing tool: there's no catalog to explore, and the search step
 > exists only to resolve the titles you already chose, never to find new ones.
 
+## Install
+
+With [Homebrew](https://brew.sh) (macOS):
+
+```bash
+brew install tanghong123/tap/kwire        # desktop app (Kwire.app)
+brew install tanghong123/tap/kwire-cli    # terminal UI / CLI (kwire)
+```
+
+Both are universal (Apple Silicon + Intel). The desktop app is unsigned, so on
+first launch macOS may require **right-click ▸ Open**. Prebuilt bundles are also
+attached to the [latest release](https://github.com/tanghong123/kwire/releases/latest).
+
 **New to the codebase?** Read **[docs/CODEBASE.md](docs/CODEBASE.md)** — a guide
 written for engineers who don't know Rust yet. For *why* things are designed this
 way, see [DESIGN.md](DESIGN.md); for the build order, [PLAN.md](PLAN.md).

@@ -1,12 +1,14 @@
 name: Bump Homebrew tap
 
-# When a GitHub release is published, update the tanghong123/homebrew-kwire tap
+# When a GitHub release is published, update the shared tanghong123/homebrew-tap
 # so `brew upgrade` tracks the new version automatically:
 #   - Casks/kwire.rb       -> version + sha256 of Kwire_universal.app.tar.gz
-#   - Formula/kwire-cli.rb -> version + sha256 of the source tarball
+#   - Formula/kwire-cli.rb -> tag in the source-tarball url + its sha256
+#
+# Installs: `brew install tanghong123/tap/kwire` (app) / `.../kwire-cli` (TUI).
 #
 # Requires a repo secret HOMEBREW_TAP_TOKEN: a PAT (fine-grained, Contents:
-# read/write on tanghong123/homebrew-kwire) — the default GITHUB_TOKEN can't
+# read/write on tanghong123/homebrew-tap) — the default GITHUB_TOKEN can't
 # push to another repo. The job no-ops (with a clear message) if it's unset.
 on:
   release:
@@ -69,7 +71,7 @@ jobs:
       - name: Checkout tap
         uses: actions/checkout@v4
         with:
-          repository: tanghong123/homebrew-kwire
+          repository: tanghong123/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
@@ -81,13 +83,15 @@ jobs:
           SRC_SHA: ${{ steps.sha.outputs.src_sha }}
         run: |
           set -euo pipefail
-          # Bump only the version + sha256 lines; the url templates use #{version}.
+          # Cask: bump the version + sha256 lines (its url uses #{version}).
           sed -i -E "s/^(  version )\"[^\"]+\"/\1\"$VERSION\"/" Casks/kwire.rb
           sed -i -E "s/^(  sha256 )\"[^\"]+\"/\1\"$APP_SHA\"/"  Casks/kwire.rb
-          sed -i -E "s/^(  version )\"[^\"]+\"/\1\"$VERSION\"/" Formula/kwire-cli.rb
-          sed -i -E "s/^(  sha256 )\"[^\"]+\"/\1\"$SRC_SHA\"/"  Formula/kwire-cli.rb
+          # Formula: no version stanza (redundant with the URL per brew audit), so
+          # bump the tag inside the source-tarball url and its sha256.
+          sed -i -E "s#(archive/refs/tags/v)[0-9][^\"]*(\.tar\.gz)#\1${VERSION}\2#" Formula/kwire-cli.rb
+          sed -i -E "s/^(  sha256 )\"[^\"]+\"/\1\"$SRC_SHA\"/" Formula/kwire-cli.rb
           echo "---- Casks/kwire.rb ----";      grep -E 'version|sha256|url' Casks/kwire.rb
-          echo "---- Formula/kwire-cli.rb ----"; grep -E 'version|sha256|url' Formula/kwire-cli.rb
+          echo "---- Formula/kwire-cli.rb ----"; grep -E 'url|sha256' Formula/kwire-cli.rb
 
       - name: Commit + push
         working-directory: tap
