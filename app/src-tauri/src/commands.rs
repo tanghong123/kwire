@@ -18,7 +18,6 @@ use libgen_core::orchestrator::Orchestrator;
 use libgen_core::parse;
 use libgen_core::queue::{Progress, Scheduler};
 use libgen_core::search::MirrorConfig;
-use libgen_core::series::SeriesClient;
 use libgen_core::slum::SlumClient;
 use reqwest::Client;
 
@@ -1696,15 +1695,20 @@ pub async fn download_series(
         return Err(libgen_core::model::ui_msg("err.series_no_title", &[]));
     }
 
-    // 2. Open Library lookup — NO lock held across the network (per docs).
-    let series_client = {
+    // 2. Multi-source lookup — Open Library → libgen → Goodreads, first with
+    // ≥2 members wins — NO lock held across the network (per docs). Shared with
+    // the TUI/CLI so the resolution order never drifts between frontends.
+    let replay_series_dir = {
         let cfg = state.config.lock().expect("config mutex poisoned").clone();
-        build_series_client(&cfg)
+        cfg.replay_dir.map(|d| d.join("series"))
     };
-    let series = series_client
-        .lookup(&title, &author)
+    let source = match &replay_series_dir {
+        Some(dir) => libgen_core::series::SeriesSource::Replay(dir),
+        None => libgen_core::series::SeriesSource::Live,
+    };
+    let series = libgen_core::series::resolve_series(&title, &author, source)
         .await
-        .map_err(|e| format!("Open Library lookup failed: {e}"))?;
+        .map(|(s, _src)| s);
 
     // 3. None → not in a series. Some → build + persist a fresh list, run it.
     let series = match series {
@@ -2188,16 +2192,6 @@ fn variation_for(
     let list = orch.snapshot().map_err(err)?;
     bridge::variation_of(&list, book_id, md5)
         .ok_or_else(|| format!("variation {md5} of book {book_id} not found"))
-}
-
-/// Build the Open Library series client from config: replay (offline) when a
-/// replay dir is configured, else live — mirroring [`libgen_engine::build_search`].
-/// The replay dir's `series/` subdirectory holds the recorded Open Library responses.
-fn build_series_client(cfg: &Config) -> SeriesClient {
-    match &cfg.replay_dir {
-        Some(dir) => SeriesClient::replay(dir.join("series")),
-        None => SeriesClient::live(),
-    }
 }
 
 // ---------------------------------------------------------------------------
