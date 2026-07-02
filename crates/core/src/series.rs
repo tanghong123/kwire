@@ -266,10 +266,20 @@ impl SeriesClient {
     /// untagged series from sibling titles (box sets filtered out). See
     /// [`SeriesClient::title_prefix_fallback`].
     pub async fn lookup(&self, title: &str, author: &str) -> Result<Option<Series>> {
-        let mut series = match self.lookup_primary(title, author).await? {
-            Some(s) => Some(s),
-            None => self.title_prefix_fallback(title, author).await?,
-        };
+        let mut series = self.lookup_primary(title, author).await?;
+        // Slow fallback: the primary path found nothing, OR only the seed itself
+        // (a 1-member "series" — its work JSON named a series key that the members
+        // search couldn't expand). OL's SEARCH INDEX often still tags member docs
+        // with a usable `series_key`, so scan the results for one.
+        if series.as_ref().map(|s| s.members.len() < 2).unwrap_or(true) {
+            if let Some(s) = self.series_from_search_index(title, author).await? {
+                series = Some(s);
+            }
+        }
+        // Title-prefix heuristic, only when we still have nothing at all.
+        if series.is_none() {
+            series = self.title_prefix_fallback(title, author).await?;
+        }
         // OL members carry no author in our search responses, so members inherit
         // the seed book's author (a series is by one author in the OL/prefix
         // paths). Keeps the seeded list's libgen query from going title-only.
@@ -284,9 +294,9 @@ impl SeriesClient {
     async fn lookup_primary(&self, title: &str, author: &str) -> Result<Option<Series>> {
         // 1. Find the best-matching work.
         let search_url = format!(
-            "{OL_BASE}/search.json?title={}&author={}&fields=key,title,subtitle,author_name&limit=5",
+            "{OL_BASE}/search.json?title={}{}&fields=key,title,subtitle,author_name&limit=5",
             url_encode(title),
-            url_encode(author),
+            author_param(author),
         );
         let search_body = self.transport.get(&search_url).await?;
         let work = match pick_work(&search_body, title, author)? {
@@ -354,12 +364,71 @@ impl SeriesClient {
             return Ok(None);
         }
         let members = self.order_members(raw).await?;
-        // Prefer an explicit caller hint, then the URL slug, then a best-effort
-        // name from the first member's title.
-        let name = name_hint
+        // Prefer an explicit caller hint, then the URL slug, then the series
+        // page's own `name`, then a best-effort name from the first member title.
+        let name = match name_hint
             .map(str::to_string)
             .or(slug_name)
             .filter(|s| !s.trim().is_empty())
+        {
+            Some(n) => n,
+            None => self
+                .series_display_name(&key)
+                .await
+                .unwrap_or_else(|| series_name(&members[0].title)),
+        };
+        Ok(Some(Series { key, name, members }))
+    }
+
+    /// Best-effort human series name from OL's `/series/{key}.json` `name` field
+    /// (e.g. `A Series of Unfortunate Events`). `None` when unavailable — the
+    /// caller then falls back to a member-title guess.
+    async fn series_display_name(&self, series_key: &str) -> Option<String> {
+        #[derive(Deserialize)]
+        struct S {
+            #[serde(default)]
+            name: String,
+        }
+        let url = format!("{OL_BASE}/series/{series_key}.json");
+        let body = self.transport.get(&url).await.ok()?;
+        let s: S = serde_json::from_str(&body).ok()?;
+        let n = s.name.trim();
+        if n.is_empty() {
+            None
+        } else {
+            Some(n.to_string())
+        }
+    }
+
+    /// Slow fallback for the reverse (book→series) lookup: OL's SEARCH INDEX
+    /// tags member docs with a `series_key` even when the work JSON's `series`
+    /// field is empty (the common case — e.g. every "A Series of Unfortunate
+    /// Events" member). Search by title, take the `series_key` of the
+    /// best-matching doc that has one, and expand it into the full series.
+    /// `Ok(None)` when no result carries a series key.
+    async fn series_from_search_index(&self, title: &str, author: &str) -> Result<Option<Series>> {
+        let url = format!(
+            "{OL_BASE}/search.json?title={}{}&fields=key,title,author_name,series_key&limit=20",
+            url_encode(title),
+            author_param(author),
+        );
+        // A missing replay fixture / network blip here is just "no fallback hit".
+        let body = match self.transport.get(&url).await {
+            Ok(b) => b,
+            Err(_) => return Ok(None),
+        };
+        let key = match best_series_key_in_search(&body, title, author) {
+            Some(k) => k,
+            None => return Ok(None),
+        };
+        let raw = self.raw_members_for_series_key(&key).await?;
+        if raw.is_empty() {
+            return Ok(None);
+        }
+        let members = self.order_members(raw).await?;
+        let name = self
+            .series_display_name(&key)
+            .await
             .unwrap_or_else(|| series_name(&members[0].title));
         Ok(Some(Series { key, name, members }))
     }
@@ -407,9 +476,9 @@ impl SeriesClient {
         };
 
         let search_url = format!(
-            "{OL_BASE}/search.json?title={}&author={}&fields=key,title,subtitle,first_publish_year&limit=40",
+            "{OL_BASE}/search.json?title={}{}&fields=key,title,subtitle,first_publish_year&limit=40",
             url_encode(&prefix),
-            url_encode(author),
+            author_param(author),
         );
         let body = self.transport.get(&search_url).await?;
         let volumes = sibling_volumes(&body, &prefix)?;
@@ -503,6 +572,11 @@ struct SearchDoc {
     author_name: Vec<String>,
     #[serde(default)]
     first_publish_year: Option<i64>,
+    /// Series keys OL's SEARCH INDEX carries on member docs (`["OL…L"]`). Present
+    /// even when the work JSON's `series` field is empty — the slow-fallback path
+    /// relies on this. Only populated when the search requests `series_key`.
+    #[serde(default)]
+    series_key: Vec<String>,
 }
 
 /// Pick the work whose title best matches the requested `title`, preferring docs
@@ -550,6 +624,57 @@ fn pick_work(body: &str, want_title: &str, want_author: &str) -> Result<Option<W
         }
     }
     Ok(best.map(|(_, w)| w))
+}
+
+/// Pick the `series_key` of the best-matching search doc that carries one
+/// (slow-fallback path). Requires the doc's title to plausibly match the request
+/// (so an unrelated same-search result can't inject a wrong series), and prefers
+/// docs whose `author_name` contains the request author's surname. Returns the
+/// bare `OL…L` key, or `None` when no result carries a usable series key.
+fn best_series_key_in_search(body: &str, want_title: &str, want_author: &str) -> Option<String> {
+    let resp: SearchResponse = serde_json::from_str(body).ok()?;
+    let want = norm(want_title);
+    let surname = surname_of(want_author);
+
+    let mut best: Option<(i32, String)> = None;
+    for doc in resp.docs {
+        let raw_key = match doc
+            .series_key
+            .into_iter()
+            .find(|k| !k.trim().is_empty())
+            .and_then(|k| strip_series_prefix(&k))
+        {
+            Some(k) => k,
+            None => continue,
+        };
+        if doc.title.is_empty() {
+            continue;
+        }
+        let got = norm(&doc.title);
+        // Title relevance gate (same shape as `pick_work`): the member doc's
+        // title must relate to the request title.
+        let title_score = if got == want {
+            3
+        } else if got.contains(&want) || want.contains(&got) {
+            2
+        } else if title_tokens_overlap(&want, &got) {
+            1
+        } else {
+            0
+        };
+        if title_score == 0 {
+            continue;
+        }
+        let author_score = match &surname {
+            Some(s) if doc.author_name.iter().any(|a| norm(a).contains(s)) => 2,
+            _ => 0,
+        };
+        let score = title_score + author_score;
+        if best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
+            best = Some((score, raw_key));
+        }
+    }
+    best.map(|(_, k)| k)
 }
 
 #[derive(Debug, Deserialize)]
@@ -757,8 +882,9 @@ fn series_prefix(title: &str) -> Option<String> {
 /// Box-set / collection / bundle detector. Returns `true` for titles that are
 /// NOT a single volume: box sets, omnibuses, "complete" sets, "series"
 /// bundles, and number-range bundles like "1-11", "vol. 1-12", "books 1-3",
-/// "N-book".
-fn is_collection(title: &str) -> bool {
+/// "N-book". Public so a frontend can avoid seeding a reverse series lookup from
+/// a collection title (which carries no series linkage and won't resolve).
+pub fn is_collection(title: &str) -> bool {
     let lower = title.to_lowercase();
     const KEYWORDS: &[&str] = &[
         "box set",
@@ -1068,6 +1194,18 @@ fn surname_of(author: &str) -> Option<String> {
         }
     }
     norm(a).split_whitespace().last().map(|s| s.to_string())
+}
+
+/// The `&author=<enc>` query fragment — but EMPTY when the author is blank.
+/// Open Library returns **500 Internal Server Error** for a bare `author=` with
+/// no value, so an author-less lookup must omit the parameter entirely.
+fn author_param(author: &str) -> String {
+    let a = author.trim();
+    if a.is_empty() {
+        String::new()
+    } else {
+        format!("&author={}", url_encode(a))
+    }
 }
 
 /// Minimal percent-encoding for query terms (space → `+`, reserved → `%XX`).
@@ -1796,6 +1934,7 @@ fn fill_member_authors(series: &mut Series, seed_author: &str) {
 /// Where the multi-source resolver should read from: `Live` hits the network,
 /// `Replay(dir)` replays recorded fixtures from `dir` (offline). All three
 /// sources share the one dir.
+#[derive(Clone, Copy)]
 pub enum SeriesSource<'a> {
     Live,
     Replay(&'a std::path::Path),
@@ -1810,7 +1949,31 @@ pub enum SeriesSource<'a> {
 /// "not found here" and never blocks the others. Shared by the CLI, the TUI, and
 /// the desktop "download series" commands so the resolution order can never
 /// drift between frontends. Returns `None` when no source finds a series.
+///
+/// **Author degradation:** an over-specified or wrong author can block the Open
+/// Library work match. So if the authored attempt finds nothing AND an author
+/// was given, we retry the whole sweep once with NO author (libgen/Goodreads
+/// find the series by title alone). This is why a manual add with a backfilled
+/// author still resolves even when that author is imperfect.
 pub async fn resolve_series(
+    title: &str,
+    author: &str,
+    source: SeriesSource<'_>,
+) -> Option<(Series, &'static str)> {
+    if let Some(hit) = resolve_series_once(title, author, source).await {
+        return Some(hit);
+    }
+    if !author.trim().is_empty() {
+        if let Some(hit) = resolve_series_once(title, "", source).await {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+/// One pass over the three sources with a fixed `(title, author)`. See
+/// [`resolve_series`], which wraps this with the author-degradation retry.
+async fn resolve_series_once(
     title: &str,
     author: &str,
     source: SeriesSource<'_>,
@@ -1938,6 +2101,89 @@ mod ref_parse_tests {
             .unwrap()
             .expect("members present → a series");
         assert_eq!(series2.name, "First");
+    }
+
+    #[test]
+    fn author_param_omits_empty_author() {
+        // An empty `author=` makes Open Library 500 — the param must be omitted.
+        assert_eq!(author_param(""), "");
+        assert_eq!(author_param("   "), "");
+        assert_eq!(author_param("Lemony Snicket"), "&author=Lemony+Snicket");
+    }
+
+    #[test]
+    fn best_series_key_from_search_index() {
+        // A member doc carries `series_key` in the SEARCH INDEX even though its
+        // work JSON's `series` field is empty. Pick that key; ignore keyless and
+        // title-irrelevant docs.
+        let body = r#"{"docs":[
+          {"key":"/works/OLxW","title":"Unrelated Book","series_key":["OL999L"]},
+          {"key":"/works/OL1W","title":"The Bad Beginning","series_key":["/series/OL326111L"]},
+          {"key":"/works/OL2W","title":"The Bad Beginning (annotated)"}
+        ]}"#;
+        assert_eq!(
+            best_series_key_in_search(body, "The Bad Beginning", "Lemony Snicket").as_deref(),
+            Some("OL326111L"),
+            "picks the relevant doc's series_key, stripped of the /series/ prefix"
+        );
+        // No doc carries a series key → None.
+        let none = r#"{"docs":[{"key":"/works/OL9W","title":"A Series of Unfortunate Events Box"}]}"#;
+        assert!(best_series_key_in_search(none, "A Series of Unfortunate Events", "").is_none());
+    }
+
+    /// The reverse lookup recovers the series via the SEARCH-INDEX `series_key`
+    /// when the primary path (work JSON `series`) is empty — fully offline.
+    #[tokio::test]
+    async fn lookup_recovers_series_via_search_index_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |url: &str, body: &str| {
+            std::fs::write(dir.path().join(format!("{}.json", fixture_key(url))), body).unwrap()
+        };
+        // 1. Primary title search → one work, no series field on its work JSON.
+        write(
+            &format!(
+                "{OL_BASE}/search.json?title={}&fields=key,title,subtitle,author_name&limit=5",
+                url_encode("The Bad Beginning")
+            ),
+            r#"{"docs":[{"key":"/works/OL1W","title":"The Bad Beginning"}]}"#,
+        );
+        write(
+            &format!("{OL_BASE}/works/OL1W.json"),
+            r#"{"title":"The Bad Beginning"}"#, // no `series` → primary yields None
+        );
+        // 2. Slow-fallback title search (fields include series_key) → member doc
+        //    carrying the series key.
+        write(
+            &format!(
+                "{OL_BASE}/search.json?title={}&fields=key,title,author_name,series_key&limit=20",
+                url_encode("The Bad Beginning")
+            ),
+            r#"{"docs":[{"key":"/works/OL1W","title":"The Bad Beginning","series_key":["OL326111L"]}]}"#,
+        );
+        // 3. Members search for that key.
+        write(
+            &format!(
+                "{OL_BASE}/search.json?q=series_key:OL326111L&fields=key,title,subtitle,first_publish_year&limit=60"
+            ),
+            r#"{"docs":[
+              {"key":"/works/OL1W","title":"The Bad Beginning","first_publish_year":1999},
+              {"key":"/works/OL2W","title":"The Reptile Room","first_publish_year":1999}
+            ]}"#,
+        );
+        // 4. Series page name.
+        write(
+            &format!("{OL_BASE}/series/OL326111L.json"),
+            r#"{"name":"A Series of Unfortunate Events"}"#,
+        );
+
+        let series = SeriesClient::replay(dir.path())
+            .lookup("The Bad Beginning", "")
+            .await
+            .unwrap()
+            .expect("search-index fallback recovers the series");
+        assert_eq!(series.key, "OL326111L");
+        assert_eq!(series.name, "A Series of Unfortunate Events");
+        assert_eq!(series.members.len(), 2);
     }
 
     /// `series_by_key` on a key with no members (empty search, no HTML links) is
