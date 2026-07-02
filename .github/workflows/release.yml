@@ -91,6 +91,24 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code-signing + notarization. When these secrets are unset the
+          # env vars are empty and tauri-action builds an UNSIGNED .app (the old
+          # behavior); once they're set, the .app is Developer-ID signed and
+          # notarized so Gatekeeper lets novice users open it without the
+          # right-click ▸ Open dance. Requires an Apple Developer account:
+          #   APPLE_CERTIFICATE            base64 of the "Developer ID Application"
+          #                                cert exported as .p12
+          #   APPLE_CERTIFICATE_PASSWORD   the .p12 export password
+          #   APPLE_SIGNING_IDENTITY       e.g. "Developer ID Application: Name (TEAMID)"
+          #   APPLE_ID                     your Apple ID email
+          #   APPLE_PASSWORD               an app-specific password for that Apple ID
+          #   APPLE_TEAM_ID                your 10-char Apple Team ID
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: app
           tagName: v${{ needs.detect.outputs.version }}
