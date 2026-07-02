@@ -1680,15 +1680,67 @@ pub async fn download_series(
     list_id: Option<String>,
     book_id: String,
 ) -> Result<ViewLibrary, String> {
-    // 1. Resolve the book's input (title + author) under a BRIEF orch lock.
-    let orch = resolve_arc(&state, list_id).await?;
+    download_series_impl(&state, list_id, book_id).await
+}
+
+/// Choose the seed `(title, author)` for the reverse series lookup from a book
+/// and its discovered candidates. A manual add's `input` may be a bare series
+/// name with no author (e.g. "a series of unfortunate events"), which never
+/// reverse-resolves — only box sets match it. A real member candidate carries a
+/// resolvable member title + author, so prefer the best-scoring NON-collection
+/// candidate, backfilling the author from the candidates when the book has none.
+/// Falls back to the book input when there are no usable candidates.
+pub(crate) fn refine_series_seed(book: &libgen_core::model::BookRequest) -> (String, String) {
+    use libgen_core::model::Candidate;
+    let input_title = book.input.title.clone();
+    let input_author = book.input.authors.join(", ");
+    let is_member = |c: &&Candidate| {
+        !c.title.trim().is_empty() && !libgen_core::series::is_box_set(&c.title)
+    };
+    let best_member = book
+        .candidates
+        .iter()
+        .filter(is_member)
+        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+    let title = best_member
+        .map(|c| c.title.clone())
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or(input_title);
+    let author = if !input_author.trim().is_empty() {
+        input_author
+    } else {
+        best_member
+            .map(|c| c.authors.join(", "))
+            .filter(|a| !a.trim().is_empty())
+            .or_else(|| {
+                book.candidates
+                    .iter()
+                    .map(|c| c.authors.join(", "))
+                    .find(|a| !a.trim().is_empty())
+            })
+            .unwrap_or_default()
+    };
+    (title, author)
+}
+
+/// Headless-testable core of [`download_series`] (takes `&AppState`, no Tauri
+/// `State`), so the whole add → query → pick → download-series flow can be
+/// exercised without a webview.
+pub(crate) async fn download_series_impl(
+    state: &AppState,
+    list_id: Option<String>,
+    book_id: String,
+) -> Result<ViewLibrary, String> {
+    // 1. Resolve the seed (title + author) under a BRIEF orch lock — from the
+    // book's best real-member candidate, not its (possibly series-name) input.
+    let orch = resolve_arc(state, list_id).await?;
     let (title, author) = {
         let guard = orch.lock().await;
         let pos = position_for(&guard, &book_id)?;
         let list = guard.snapshot().map_err(err)?;
         let book = book_at(&list, &pos.group_path, pos.book_index)
             .ok_or_else(|| format!("book {book_id} not found"))?;
-        (book.input.title.clone(), book.input.authors.join(", "))
+        refine_series_seed(book)
     }; // orch lock dropped here — the network lookup runs OFF any lock.
 
     if title.trim().is_empty() {
@@ -1743,9 +1795,9 @@ pub async fn download_series(
         lib.lists.push(LoadedList::new(id.clone(), new_orch));
     }
     // Goal = Complete: the engine discovers + downloads every member.
-    set_goal_for(&state, &id, Goal::Complete).await?;
+    set_goal_for(state, &id, Goal::Complete).await?;
     state.wake_engine();
-    refresh_library(&state).await
+    refresh_library(state).await
 }
 
 /// Reveal a finished file in the OS file manager (Finder on macOS).
@@ -2230,6 +2282,26 @@ pub mod testsupport {
         }
     }
 
+    /// Like [`app_state`] but with **live network** search + series lookup
+    /// (`replay_dir = None`). For end-to-end flow tests that hit real mirrors /
+    /// Open Library; keep these `#[ignore]` so CI stays offline.
+    pub fn app_state_live(db_path: PathBuf, mirrors: PathBuf) -> AppState {
+        let cfg = Config {
+            mirrors,
+            out_dir: db_path.parent().unwrap().join("out"),
+            db_path,
+            replay_dir: None,
+            app: AppSettings {
+                query_concurrency: 4,
+                ..Default::default()
+            },
+        };
+        AppState {
+            config: Arc::new(std::sync::Mutex::new(cfg)),
+            ..Default::default()
+        }
+    }
+
     /// Persist `list` into the state's store and attach + load an orchestrator for
     /// it (mirrors `load_list`, sans network/Tauri). Returns the stable UI list id.
     pub async fn load(state: &AppState, list: &DownloadList) -> Result<String, String> {
@@ -2308,6 +2380,22 @@ pub mod testsupport {
         author: Option<&str>,
     ) -> Result<ViewLibrary, String> {
         super::add_manual_book_inner(state, title.to_string(), author.map(|s| s.to_string())).await
+    }
+
+    /// The `(title, author)` seed [`download_series`] derives from a book + its
+    /// candidates — exposed so a flow test can show what the reverse lookup runs on.
+    pub fn refine_series_seed(book: &libgen_core::model::BookRequest) -> (String, String) {
+        super::refine_series_seed(book)
+    }
+
+    /// Headless `download_series` (the Tauri command's core) — for driving the
+    /// full add → query → pick → download-series flow without a webview.
+    pub async fn download_series(
+        state: &AppState,
+        list_id: Option<String>,
+        book_id: String,
+    ) -> Result<ViewLibrary, String> {
+        super::download_series_impl(state, list_id, book_id).await
     }
 
     /// Remove a book (by UI id) from a mutable list, headless — the test analogue
