@@ -1960,7 +1960,7 @@ fn refine_series_seed(app: &AppState, input_title: String, input_author: String)
     // A usable series seed is a REAL member — not a box set / omnibus, which
     // carries no series linkage and won't reverse-resolve.
     let is_member = |v: &&libgen_engine::ViewVariation| {
-        !v.title.trim().is_empty() && !libgen_core::series::is_collection(&v.title)
+        !v.title.trim().is_empty() && !libgen_core::series::is_box_set(&v.title)
     };
     // The candidate the user chose / is looking at in the Detail modal.
     let focused = match &app.modal {
