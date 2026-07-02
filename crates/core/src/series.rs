@@ -306,30 +306,18 @@ impl SeriesClient {
             None => return Ok(None), // not in a series
         };
 
-        // 3. Members of the series.
-        let members_url = format!(
-            "{OL_BASE}/search.json?q=series_key:{}&fields=key,title,subtitle,first_publish_year&limit=60",
-            series_key,
-        );
-        let members_body = self.transport.get(&members_url).await?;
-        let mut raw = parse_members(&members_body)?;
+        // 3. Members of the series (search, HTML fallback).
+        let mut raw = self.raw_members_for_series_key(&series_key).await?;
 
-        // 5. Fallback: a series key but zero members → scrape the HTML series
-        //    page for `/works/OL…W` links; if THAT yields nothing either, fall
-        //    back to just the seed book (a one-item series is fine).
+        // 5. A series key but zero members even after the HTML scrape → fall back
+        //    to just the seed book (a one-item series is fine).
         if raw.is_empty() {
-            let html_url = format!("{OL_BASE}/series/{series_key}");
-            if let Ok(html) = self.transport.get(&html_url).await {
-                raw = self.members_from_html(&html).await;
-            }
-            if raw.is_empty() {
-                raw.push(RawMember {
-                    key: seed.key.clone(),
-                    title: seed.title.clone(),
-                    position: None,
-                    first_publish_year: None,
-                });
-            }
+            raw.push(RawMember {
+                key: seed.key.clone(),
+                title: seed.title.clone(),
+                position: None,
+                first_publish_year: None,
+            });
         }
 
         // 4. Order the members: by `position` (fetched from each member work)
@@ -341,6 +329,62 @@ impl SeriesClient {
             name: series_name(&seed.title),
             members,
         }))
+    }
+
+    /// Fetch a series' members directly by its Open Library **series key** (the
+    /// bare `OL…L`, or a `/series/OL…L` path / full URL — see [`parse_series_ref`]).
+    /// Powers the explicit `:series <url>` command: the user pastes an Open
+    /// Library series page and we seed a list from it, with no seed book needed.
+    ///
+    /// `name_hint` is the human name recovered from the URL slug
+    /// (`.../A_Series_of_Unfortunate_Events`); it is preferred over guessing the
+    /// series name from the first member's book title. `Ok(None)` when the key
+    /// resolves to no members at all.
+    pub async fn series_by_key(
+        &self,
+        key_or_ref: &str,
+        name_hint: Option<&str>,
+    ) -> Result<Option<Series>> {
+        let (key, slug_name) = match parse_series_ref(key_or_ref) {
+            Some(kv) => kv,
+            None => return Ok(None),
+        };
+        let raw = self.raw_members_for_series_key(&key).await?;
+        if raw.is_empty() {
+            return Ok(None);
+        }
+        let members = self.order_members(raw).await?;
+        // Prefer an explicit caller hint, then the URL slug, then a best-effort
+        // name from the first member's title.
+        let name = name_hint
+            .map(str::to_string)
+            .or(slug_name)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| series_name(&members[0].title));
+        Ok(Some(Series { key, name, members }))
+    }
+
+    /// The members-search + HTML-scrape half of the primary lookup, factored out
+    /// so both [`lookup_primary`](Self::lookup_primary) and
+    /// [`series_by_key`](Self::series_by_key) share the exact same member
+    /// discovery. Returns the raw (unordered, position-less) members; may be
+    /// empty (the caller decides whether that's a one-item series or a miss).
+    async fn raw_members_for_series_key(&self, series_key: &str) -> Result<Vec<RawMember>> {
+        let members_url = format!(
+            "{OL_BASE}/search.json?q=series_key:{}&fields=key,title,subtitle,first_publish_year&limit=60",
+            series_key,
+        );
+        let members_body = self.transport.get(&members_url).await?;
+        let mut raw = parse_members(&members_body)?;
+        // Fallback: the search yields nothing → scrape the HTML series page for
+        // `/works/OL…W` links and synthesize members from each work's JSON.
+        if raw.is_empty() {
+            let html_url = format!("{OL_BASE}/series/{series_key}");
+            if let Ok(html) = self.transport.get(&html_url).await {
+                raw = self.members_from_html(&html).await;
+            }
+        }
+        Ok(raw)
     }
 
     /// Title-prefix fallback for series Open Library does NOT tag with a
@@ -891,6 +935,67 @@ fn slugify(s: &str) -> String {
         out.pop();
     }
     out
+}
+
+/// Parse an Open Library **series reference** into `(bare key, name hint)`.
+///
+/// Accepts any of:
+///   * a full URL — `https://openlibrary.org/series/OL326111L/A_Series_of_Unfortunate_Events`
+///   * a path — `/series/OL326111L` (with or without a trailing slug)
+///   * a bare key — `OL326111L`
+///
+/// The key must look like an Open Library series id (`OL` + digits + `L`). The
+/// name hint, when present, is the trailing URL slug de-slugified
+/// (`A_Series_of_Unfortunate_Events` → `A Series of Unfortunate Events`).
+/// Returns `None` when no plausible series key is found.
+pub fn parse_series_ref(input: &str) -> Option<(String, Option<String>)> {
+    let s = input.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Reduce to the path after a `/series/` marker when present; otherwise treat
+    // the whole (possibly bare-key) input as the candidate.
+    let rest = match s.find("/series/") {
+        Some(idx) => &s[idx + "/series/".len()..],
+        None => s,
+    };
+    // The key is the first path segment; anything after the next `/` is the slug.
+    let mut segs = rest.trim_start_matches('/').splitn(2, '/');
+    let key_seg = segs.next().unwrap_or("").trim();
+    let slug = segs.next().unwrap_or("");
+    let key = key_seg.trim_end_matches('/');
+    if !is_series_key(key) {
+        return None;
+    }
+    let name = deslugify(slug);
+    Some((
+        key.to_string(),
+        if name.trim().is_empty() { None } else { Some(name) },
+    ))
+}
+
+/// Whether `k` looks like an Open Library series key: `OL`, then ≥1 digits,
+/// then a trailing `L` (e.g. `OL326111L`).
+fn is_series_key(k: &str) -> bool {
+    let core = match k.strip_prefix("OL").or_else(|| k.strip_prefix("ol")) {
+        Some(c) => c,
+        None => return false,
+    };
+    let digits = core.strip_suffix('L').or_else(|| core.strip_suffix('l'));
+    match digits {
+        Some(d) => !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()),
+        None => false,
+    }
+}
+
+/// Turn a URL slug into a display name: `_`/`-`/`+` runs → single spaces, then
+/// trim. `A_Series_of_Unfortunate_Events` → `A Series of Unfortunate Events`.
+fn deslugify(slug: &str) -> String {
+    let cleaned: String = slug
+        .chars()
+        .map(|c| if matches!(c, '_' | '-' | '+') { ' ' } else { c })
+        .collect();
+    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Strip a leading `/series/` from a series key, returning the bare `OL…L`.
@@ -1681,6 +1786,176 @@ fn fill_member_authors(series: &mut Series, seed_author: &str) {
         if !has_author {
             m.author = Some(seed.to_string());
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared multi-source resolver (Open Library → libgen → Goodreads)
+// ---------------------------------------------------------------------------
+
+/// Where the multi-source resolver should read from: `Live` hits the network,
+/// `Replay(dir)` replays recorded fixtures from `dir` (offline). All three
+/// sources share the one dir.
+pub enum SeriesSource<'a> {
+    Live,
+    Replay(&'a std::path::Path),
+}
+
+/// Consult the THREE equal sources in turn — Open Library, libgen `series.php`,
+/// Goodreads — and return the FIRST that yields a usable series (≥ 2 members),
+/// paired with the name of the source that produced it
+/// (`"open_library"` / `"libgen"` / `"goodreads"`).
+///
+/// A source erroring (a network blip, a missing replay fixture) is treated like
+/// "not found here" and never blocks the others. Shared by the CLI, the TUI, and
+/// the desktop "download series" commands so the resolution order can never
+/// drift between frontends. Returns `None` when no source finds a series.
+pub async fn resolve_series(
+    title: &str,
+    author: &str,
+    source: SeriesSource<'_>,
+) -> Option<(Series, &'static str)> {
+    // Open Library.
+    let ol = match source {
+        SeriesSource::Replay(dir) => SeriesClient::replay(dir),
+        SeriesSource::Live => SeriesClient::live(),
+    };
+    if let Ok(Some(s)) = ol.lookup(title, author).await {
+        if s.members.len() >= 2 {
+            return Some((s, "open_library"));
+        }
+    }
+
+    // libgen series.php.
+    let libgen = match source {
+        SeriesSource::Replay(dir) => LibgenSeriesClient::replay(dir),
+        SeriesSource::Live => LibgenSeriesClient::live(),
+    };
+    if let Ok(Some(s)) = libgen.lookup(title, author).await {
+        if s.members.len() >= 2 {
+            return Some((s, "libgen"));
+        }
+    }
+
+    // Goodreads.
+    let goodreads = match source {
+        SeriesSource::Replay(dir) => GoodreadsClient::replay(dir),
+        SeriesSource::Live => GoodreadsClient::live(),
+    };
+    if let Ok(Some(s)) = goodreads.lookup(title, author).await {
+        if s.members.len() >= 2 {
+            return Some((s, "goodreads"));
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod ref_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parses_full_url_with_slug() {
+        let (key, name) = parse_series_ref(
+            "https://openlibrary.org/series/OL326111L/A_Series_of_Unfortunate_Events",
+        )
+        .expect("should parse");
+        assert_eq!(key, "OL326111L");
+        assert_eq!(name.as_deref(), Some("A Series of Unfortunate Events"));
+    }
+
+    #[test]
+    fn parses_path_and_bare_key() {
+        assert_eq!(
+            parse_series_ref("/series/OL326111L"),
+            Some(("OL326111L".to_string(), None))
+        );
+        assert_eq!(
+            parse_series_ref("OL326111L"),
+            Some(("OL326111L".to_string(), None))
+        );
+        // Trailing slash after the key, no slug.
+        assert_eq!(
+            parse_series_ref("openlibrary.org/series/OL1L/"),
+            Some(("OL1L".to_string(), None))
+        );
+    }
+
+    #[test]
+    fn rejects_non_series_refs() {
+        // A works key is not a series key.
+        assert_eq!(parse_series_ref("OL45804W"), None);
+        assert_eq!(parse_series_ref("/works/OL45804W"), None);
+        assert_eq!(parse_series_ref("not a key"), None);
+        assert_eq!(parse_series_ref(""), None);
+    }
+
+    #[test]
+    fn deslugify_normalizes_separators() {
+        assert_eq!(deslugify("A_Series_of-Unfortunate+Events"), "A Series of Unfortunate Events");
+        assert_eq!(deslugify(""), "");
+    }
+
+    /// `series_by_key` fetches members straight from the members search and
+    /// orders them by `first_publish_year`; the name honors an explicit hint and
+    /// otherwise falls back to a name derived from the first member's title.
+    /// Fully offline: one recorded members-search fixture, replayed. (The
+    /// per-member `work.json` position fetches simply miss in replay, so ordering
+    /// falls back to publish year — exactly the path exercised here.)
+    #[tokio::test]
+    async fn series_by_key_builds_ordered_series_from_members_search() {
+        let dir = tempfile::tempdir().unwrap();
+        // The exact URL `raw_members_for_series_key` builds for key "OL999L".
+        let members_url = format!(
+            "{OL_BASE}/search.json?q=series_key:OL999L&fields=key,title,subtitle,first_publish_year&limit=60"
+        );
+        // Deliberately out of publish order in the doc list, to prove ordering.
+        let body = r#"{"docs":[
+          {"key":"/works/OL3W","title":"Third","first_publish_year":2003},
+          {"key":"/works/OL1W","title":"First","first_publish_year":2001},
+          {"key":"/works/OL2W","title":"Second","subtitle":"A Tale","first_publish_year":2002}
+        ]}"#;
+        std::fs::write(dir.path().join(format!("{}.json", fixture_key(&members_url))), body).unwrap();
+
+        let client = SeriesClient::replay(dir.path());
+
+        // With an explicit name hint (e.g. from the URL slug).
+        let series = client
+            .series_by_key("OL999L", Some("A Series of Unfortunate Events"))
+            .await
+            .unwrap()
+            .expect("members present → a series");
+        assert_eq!(series.key, "OL999L");
+        assert_eq!(series.name, "A Series of Unfortunate Events");
+        let titles: Vec<&str> = series.members.iter().map(|m| m.title.as_str()).collect();
+        assert_eq!(titles, ["First", "Second: A Tale", "Third"], "ordered by year");
+
+        // Without a hint, the name falls back to the first member's title.
+        let series2 = client
+            .series_by_key("/series/OL999L", None)
+            .await
+            .unwrap()
+            .expect("members present → a series");
+        assert_eq!(series2.name, "First");
+    }
+
+    /// `series_by_key` on a key with no members (empty search, no HTML links) is
+    /// a miss, not an error.
+    #[tokio::test]
+    async fn series_by_key_no_members_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let members_url = format!(
+            "{OL_BASE}/search.json?q=series_key:OL999L&fields=key,title,subtitle,first_publish_year&limit=60"
+        );
+        std::fs::write(
+            dir.path().join(format!("{}.json", fixture_key(&members_url))),
+            r#"{"docs":[]}"#,
+        )
+        .unwrap();
+        // No HTML series-page fixture recorded → the scrape fallback also misses.
+        let client = SeriesClient::replay(dir.path());
+        assert!(client.series_by_key("OL999L", None).await.unwrap().is_none());
     }
 }
 
