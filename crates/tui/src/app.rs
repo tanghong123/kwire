@@ -215,10 +215,13 @@ impl SettingsDraft {
 // (`:requery`, `:delete`, `:reorganize`, `:cleanup`, `:pause`, `:start`,
 // `:download-series`, `:refresh-mirrors`, `:mouse`, …) still dispatch when
 // typed but are intentionally not advertised — they will move to hot keys.
+// `:series` IS advertised: it accepts an Open Library series URL/key (or none,
+// to use the selected book), so it's discoverable from the command line.
 const COMMANDS: &[&str] = &[
     "settings",
     "import",
     "add",
+    "series",
     "about",
     "start-all",
     "pause-all",
@@ -889,6 +892,18 @@ pub struct AppState {
     /// selection resets offset + direction).
     pub activity_marquee_sel: usize,
 
+    // ── Marquee scroll state (Snapshot popup · long Title value) ──────────────
+    /// Column offset for the Snapshot popup's `Title` value when it overflows the
+    /// value column (a variation's full title is often wider than the 72-col
+    /// popup). Independent of the other marquees. Keyed by the popup title so a
+    /// different snapshot resets the scroll.
+    pub snapshot_marquee_offset: usize,
+    pub snapshot_marquee_forward: bool,
+    pub snapshot_marquee_pause: u8,
+    /// The popup title active when the snapshot marquee was last reset (opening a
+    /// different snapshot resets offset + direction).
+    pub snapshot_marquee_key: String,
+
     // ── Time-driven marquee stepping (task 11) ────────────────────────────────
     /// Wall-clock epoch all marquee phases are measured from. Marquees advance
     /// one ping-pong step per [`MARQUEE_STEP_MS`] of ELAPSED time rather than
@@ -1022,6 +1037,10 @@ impl AppState {
             activity_marquee_forward: true,
             activity_marquee_pause: 0,
             activity_marquee_sel: 0,
+            snapshot_marquee_offset: 0,
+            snapshot_marquee_forward: true,
+            snapshot_marquee_pause: 0,
+            snapshot_marquee_key: String::new(),
             marquee_epoch: Instant::now(),
             marquee_phase: 0,
             // Default to one step so direct unit-test callers of the
@@ -1211,6 +1230,34 @@ impl AppState {
             self.activity_marquee_forward = true;
             self.activity_marquee_pause = 0;
             self.activity_marquee_sel = new_sel;
+        }
+    }
+
+    /// Advance the Snapshot popup's Title-value marquee by one tick.
+    ///
+    /// Same ping-pong mechanics as the others over the dedicated `snapshot_marquee_*`
+    /// state. `text_disp_w` is the Title value's display width and `col_w` its
+    /// value-column width; call once per render while a Snapshot popup is open.
+    pub fn advance_snapshot_marquee(&mut self, text_disp_w: usize, col_w: usize) {
+        let steps = self.marquee_steps_due;
+        step_marquee(
+            &mut self.snapshot_marquee_offset,
+            &mut self.snapshot_marquee_forward,
+            &mut self.snapshot_marquee_pause,
+            text_disp_w,
+            col_w,
+            steps,
+        );
+    }
+
+    /// Reset the Snapshot marquee when a DIFFERENT snapshot opens (keyed by the
+    /// popup title, which is unique per variation / history event / leg).
+    pub fn reset_snapshot_marquee_if_changed(&mut self, key: &str) {
+        if key != self.snapshot_marquee_key {
+            self.snapshot_marquee_offset = 0;
+            self.snapshot_marquee_forward = true;
+            self.snapshot_marquee_pause = 0;
+            self.snapshot_marquee_key = key.to_string();
         }
     }
 

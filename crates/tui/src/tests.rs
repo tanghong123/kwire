@@ -2512,6 +2512,7 @@ mod tests {
             "about",
             "add",
             "import",
+            "series",
             "pause-all",
             "settings",
             "start-all",
@@ -5786,18 +5787,21 @@ mod tests {
     // #53 — :download-series command
     // -----------------------------------------------------------------------
 
-    /// `:download-series` / `:series` still dispatch but are unadvertised.
+    /// `:series` is advertised (it takes an Open Library series URL/key); the
+    /// `:download-series` alias stays unadvertised — both still dispatch.
     #[test]
-    fn download_series_not_advertised() {
+    fn series_advertised_alias_is_not() {
         let mut app = AppState::new();
         app.on_input(key(KeyCode::Char(':')));
         app.on_input(key(KeyCode::Tab));
-        for cmd in ["download-series", "series"] {
-            assert!(
-                !app.completion_candidates.iter().any(|c| c == cmd),
-                "command '{cmd}' must not be advertised in Tab-completion"
-            );
-        }
+        assert!(
+            app.completion_candidates.iter().any(|c| c == "series"),
+            "command ':series' must be advertised in Tab-completion"
+        );
+        assert!(
+            !app.completion_candidates.iter().any(|c| c == "download-series"),
+            "alias ':download-series' must not be advertised in Tab-completion"
+        );
     }
 
     #[test]

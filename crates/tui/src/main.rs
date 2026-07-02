@@ -710,9 +710,12 @@ async fn handle_command_async(
         "reorganize" => {
             reorganize_cmd(app, handles).await;
         }
-        // #53 — add the selected book's series siblings to the current list
+        // #53 — series import. With NO argument: look up the series the SELECTED
+        // book belongs to (multi-source). With an Open Library series URL/key
+        // argument: import that series directly. With any other argument: treat
+        // it as a title to resolve.
         "download-series" | "series" => {
-            download_series_cmd(app, handles, ui_tx).await;
+            download_series_cmd(app, handles, ui_tx, arg).await;
         }
         // #55 — toggle mouse capture on/off
         "mouse" => {
@@ -1900,6 +1903,11 @@ async fn add_md5_cmd(app: &mut AppState, handles: &EngineHandles, md5: &str) {
 ///
 /// On success returns `(member titles in reading order, series name)`. `Err`
 /// carries a user-facing message for each failure path.
+///
+/// The live `:series` flow now guards the resolved series inline (and resolves
+/// through multiple sources), so this pure validator is retained as the tested
+/// specification of the no-title / no-series / found-siblings contract.
+#[cfg(test)]
 pub(crate) fn plan_series_add(
     seed_title: &str,
     series: Option<&libgen_core::series::Series>,
@@ -1923,9 +1931,26 @@ pub(crate) fn plan_series_add(
     Ok((titles, series.name.clone()))
 }
 
-/// `:download-series` (alias `:series`) — for the currently selected book, look
-/// up the series it belongs to and add the sibling volumes to the CURRENT list,
-/// then query them.
+/// What `:series` should look up, decided from the command argument.
+enum SeriesTask {
+    /// An explicit Open Library series reference (`:series <url|/series/OL…L|OL…L>`)
+    /// — imported directly, no seed book needed.
+    ByRef {
+        key_ref: String,
+        name_hint: Option<String>,
+    },
+    /// A title/author to resolve through the multi-source path — either the
+    /// selected book (`:series` with no arg) or a typed title (`:series <title>`).
+    ByBook { title: String, author: String },
+}
+
+/// `:series` (alias `:download-series`) — import a book series as a SEPARATE
+/// "{name} (series)" list, then query/download every member.
+///
+/// * `:series` (no arg)  — look up the series the SELECTED book belongs to,
+///   consulting Open Library → libgen → Goodreads (first with ≥2 members wins).
+/// * `:series <OL url|key>` — import that Open Library series directly.
+/// * `:series <title>`   — resolve a typed title through the same multi-source path.
 ///
 /// Mirrors `commands::download_series`' locking: the seed `(title, author)` is
 /// read under a BRIEF orch lock that is then DROPPED; the series lookup (the
@@ -1935,77 +1960,112 @@ async fn download_series_cmd(
     app: &mut AppState,
     handles: &EngineHandles,
     ui_tx: &mpsc::UnboundedSender<EngineEvent>,
+    arg: &str,
 ) {
-    let Some(orch_arc) = active_orch(handles).await else {
-        app.status_msg = Some("No active list".into());
-        return;
-    };
-    let Some(fb) = app.flat.get(app.selected) else {
-        app.status_msg = Some("No book selected".into());
-        return;
-    };
-    let group_index = fb.group_index;
-    let book_index = fb.book_index_in_group;
+    let arg = arg.trim();
 
-    // 1. Resolve the seed (title, author) under a BRIEF orch lock, then drop it.
-    let (title, author) = {
-        let guard = orch_arc.lock().await;
-        let snap = match guard.snapshot() {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("download_series: snapshot: {e}");
-                app.status_msg = Some(format!("Series lookup failed: {e}"));
-                return;
-            }
+    // 1. Decide the task from the argument.
+    let task = if arg.is_empty() {
+        // No argument → the currently selected book (requires an active list).
+        let Some(orch_arc) = active_orch(handles).await else {
+            app.status_msg = Some("No active list".into());
+            return;
         };
-        match snap
-            .groups
-            .get(group_index)
-            .and_then(|g| g.books.get(book_index))
-        {
-            Some(b) => (b.input.title.clone(), b.input.authors.join(", ")),
-            None => {
-                app.status_msg = Some("No book selected".into());
-                return;
+        let Some(fb) = app.flat.get(app.selected) else {
+            app.status_msg = Some("No book selected".into());
+            return;
+        };
+        let group_index = fb.group_index;
+        let book_index = fb.book_index_in_group;
+
+        // Resolve the seed (title, author) under a BRIEF orch lock, then drop it.
+        let (title, author) = {
+            let guard = orch_arc.lock().await;
+            let snap = match guard.snapshot() {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("download_series: snapshot: {e}");
+                    app.status_msg = Some(format!("Series lookup failed: {e}"));
+                    return;
+                }
+            };
+            match snap
+                .groups
+                .get(group_index)
+                .and_then(|g| g.books.get(book_index))
+            {
+                Some(b) => (b.input.title.clone(), b.input.authors.join(", ")),
+                None => {
+                    app.status_msg = Some("No book selected".into());
+                    return;
+                }
             }
+        }; // orch lock dropped here — the network lookup runs OFF any lock.
+
+        if title.trim().is_empty() {
+            app.status_msg = Some("No title on the selected book".into());
+            return;
         }
-    }; // orch lock dropped here — the network lookup runs OFF any lock.
+        SeriesTask::ByBook { title, author }
+    } else if let Some((key_ref, name_hint)) = libgen_core::series::parse_series_ref(arg) {
+        // An Open Library series URL / path / bare key.
+        SeriesTask::ByRef { key_ref, name_hint }
+    } else {
+        // Any other argument → treat it as a title to resolve.
+        SeriesTask::ByBook {
+            title: arg.to_string(),
+            author: String::new(),
+        }
+    };
 
-    if title.trim().is_empty() {
-        app.status_msg = Some("No title on the selected book".into());
-        return;
-    }
+    // 2. Show an immediate in-progress cue, then run the (multi-second) series
+    // lookup + list creation OFF the command-dispatch path so the UI can repaint.
+    // The spawned task posts the outcome back via EngineEvent::Status.
+    app.status_msg = Some("Searching for series info (takes a few seconds)\u{2026}".into());
 
-    // 2. Show an immediate in-progress cue, then run the (multi-second) Open
-    // Library lookup + list creation OFF the command-dispatch path so the UI can
-    // repaint. The spawned task posts the outcome back via EngineEvent::Status.
-    app.status_msg =
-        Some("Searching Open Library for series info (takes a few seconds)\u{2026}".into());
-
-    let series_client = {
+    // Offline replay (recorded fixtures) vs live network — shared by every source.
+    let replay_series_dir = {
         let cfg = handles.config.lock().expect("config poisoned").clone();
-        match &cfg.replay_dir {
-            Some(dir) => libgen_core::series::SeriesClient::replay(dir.join("series")),
-            None => libgen_core::series::SeriesClient::live(),
-        }
+        cfg.replay_dir.map(|d| d.join("series"))
     };
     let handles_cl = handles.clone();
     let tx = ui_tx.clone();
     tokio::spawn(async move {
-        let series = match series_client.lookup(&title, &author).await {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("download_series: lookup: {e}");
-                let _ = tx.send(EngineEvent::Status(format!("Series lookup failed: {e}")));
-                return;
+        // Resolve the series per the task, mapping each failure to a message.
+        let series: Option<libgen_core::series::Series> = match task {
+            SeriesTask::ByRef { key_ref, name_hint } => {
+                let client = match &replay_series_dir {
+                    Some(dir) => libgen_core::series::SeriesClient::replay(dir),
+                    None => libgen_core::series::SeriesClient::live(),
+                };
+                match client.series_by_key(&key_ref, name_hint.as_deref()).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!("download_series: series_by_key: {e}");
+                        let _ =
+                            tx.send(EngineEvent::Status(format!("Series lookup failed: {e}")));
+                        return;
+                    }
+                }
+            }
+            SeriesTask::ByBook { title, author } => {
+                let source = match &replay_series_dir {
+                    Some(dir) => libgen_core::series::SeriesSource::Replay(dir),
+                    None => libgen_core::series::SeriesSource::Live,
+                };
+                libgen_core::series::resolve_series(&title, &author, source)
+                    .await
+                    .map(|(s, _src)| s)
             }
         };
-        // Validate (pure; surfaces the no-title / no-series message). On success
-        // the series is guaranteed present with ≥1 usable member.
-        let series = match plan_series_add(&title, series.as_ref()) {
-            Ok(_) => series.expect("plan_series_add guarantees a series on Ok"),
-            Err(e) => {
-                let _ = tx.send(EngineEvent::Status(e));
+
+        // No usable series → a clear, context-appropriate message.
+        let series = match series {
+            Some(s) if !s.members.is_empty() => s,
+            _ => {
+                let _ = tx.send(EngineEvent::Status(
+                    "No book series found (tried Open Library, libgen, Goodreads)".into(),
+                ));
                 return;
             }
         };

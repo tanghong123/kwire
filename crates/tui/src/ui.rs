@@ -185,7 +185,7 @@ pub fn render(frame: &mut Frame, app: &mut AppState) {
             }
             Modal::Reorganize { diff, selected } => render_reorganize_modal(frame, &diff, selected),
             Modal::Snapshot { title, lines, .. } => {
-                render_snapshot_modal(frame, &title, &lines);
+                render_snapshot_modal(frame, app, &title, &lines);
             }
             Modal::About => render_about_modal(frame),
         }
@@ -329,9 +329,9 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     //   1 — blank
     //   1 — NO READING LISTS YET
     //   1 — blank
-    //   3 — command hints
-    // Total = 4 + 1 + 6 + 1 + 2 + 1 + 1 + 1 + 3 = 20 lines
-    let content_h: u16 = 20;
+    //   4 — command hints
+    // Total = 4 + 1 + 6 + 1 + 2 + 1 + 1 + 1 + 4 = 21 lines
+    let content_h: u16 = 21;
     let top_pad = outer[0].height.saturating_sub(content_h) / 2;
 
     let content_area = Layout::vertical([
@@ -351,7 +351,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
         Constraint::Length(1), // blank
         Constraint::Length(1), // NO READING LISTS YET
         Constraint::Length(1), // blank
-        Constraint::Length(3), // command hints
+        Constraint::Length(4), // command hints
     ])
     .split(content_area);
 
@@ -387,6 +387,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     let hint_rows: &[(&str, &str)] = &[
         (": import ~/list.md", "add a Markdown or JSON reading list"),
         (": add", "add a single book by hand"),
+        (": series <ol-url>", "download a whole Open Library series"),
         ("?", "all keys & commands"),
     ];
 
@@ -414,7 +415,7 @@ fn render_empty(frame: &mut Frame, app: &mut AppState) {
     // Center the block: find total width of a hint row
     let hint_row_w =
         (cmd_col_w + 2 + hint_rows.iter().map(|(_, d)| d.len()).max().unwrap_or(0)) as u16;
-    let hint_area = centered_rect(hint_row_w.min(area.width), 3, parts[8]);
+    let hint_area = centered_rect(hint_row_w.min(area.width), 4, parts[8]);
     frame.render_widget(Paragraph::new(hint_lines), hint_area);
 
     // 6. Bordered command-input box at the bottom. The input scrolls to keep the
@@ -3911,6 +3912,7 @@ pub(crate) fn help_page_rows(page: HelpPage) -> (Vec<HelpRow>, Vec<HelpRow>) {
                 Key(":settings", "open settings"),
                 Key(":import <path>", "add a list from a file"),
                 Key(":add <title|md5>", "add one book"),
+                Key(":series [ol-url]", "import an Open Library series"),
                 Key(":start-all", "resume all downloads"),
                 Key(":pause-all", "pause all downloads"),
                 Blank,
@@ -3928,7 +3930,7 @@ pub(crate) fn help_page_rows(page: HelpPage) -> (Vec<HelpRow>, Vec<HelpRow>) {
                 Key(":refresh-mirrors", "refresh mirror list"),
                 Key(":cleanup", "remove leftover .part files"),
                 Key(":reorganize", "move files into the naming layout"),
-                Key(":series / :download-series", "download a series"),
+                Key(":download-series", "alias of :series (selected book)"),
                 Key(":mouse", "toggle mouse capture"),
                 Key(":help", "open this help"),
                 Key(":quit / :q", "quit"),
@@ -5135,7 +5137,12 @@ fn hint_line(s: &str) -> Line<'static> {
 ///   esc  close      ← hint
 /// └─ 2-cell margin
 /// ```
-fn render_snapshot_modal(frame: &mut Frame, title: &str, lines: &[(String, String)]) {
+fn render_snapshot_modal(
+    frame: &mut Frame,
+    app: &mut AppState,
+    title: &str,
+    lines: &[(String, String)],
+) {
     let n = lines.len() as u16;
     // border(2) + top-margin(1) + content rows + rule(1) + hint(1) + bottom-margin(1)
     let height = (n + 6).max(8).min(28);
@@ -5165,13 +5172,34 @@ fn render_snapshot_modal(frame: &mut Frame, title: &str, lines: &[(String, Strin
     ])
     .split(padded);
 
-    // Label / value rows.
+    // The `Title` value is free-text and often wider than this fixed-width popup,
+    // so it marquee-scrolls (same ping-pong logic as the Detail header) instead of
+    // clipping. The label column is 18 cols; the value gets the rest.
+    const LABEL_W: usize = 18;
+    let value_avail = (padded.width as usize).saturating_sub(LABEL_W).max(4);
+    app.reset_snapshot_marquee_if_changed(title);
+    let title_disp_w = lines
+        .iter()
+        .find(|(l, _)| l == "Title")
+        .map(|(_, v)| crate::textfit::display_width(v))
+        .unwrap_or(0);
+    app.advance_snapshot_marquee(title_disp_w, value_avail);
+
+    // Label / value rows. The Title value windows through the marquee offset when
+    // it overflows; every other value renders as-is.
     let content_lines: Vec<Line> = lines
         .iter()
         .map(|(label, value)| {
+            let shown = if label == "Title"
+                && crate::textfit::display_width(value) > value_avail
+            {
+                crate::textfit::marquee_window(value, value_avail, app.snapshot_marquee_offset)
+            } else {
+                value.clone()
+            };
             Line::from(vec![
                 Span::styled(format!("{:<18}", label), style_dim()),
-                Span::styled(value.clone(), style_normal()),
+                Span::styled(shown, style_normal()),
             ])
         })
         .collect();
