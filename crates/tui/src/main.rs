@@ -1939,64 +1939,14 @@ enum SeriesTask {
         key_ref: String,
         name_hint: Option<String>,
     },
-    /// A title/author to resolve through the multi-source path — either the
-    /// selected book (`:series` with no arg) or a typed title (`:series <title>`).
-    ByBook { title: String, author: String },
-}
-
-/// Refine the reverse-lookup seed for the selected book using its discovered
-/// candidates. The book's own `input` may hold a bare series name and no author
-/// (a manual add), which won't reverse-resolve. A candidate carries a real
-/// bibliographic title + author, so prefer:
-///   * TITLE  — the candidate the user is focused on in the Detail modal, else
-///     the best-scoring candidate; fall back to the input title.
-///   * AUTHOR — the input author when set, else the picked candidate's author,
-///     else any candidate that has one (backfill so the query isn't title-only).
-fn refine_series_seed(app: &AppState, input_title: String, input_author: String) -> (String, String) {
-    let Some(fb) = app.flat.get(app.selected) else {
-        return (input_title, input_author);
-    };
-    let versions = &fb.book.versions;
-    // A usable series seed is a REAL member — not a box set / omnibus, which
-    // carries no series linkage and won't reverse-resolve.
-    let is_member = |v: &&libgen_engine::ViewVariation| {
-        !v.title.trim().is_empty() && !libgen_core::series::is_box_set(&v.title)
-    };
-    // The candidate the user chose / is looking at in the Detail modal.
-    let focused = match &app.modal {
-        Some(Modal::Detail { selected, .. }) => versions.get(*selected),
-        _ => None,
-    };
-    let best_member = versions
-        .iter()
-        .filter(is_member)
-        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
-    // Prefer: the focused candidate when it's a real member; else the best-scoring
-    // member; else the focused candidate as-is; else the first candidate.
-    let pick = focused
-        .filter(|v| is_member(v))
-        .or(best_member)
-        .or(focused)
-        .or_else(|| versions.first());
-
-    let title = pick
-        .map(|v| v.title.clone())
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or(input_title);
-    let author = if !input_author.trim().is_empty() {
-        input_author
-    } else {
-        pick.map(|v| v.author.clone())
-            .filter(|a| !a.trim().is_empty())
-            .or_else(|| {
-                versions
-                    .iter()
-                    .map(|v| v.author.clone())
-                    .find(|a| !a.trim().is_empty())
-            })
-            .unwrap_or_default()
-    };
-    (title, author)
+    /// A book (`:series` with no arg) or typed title (`:series <title>`) to
+    /// resolve. `seeds` are the book's discovered candidates (empty for a typed
+    /// title); the resolver tries them best-first before the `title`/`author`.
+    ByBook {
+        title: String,
+        author: String,
+        seeds: Vec<libgen_core::series::SeedCandidate>,
+    },
 }
 
 /// `:series` (alias `:download-series`) — import a book series as a SEPARATE
@@ -2033,7 +1983,24 @@ async fn download_series_cmd(
         let group_index = fb.group_index;
         let book_index = fb.book_index_in_group;
 
-        // Resolve the seed (title, author) under a BRIEF orch lock, then drop it.
+        // The book's discovered candidates become the reverse-lookup seeds: a
+        // manual `:add "<series name>"` has the SERIES NAME as its input title
+        // (which only matches box sets and never resolves), so the resolver seeds
+        // from real member candidates instead. `armed` = a copy the user already
+        // selected / is downloading (state != "available").
+        let seeds: Vec<libgen_core::series::SeedCandidate> = fb
+            .book
+            .versions
+            .iter()
+            .map(|v| libgen_core::series::SeedCandidate {
+                title: v.title.clone(),
+                author: v.author.clone(),
+                score: v.score,
+                armed: v.state != "available",
+            })
+            .collect();
+
+        // Resolve the book input (title, author) under a BRIEF orch lock.
         let (title, author) = {
             let guard = orch_arc.lock().await;
             let snap = match guard.snapshot() {
@@ -2057,24 +2024,24 @@ async fn download_series_cmd(
             }
         }; // orch lock dropped here — the network lookup runs OFF any lock.
 
-        if title.trim().is_empty() {
+        if title.trim().is_empty() && seeds.is_empty() {
             app.status_msg = Some("No title on the selected book".into());
             return;
         }
-        // A manual `:add "<series name>"` seeds the book with the SERIES NAME as
-        // its title and no author — which never reverse-resolves (the series name
-        // matches only box sets, which carry no series key). The candidate the
-        // user chose carries a real member title + author, so seed from THAT.
-        let (title, author) = refine_series_seed(app, title, author);
-        SeriesTask::ByBook { title, author }
+        SeriesTask::ByBook {
+            title,
+            author,
+            seeds,
+        }
     } else if let Some((key_ref, name_hint)) = libgen_core::series::parse_series_ref(arg) {
         // An Open Library series URL / path / bare key.
         SeriesTask::ByRef { key_ref, name_hint }
     } else {
-        // Any other argument → treat it as a title to resolve.
+        // Any other argument → treat it as a title to resolve (no candidates).
         SeriesTask::ByBook {
             title: arg.to_string(),
             author: String::new(),
+            seeds: Vec::new(),
         }
     };
 
@@ -2108,14 +2075,20 @@ async fn download_series_cmd(
                     }
                 }
             }
-            SeriesTask::ByBook { title, author } => {
+            SeriesTask::ByBook {
+                title,
+                author,
+                seeds,
+            } => {
                 let source = match &replay_series_dir {
                     Some(dir) => libgen_core::series::SeriesSource::Replay(dir),
                     None => libgen_core::series::SeriesSource::Live,
                 };
-                libgen_core::series::resolve_series(&title, &author, source)
-                    .await
-                    .map(|(s, _src)| s)
+                libgen_core::series::resolve_series_from_candidates(
+                    &seeds, &title, &author, source,
+                )
+                .await
+                .map(|(s, _src)| s)
             }
         };
 
