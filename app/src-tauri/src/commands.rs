@@ -1683,44 +1683,21 @@ pub async fn download_series(
     download_series_impl(&state, list_id, book_id).await
 }
 
-/// Choose the seed `(title, author)` for the reverse series lookup from a book
-/// and its discovered candidates. A manual add's `input` may be a bare series
-/// name with no author (e.g. "a series of unfortunate events"), which never
-/// reverse-resolves — only box sets match it. A real member candidate carries a
-/// resolvable member title + author, so prefer the best-scoring NON-collection
-/// candidate, backfilling the author from the candidates when the book has none.
-/// Falls back to the book input when there are no usable candidates.
-pub(crate) fn refine_series_seed(book: &libgen_core::model::BookRequest) -> (String, String) {
-    use libgen_core::model::Candidate;
-    let input_title = book.input.title.clone();
-    let input_author = book.input.authors.join(", ");
-    let is_member = |c: &&Candidate| {
-        !c.title.trim().is_empty() && !libgen_core::series::is_box_set(&c.title)
-    };
-    let best_member = book
-        .candidates
+/// Map a book's [`BookRequest`] candidates to the shared [`SeedCandidate`] list
+/// the series-seed selector consumes. `armed` = a copy the user already selected
+/// / is downloading (it has a job).
+pub(crate) fn seed_candidates(
+    book: &libgen_core::model::BookRequest,
+) -> Vec<libgen_core::series::SeedCandidate> {
+    book.candidates
         .iter()
-        .filter(is_member)
-        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
-    let title = best_member
-        .map(|c| c.title.clone())
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or(input_title);
-    let author = if !input_author.trim().is_empty() {
-        input_author
-    } else {
-        best_member
-            .map(|c| c.authors.join(", "))
-            .filter(|a| !a.trim().is_empty())
-            .or_else(|| {
-                book.candidates
-                    .iter()
-                    .map(|c| c.authors.join(", "))
-                    .find(|a| !a.trim().is_empty())
-            })
-            .unwrap_or_default()
-    };
-    (title, author)
+        .map(|c| libgen_core::series::SeedCandidate {
+            title: c.title.clone(),
+            author: c.authors.join(", "),
+            score: c.score,
+            armed: c.job.is_some(),
+        })
+        .collect()
 }
 
 /// Headless-testable core of [`download_series`] (takes `&AppState`, no Tauri
@@ -1731,19 +1708,24 @@ pub(crate) async fn download_series_impl(
     list_id: Option<String>,
     book_id: String,
 ) -> Result<ViewLibrary, String> {
-    // 1. Resolve the seed (title + author) under a BRIEF orch lock — from the
-    // book's best real-member candidate, not its (possibly series-name) input.
+    // 1. Gather the book input + its candidate seeds under a BRIEF orch lock. A
+    // manual add's input title may be a bare series name that never resolves, so
+    // the resolver seeds from real member candidates first.
     let orch = resolve_arc(state, list_id).await?;
-    let (title, author) = {
+    let (title, author, seeds) = {
         let guard = orch.lock().await;
         let pos = position_for(&guard, &book_id)?;
         let list = guard.snapshot().map_err(err)?;
         let book = book_at(&list, &pos.group_path, pos.book_index)
             .ok_or_else(|| format!("book {book_id} not found"))?;
-        refine_series_seed(book)
+        (
+            book.input.title.clone(),
+            book.input.authors.join(", "),
+            seed_candidates(book),
+        )
     }; // orch lock dropped here — the network lookup runs OFF any lock.
 
-    if title.trim().is_empty() {
+    if title.trim().is_empty() && seeds.is_empty() {
         return Err(libgen_core::model::ui_msg("err.series_no_title", &[]));
     }
 
@@ -1758,7 +1740,7 @@ pub(crate) async fn download_series_impl(
         Some(dir) => libgen_core::series::SeriesSource::Replay(dir),
         None => libgen_core::series::SeriesSource::Live,
     };
-    let series = libgen_core::series::resolve_series(&title, &author, source)
+    let series = libgen_core::series::resolve_series_from_candidates(&seeds, &title, &author, source)
         .await
         .map(|(s, _src)| s);
 
@@ -2382,10 +2364,16 @@ pub mod testsupport {
         super::add_manual_book_inner(state, title.to_string(), author.map(|s| s.to_string())).await
     }
 
-    /// The `(title, author)` seed [`download_series`] derives from a book + its
-    /// candidates — exposed so a flow test can show what the reverse lookup runs on.
-    pub fn refine_series_seed(book: &libgen_core::model::BookRequest) -> (String, String) {
-        super::refine_series_seed(book)
+    /// The ranked `(title, author)` reverse-lookup seeds [`download_series`]
+    /// derives from a book + its candidates — exposed so a flow test can show
+    /// what the lookup runs on.
+    pub fn series_seeds(book: &libgen_core::model::BookRequest) -> Vec<(String, String)> {
+        let seeds = super::seed_candidates(book);
+        libgen_core::series::order_series_seeds(
+            &seeds,
+            &book.input.title,
+            &book.input.authors.join(", "),
+        )
     }
 
     /// Headless `download_series` (the Tauri command's core) — for driving the

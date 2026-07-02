@@ -48,13 +48,12 @@ async fn wait_until<P: Fn(&DownloadList) -> bool>(
     }
 }
 
-/// Hermetic (offline) guard for the seed selection the live test exercises: a
-/// manual add whose INPUT title is the bare series name must seed from the best
-/// real-member candidate — NOT the series name, NOT a box set. Locks in the
-/// `is_box_set` fix (the previous `is_collection` misclassified every
-/// "A Series of Unfortunate Events …" member because the title contains "series").
+/// Hermetic (offline) guard: a book whose candidates all carry the series name
+/// must seed from a real member — not the series-name input, not a box set. The
+/// full case-3 ranking (majority-keyword ignore) is unit-tested in
+/// `libgen_core::series`; this checks the desktop mapping end of it.
 #[test]
-fn refine_seed_prefers_member_over_box_set_and_series_name_input() {
+fn series_seeds_prefer_member_over_box_set_and_series_name_input() {
     use libgen_core::model::{BookInput, BookRequest, Candidate};
     let cand = |title: &str, author: &str, score: f32| -> Candidate {
         serde_json::from_value(serde_json::json!({
@@ -72,9 +71,14 @@ fn refine_seed_prefers_member_over_box_set_and_series_name_input() {
         cand("A Series Of Unfortunate Events 10 Slippery Slope", "Snicket, Lemony", 0.49),
         cand("A Series of Unfortunate Events: The Beatrice Letters", "Lemony Snicket", 0.48),
     ];
-    let (title, author) = testsupport::refine_series_seed(&book);
-    assert_eq!(title, "A Series Of Unfortunate Events 10 Slippery Slope");
-    assert_eq!(author, "Snicket, Lemony");
+    let seeds = testsupport::series_seeds(&book);
+    assert_eq!(seeds[0].0, "A Series Of Unfortunate Events 10 Slippery Slope");
+    assert_eq!(seeds[0].1, "Snicket, Lemony");
+    assert!(
+        !seeds.iter().any(|(t, _)| t.contains("Collection")
+            || *t == "a series of unfortunate events"),
+        "no box set / series-name seed: {seeds:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -121,12 +125,12 @@ async fn download_series_from_series_name_add_resolves_via_candidate() {
             c.score, c.title, c.authors
         );
     }
-    let (seed_title, seed_author) = testsupport::refine_series_seed(book);
-    eprintln!("SEED -> title={seed_title:?} author={seed_author:?}");
+    let seeds = testsupport::series_seeds(book);
+    eprintln!("SEEDS -> {seeds:?}");
     assert_ne!(
-        seed_title.to_lowercase(),
+        seeds[0].0.to_lowercase(),
         "a series of unfortunate events",
-        "the seed must NOT be the bare series name (that never reverse-resolves)"
+        "the primary seed must NOT be the bare series name (never reverse-resolves)"
     );
 
     // 3) Download series — must now succeed and create a "(series)" list.
