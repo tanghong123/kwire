@@ -879,26 +879,38 @@ fn series_prefix(title: &str) -> Option<String> {
     Some(prefix.to_string())
 }
 
-/// Box-set / collection / bundle detector. Returns `true` for titles that are
-/// NOT a single volume: box sets, omnibuses, "complete" sets, "series"
-/// bundles, and number-range bundles like "1-11", "vol. 1-12", "books 1-3",
-/// "N-book". Public so a frontend can avoid seeding a reverse series lookup from
-/// a collection title (which carries no series linkage and won't resolve).
-pub fn is_collection(title: &str) -> bool {
+/// Box-set / bundle keywords that mark a title as NOT a single volume.
+const BOX_SET_KEYWORDS: &[&str] = &[
+    "box set",
+    "boxed set",
+    "boxset",
+    "box-set",
+    "collection",
+    "complete",
+    "omnibus",
+    "gift set",
+    "bundle",
+];
+
+/// Box-set / collection / bundle detector for the OL title-prefix fallback:
+/// [`BOX_SET_KEYWORDS`] plus the bare word **"series"** (an untagged sibling
+/// titled "… Series …" is usually a bundle) plus number-range bundles.
+fn is_collection(title: &str) -> bool {
     let lower = title.to_lowercase();
-    const KEYWORDS: &[&str] = &[
-        "box set",
-        "boxed set",
-        "boxset",
-        "box-set",
-        "collection",
-        "complete",
-        "omnibus",
-        "series",
-        "gift set",
-        "bundle",
-    ];
-    if KEYWORDS.iter().any(|k| lower.contains(k)) {
+    if lower.contains("series") {
+        return true;
+    }
+    is_box_set(title)
+}
+
+/// Narrow box-set / bundle detector: [`BOX_SET_KEYWORDS`] + number-range bundles
+/// like "1-11", "vol. 1-12", "books 1-3", "N-book" — but NOT the bare word
+/// "series". Public so a frontend can avoid seeding a reverse series lookup from
+/// a box-set candidate without misclassifying a real member whose title happens
+/// to contain the series name (e.g. every "A Series of Unfortunate Events N").
+pub fn is_box_set(title: &str) -> bool {
+    let lower = title.to_lowercase();
+    if BOX_SET_KEYWORDS.iter().any(|k| lower.contains(k)) {
         return true;
     }
     has_number_range(&lower)
@@ -2052,6 +2064,21 @@ mod ref_parse_tests {
         assert_eq!(parse_series_ref("/works/OL45804W"), None);
         assert_eq!(parse_series_ref("not a key"), None);
         assert_eq!(parse_series_ref(""), None);
+    }
+
+    #[test]
+    fn is_box_set_flags_bundles_but_not_bare_series_word() {
+        // Real members whose titles contain "series" are NOT box sets…
+        assert!(!is_box_set("A Series Of Unfortunate Events 10 Slippery Slope"));
+        assert!(!is_box_set("A Series of Unfortunate Events: The Beatrice Letters"));
+        // …but box sets / omnibuses / number ranges are.
+        assert!(is_box_set("A Series of Unfortunate Events Collection"));
+        assert!(is_box_set("A Series of Unfortunate Events Collection: Books 4-6"));
+        assert!(is_box_set("The Complete Wreck"));
+        // `is_collection` (the OL-prefix detector) still treats bare "series" as a
+        // bundle — unchanged behavior.
+        assert!(is_collection("A Series of Unfortunate Events 10"));
+        assert!(!is_collection("The Beatrice Letters"));
     }
 
     #[test]
