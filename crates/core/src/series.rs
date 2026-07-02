@@ -879,8 +879,12 @@ fn series_prefix(title: &str) -> Option<String> {
     Some(prefix.to_string())
 }
 
-/// Box-set / bundle keywords that mark a title as NOT a single volume.
-const BOX_SET_KEYWORDS: &[&str] = &[
+/// Collection / box-set / bundle keywords that mark a title as NOT a single
+/// volume. Shared by [`is_collection`] and the series-seed selector
+/// ([`order_series_seeds`]) — the latter additionally IGNORES any keyword shared
+/// by a majority of a book's candidates (it's part of the series name, not a
+/// bundle marker).
+const COLLECTION_KEYWORDS: &[&str] = &[
     "box set",
     "boxed set",
     "boxset",
@@ -888,29 +892,19 @@ const BOX_SET_KEYWORDS: &[&str] = &[
     "collection",
     "complete",
     "omnibus",
+    "series",
     "gift set",
     "bundle",
 ];
 
-/// Box-set / collection / bundle detector for the OL title-prefix fallback:
-/// [`BOX_SET_KEYWORDS`] plus the bare word **"series"** (an untagged sibling
-/// titled "… Series …" is usually a bundle) plus number-range bundles.
+/// Box-set / collection / bundle detector. Returns `true` for titles that are
+/// NOT a single volume: box sets, omnibuses, "complete"/"series" bundles, and
+/// number-range bundles like "1-11", "vol. 1-12", "books 1-3", "N-book". Used to
+/// prune non-member entries out of an already-discovered member list (the OL
+/// title-prefix and Goodreads paths).
 fn is_collection(title: &str) -> bool {
     let lower = title.to_lowercase();
-    if lower.contains("series") {
-        return true;
-    }
-    is_box_set(title)
-}
-
-/// Narrow box-set / bundle detector: [`BOX_SET_KEYWORDS`] + number-range bundles
-/// like "1-11", "vol. 1-12", "books 1-3", "N-book" — but NOT the bare word
-/// "series". Public so a frontend can avoid seeding a reverse series lookup from
-/// a box-set candidate without misclassifying a real member whose title happens
-/// to contain the series name (e.g. every "A Series of Unfortunate Events N").
-pub fn is_box_set(title: &str) -> bool {
-    let lower = title.to_lowercase();
-    if BOX_SET_KEYWORDS.iter().any(|k| lower.contains(k)) {
+    if COLLECTION_KEYWORDS.iter().any(|k| lower.contains(k)) {
         return true;
     }
     has_number_range(&lower)
@@ -1983,6 +1977,155 @@ pub async fn resolve_series(
     None
 }
 
+/// Cap on the number of candidate titles the multi-seed resolver tries.
+const MAX_SEEDS: usize = 5;
+
+/// A book's discovered download candidate, reduced to what series-seed selection
+/// needs. Both frontends map their own candidate/variation type onto this.
+#[derive(Debug, Clone)]
+pub struct SeedCandidate {
+    /// The candidate's own (bibliographic) title, as the mirror reported it.
+    pub title: String,
+    /// The candidate's author(s), joined; may be empty.
+    pub author: String,
+    /// Matcher confidence 0.0..=1.0.
+    pub score: f32,
+    /// `true` when this copy is already selected / armed / downloading — the
+    /// user's explicit pick.
+    pub armed: bool,
+}
+
+/// Order candidate titles into a preference-ranked list of `(title, author)`
+/// seeds for the reverse (book→series) lookup — best first, de-duplicated, at
+/// most [`MAX_SEEDS`]. A manual add's INPUT title may be a bare series name that
+/// never resolves, so we seed from real member CANDIDATES instead. Cases:
+///
+///  1. **Armed copies present** → those first (by score), then top up the
+///     remainder from the unselected candidates (by score).
+///  2. **< 3 candidates** → all of them, by score.
+///  3. **≥ 3 candidates** → drop box-set titles, but IGNORE any collection
+///     keyword shared by a MAJORITY of candidates (it is part of the series
+///     name, not a bundle marker); keep the survivors by score (fall back to all
+///     by score if the filter removes everything).
+///
+/// With no usable candidate the book `input` is the sole (last-resort) seed.
+pub fn order_series_seeds(
+    cands: &[SeedCandidate],
+    input_title: &str,
+    input_author: &str,
+) -> Vec<(String, String)> {
+    let non_empty: Vec<&SeedCandidate> =
+        cands.iter().filter(|c| !c.title.trim().is_empty()).collect();
+    if non_empty.is_empty() {
+        return vec![(input_title.to_string(), input_author.to_string())];
+    }
+    let by_score = |v: &mut Vec<&SeedCandidate>| {
+        v.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    };
+
+    let armed: Vec<&SeedCandidate> = non_empty.iter().copied().filter(|c| c.armed).collect();
+    let mut ranked: Vec<&SeedCandidate> = if !armed.is_empty() {
+        // Case 1: armed first, then fill from the unselected.
+        let mut a = armed.clone();
+        by_score(&mut a);
+        let mut rest: Vec<&SeedCandidate> =
+            non_empty.iter().copied().filter(|c| !c.armed).collect();
+        by_score(&mut rest);
+        a.extend(rest);
+        a
+    } else if non_empty.len() < 3 {
+        // Case 2: all candidates by score.
+        let mut a = non_empty.clone();
+        by_score(&mut a);
+        a
+    } else {
+        // Case 3: majority-keyword-aware member filter, then by score.
+        let members = majority_member_filter(&non_empty);
+        let mut m = if members.is_empty() {
+            non_empty.clone()
+        } else {
+            members
+        };
+        by_score(&mut m);
+        m
+    };
+
+    // A candidate's seed author: its own, else the book input, else any candidate.
+    let backfill = |c: &SeedCandidate| -> String {
+        if !c.author.trim().is_empty() {
+            c.author.clone()
+        } else if !input_author.trim().is_empty() {
+            input_author.to_string()
+        } else {
+            non_empty
+                .iter()
+                .map(|x| x.author.clone())
+                .find(|a| !a.trim().is_empty())
+                .unwrap_or_default()
+        }
+    };
+
+    // De-dupe by normalized title, cap at MAX_SEEDS.
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    ranked.retain(|c| seen.insert(norm(&c.title)));
+    for c in ranked.into_iter().take(MAX_SEEDS) {
+        out.push((c.title.clone(), backfill(c)));
+    }
+    out
+}
+
+/// Case-3 helper: keep candidates that are NOT box sets, treating a collection
+/// keyword shared by a MAJORITY of candidates as part of the series name (so it
+/// is ignored) and number-range bundles as always box sets.
+fn majority_member_filter<'a>(cands: &[&'a SeedCandidate]) -> Vec<&'a SeedCandidate> {
+    let n = cands.len();
+    let lowers: Vec<String> = cands.iter().map(|c| c.title.to_lowercase()).collect();
+    let ambient: Vec<&str> = COLLECTION_KEYWORDS
+        .iter()
+        .copied()
+        .filter(|kw| lowers.iter().filter(|t| t.contains(kw)).count() * 2 > n)
+        .collect();
+    cands
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(i, _)| {
+            let lower = &lowers[*i];
+            let boxy = COLLECTION_KEYWORDS
+                .iter()
+                .copied()
+                .any(|kw| !ambient.contains(&kw) && lower.contains(kw))
+                || has_number_range(lower);
+            !boxy
+        })
+        .map(|(_, c)| c)
+        .collect()
+}
+
+/// Multi-seed reverse lookup (the robust path): try each ordered seed (see
+/// [`order_series_seeds`]) through [`resolve_series`] until one yields a series
+/// (≥ 2 members). The rules-picked primary seed is tried first; the rest are
+/// assurance against a mislabeled or unresolvable top pick. `None` when no seed
+/// resolves. Normally the first seed resolves (a single lookup).
+pub async fn resolve_series_from_candidates(
+    cands: &[SeedCandidate],
+    input_title: &str,
+    input_author: &str,
+    source: SeriesSource<'_>,
+) -> Option<(Series, &'static str)> {
+    for (title, author) in order_series_seeds(cands, input_title, input_author) {
+        if let Some(hit) = resolve_series(&title, &author, source).await {
+            return Some(hit);
+        }
+    }
+    None
+}
+
 /// One pass over the three sources with a fixed `(title, author)`. See
 /// [`resolve_series`], which wraps this with the author-degradation retry.
 async fn resolve_series_once(
@@ -2066,19 +2209,68 @@ mod ref_parse_tests {
         assert_eq!(parse_series_ref(""), None);
     }
 
+    fn seed(title: &str, author: &str, score: f32, armed: bool) -> SeedCandidate {
+        SeedCandidate {
+            title: title.into(),
+            author: author.into(),
+            score,
+            armed,
+        }
+    }
+
     #[test]
-    fn is_box_set_flags_bundles_but_not_bare_series_word() {
-        // Real members whose titles contain "series" are NOT box sets…
-        assert!(!is_box_set("A Series Of Unfortunate Events 10 Slippery Slope"));
-        assert!(!is_box_set("A Series of Unfortunate Events: The Beatrice Letters"));
-        // …but box sets / omnibuses / number ranges are.
-        assert!(is_box_set("A Series of Unfortunate Events Collection"));
-        assert!(is_box_set("A Series of Unfortunate Events Collection: Books 4-6"));
-        assert!(is_box_set("The Complete Wreck"));
-        // `is_collection` (the OL-prefix detector) still treats bare "series" as a
-        // bundle — unchanged behavior.
-        assert!(is_collection("A Series of Unfortunate Events 10"));
-        assert!(!is_collection("The Beatrice Letters"));
+    fn order_seeds_majority_keyword_is_ignored_case3() {
+        // The reported case: every candidate carries "series" (majority → part of
+        // the name, ignored), while "collection"/number-range are minority → box
+        // sets and get dropped. Members rank by score; the series name is NOT a seed.
+        let cands = vec![
+            seed("A Series of Unfortunate Events Collection", "Lemony, Lemony A", 0.62, false),
+            seed("A Series Of Unfortunate Events 10 Slippery Slope", "Snicket, Lemony", 0.49, false),
+            seed("A Series of Unfortunate Events: The Beatrice Letters", "Lemony Snicket", 0.48, false),
+            seed("A Series of Unfortunate Events Collection: Books 4-6", "Lemony Snicket", 0.45, false),
+            seed("A series of unfortunate events, 4. The miserable mill", "Lemony Snicket", 0.45, false),
+        ];
+        let seeds = order_series_seeds(&cands, "a series of unfortunate events", "");
+        let titles: Vec<&str> = seeds.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(titles[0], "A Series Of Unfortunate Events 10 Slippery Slope");
+        assert!(
+            !titles.iter().any(|t| t.contains("Collection")),
+            "box sets dropped: {titles:?}"
+        );
+        assert!(
+            !titles.iter().any(|t| *t == "a series of unfortunate events"),
+            "the bare series name is never a seed: {titles:?}"
+        );
+        assert_eq!(seeds[0].1, "Snicket, Lemony", "author backfilled from the seed");
+    }
+
+    #[test]
+    fn order_seeds_armed_first_then_fill_case1() {
+        // An armed (user-picked) copy leads, even at a lower score; the rest fill
+        // in by score behind it.
+        let cands = vec![
+            seed("Top Match Box", "A", 0.9, false),
+            seed("Picked Volume Two", "B", 0.4, true),
+            seed("Another Volume", "C", 0.7, false),
+        ];
+        let seeds = order_series_seeds(&cands, "input", "");
+        assert_eq!(seeds[0].0, "Picked Volume Two", "armed copy leads");
+        assert_eq!(seeds[1].0, "Top Match Box", "then unselected by score");
+        assert_eq!(seeds[2].0, "Another Volume");
+    }
+
+    #[test]
+    fn order_seeds_few_candidates_by_score_case2() {
+        let cands = vec![seed("Low", "", 0.3, false), seed("High", "", 0.8, false)];
+        let seeds = order_series_seeds(&cands, "input", "");
+        let titles: Vec<&str> = seeds.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(titles, ["High", "Low"]);
+    }
+
+    #[test]
+    fn order_seeds_no_candidates_falls_back_to_input() {
+        let seeds = order_series_seeds(&[], "The Bad Beginning", "Lemony Snicket");
+        assert_eq!(seeds, vec![("The Bad Beginning".to_string(), "Lemony Snicket".to_string())]);
     }
 
     #[test]
