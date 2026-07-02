@@ -25,9 +25,9 @@ brew install tanghong123/tap/kwire        # desktop app (Kwire.app)
 brew install tanghong123/tap/kwire-cli    # terminal UI / CLI (kwire)
 ```
 
-Both are universal (Apple Silicon + Intel). The desktop app is unsigned, so on
-first launch macOS may require **right-click ▸ Open**. Prebuilt bundles are also
-attached to the [latest release](https://github.com/tanghong123/kwire/releases/latest).
+Both are universal (Apple Silicon + Intel). The desktop app is Developer-ID
+signed and notarized by Apple, so it opens normally on first launch. Prebuilt
+bundles are also attached to the [latest release](https://github.com/tanghong123/kwire/releases/latest).
 
 **New to the codebase?** Read **[docs/CODEBASE.md](docs/CODEBASE.md)** — a guide
 written for engineers who don't know Rust yet. For *why* things are designed this
@@ -178,10 +178,10 @@ brew install node                   # OPTIONAL — only to run the headless UI t
 ```
 
 The pure-Rust **engine + CLI** build on Linux/Windows too; the **desktop bundle**
-(`cargo tauri build`) targets macOS. Producing a signed/notarized `.dmg` for
-distribution additionally needs an Apple Developer account and Xcode's `codesign` /
-`notarytool` (set `APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_PASSWORD` /
-`APPLE_TEAM_ID`); an unsigned local build needs none of that.
+(`cargo tauri build`) targets macOS. An unsigned local build needs nothing extra.
+The signed + notarized bundle shipped to Homebrew is produced by
+`scripts/sign-macos-app.sh` (a Developer ID cert + a `notarytool` keychain
+profile in the maintainer's login keychain — see `docs/RELEASING.md`).
 
 ### Optional external tools — PDF cover thumbnails
 
