@@ -1944,6 +1944,61 @@ enum SeriesTask {
     ByBook { title: String, author: String },
 }
 
+/// Refine the reverse-lookup seed for the selected book using its discovered
+/// candidates. The book's own `input` may hold a bare series name and no author
+/// (a manual add), which won't reverse-resolve. A candidate carries a real
+/// bibliographic title + author, so prefer:
+///   * TITLE  — the candidate the user is focused on in the Detail modal, else
+///     the best-scoring candidate; fall back to the input title.
+///   * AUTHOR — the input author when set, else the picked candidate's author,
+///     else any candidate that has one (backfill so the query isn't title-only).
+fn refine_series_seed(app: &AppState, input_title: String, input_author: String) -> (String, String) {
+    let Some(fb) = app.flat.get(app.selected) else {
+        return (input_title, input_author);
+    };
+    let versions = &fb.book.versions;
+    // A usable series seed is a REAL member — not a box set / omnibus, which
+    // carries no series linkage and won't reverse-resolve.
+    let is_member = |v: &&libgen_engine::ViewVariation| {
+        !v.title.trim().is_empty() && !libgen_core::series::is_collection(&v.title)
+    };
+    // The candidate the user chose / is looking at in the Detail modal.
+    let focused = match &app.modal {
+        Some(Modal::Detail { selected, .. }) => versions.get(*selected),
+        _ => None,
+    };
+    let best_member = versions
+        .iter()
+        .filter(is_member)
+        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+    // Prefer: the focused candidate when it's a real member; else the best-scoring
+    // member; else the focused candidate as-is; else the first candidate.
+    let pick = focused
+        .filter(|v| is_member(v))
+        .or(best_member)
+        .or(focused)
+        .or_else(|| versions.first());
+
+    let title = pick
+        .map(|v| v.title.clone())
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or(input_title);
+    let author = if !input_author.trim().is_empty() {
+        input_author
+    } else {
+        pick.map(|v| v.author.clone())
+            .filter(|a| !a.trim().is_empty())
+            .or_else(|| {
+                versions
+                    .iter()
+                    .map(|v| v.author.clone())
+                    .find(|a| !a.trim().is_empty())
+            })
+            .unwrap_or_default()
+    };
+    (title, author)
+}
+
 /// `:series` (alias `:download-series`) — import a book series as a SEPARATE
 /// "{name} (series)" list, then query/download every member.
 ///
@@ -2006,6 +2061,11 @@ async fn download_series_cmd(
             app.status_msg = Some("No title on the selected book".into());
             return;
         }
+        // A manual `:add "<series name>"` seeds the book with the SERIES NAME as
+        // its title and no author — which never reverse-resolves (the series name
+        // matches only box sets, which carry no series key). The candidate the
+        // user chose carries a real member title + author, so seed from THAT.
+        let (title, author) = refine_series_seed(app, title, author);
         SeriesTask::ByBook { title, author }
     } else if let Some((key_ref, name_hint)) = libgen_core::series::parse_series_ref(arg) {
         // An Open Library series URL / path / bare key.
